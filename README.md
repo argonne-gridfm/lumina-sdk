@@ -30,5 +30,5 @@ make help
 
 ## LICENSE
 
-Copyright (c) 2025, Argonne National Laboratory
+Copyright (c) 2025, Argonne National Laboratory  
 All rights reserved.
