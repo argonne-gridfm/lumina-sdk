@@ -1,0 +1,44 @@
+---
+root: "/lus/eagle/projects/GridFM/datasets/acopf/"
+url: "https://storage.googleapis.com/gridopt-dataset"
+topological_perturbations: false
+local_raw_folder: "/lus/eagle/projects/GridFM/datasets/acopf/OPFData/"
+single_case:
+  case_name: "pglib_opf_case14_ieee"
+  group_id: 0
+multi_case:
+  # 
+  case_config:
+    - "pglib_opf_case14_ieee"
+    - "pglib_opf_case30_ieee"
+    - "pglib_opf_case57_ieee"
+    - "pglib_opf_case118_ieee"
+    - 'pglib_opf_case500_goc'
+    - 'pglib_opf_case2000_goc'
+    - 'pglib_opf_case4661_sdet'
+    - 'pglib_opf_case6470_rte'
+    - 'pglib_opf_case10000_goc'
+    - 'pglib_opf_case13659_pegase'
+  group_ids: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  # 
+  all_cases:
+    pglib_opf_case14_ieee:
+      group_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    pglib_opf_case30_ieee:
+      group_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    pglib_opf_case57_ieee:
+      group_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    pglib_opf_case118_ieee:
+      group_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19] 
+    pglib_opf_case500_goc:
+      group_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    pglib_opf_case2000_goc:
+      group_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    pglib_opf_case4661_sdet:
+      group_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    pglib_opf_case6470_rte:
+      group_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    pglib_opf_case10000_goc:
+      group_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    pglib_opf_case13659_pegase:
+      group_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
