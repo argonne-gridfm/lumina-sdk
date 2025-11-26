@@ -1,4 +1,4 @@
-"""
+""" Heterogeneous Graph Neural Network models for ACOPF problem.
 Copyright (c) 2025, Argonne National Laboratory
 All rights reserved.
 """

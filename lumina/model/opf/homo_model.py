@@ -3,6 +3,9 @@ Homogeneous Graph Neural Network models for ACOPF benchmarking.
 
 This module provides various GNN architectures (GCN, GAT, GIN, Transformer)
 that operate on homogeneous graphs converted from heterogeneous OPF data.
+
+Copyright (c) 2025 by Argonne National Laboratory.
+All rights reserved.
 """
 
 import torch

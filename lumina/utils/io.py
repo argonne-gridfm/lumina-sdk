@@ -1,3 +1,7 @@
+"""
+Copyright (c) 2025 by Argonne National Laboratory.
+All rights reserved.
+"""
 import os
 
 

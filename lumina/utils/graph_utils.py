@@ -6,6 +6,9 @@ This module leverages PyTorch Geometric's native functionality:
 2. `to_hetero(model, metadata)` - wraps homogeneous models to work on hetero data
 
 Reference: PyTorch Geometric documentation and examples.
+
+Copyright (c) 2025 by Argonne National Laboratory.
+All rights reserved.
 """
 
 from typing import Dict, List, Optional, Tuple
