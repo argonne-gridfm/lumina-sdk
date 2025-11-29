@@ -624,14 +624,14 @@ def main():
 
     # Setup callbacks
     checkpoint_callback = ModelCheckpoint(
-        monitor='val_mse_loss',
-        filename=f'best-{case_name}-{{epoch:02d}}-{{val_mse_loss:.4f}}',
+        monitor='val_loss',
+        filename=f'best-{case_name}-{{epoch:02d}}-{{val_loss:.4f}}',
         save_top_k=1,
         mode='min',
     )
 
     early_stop_callback = EarlyStopping(
-        monitor='val_mse_loss',
+        monitor='val_loss',
         patience=10,
         verbose=True,
         mode='min'
