@@ -349,6 +349,210 @@ class PhysicsInformedLoss(ACOPFLossFunction):
         return results
 
 
+class OPFLossManager(nn.Module):
+    """
+    Unified loss manager that supports switching between different loss types:
+    - Standard ML losses (MSE, MAE, etc.)
+    - Augmented Lagrangian
+    - Violated (Violation-based) Lagrangian
+
+    This provides a single interface for training with different loss formulations.
+
+    Args:
+        loss_type (str): Type of loss to use. Options:
+            - 'mse', 'rmse', 'mae', 'mape', 'smooth_l1': Standard ML losses
+            - 'augmented_lagrangian': Augmented Lagrangian method
+            - 'violated_lagrangian': Violation-based Lagrangian method
+        grid_data (str, optional): Path to grid case file (required for Lagrangian methods)
+        device (torch.device, optional): Device for computations
+        lagrangian_config (dict, optional): Configuration for Lagrangian methods
+        **kwargs: Additional arguments passed to the loss function
+    """
+
+    def __init__(
+        self,
+        loss_type: str = 'mse',
+        grid_data: Optional[str] = None,
+        device: Optional[torch.device] = None,
+        lagrangian_config: Optional[Dict] = None,
+        **kwargs
+    ):
+        super().__init__()
+
+        self.loss_type = loss_type
+        self.device = device or torch.device('cpu')
+
+        # Import Lagrangian modules if needed
+        if loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
+            if grid_data is None:
+                raise ValueError(
+                    f"grid_data must be provided for loss_type='{loss_type}'"
+                )
+
+        # Initialize the appropriate loss function
+        if loss_type == 'augmented_lagrangian':
+            from .augmented_lagrangian import AugmentedLagrangianACOPF
+
+            lag_config = lagrangian_config or {}
+            self.lagrangian = AugmentedLagrangianACOPF(
+                grid_data=grid_data,
+                device=self.device,
+                **lag_config
+            )
+            self.base_loss = ACOPFLossFunction(loss_type='mse', **kwargs)
+
+        elif loss_type == 'violated_lagrangian':
+            from .violated_lagrangian import ViolatedLagrangianACOPF
+
+            lag_config = lagrangian_config or {}
+            self.lagrangian = ViolatedLagrangianACOPF(
+                grid_data=grid_data,
+                device=self.device,
+                **lag_config
+            )
+            self.base_loss = ACOPFLossFunction(loss_type='mse', **kwargs)
+
+        else:
+            # Standard ML loss
+            self.base_loss = ACOPFLossFunction(loss_type=loss_type, **kwargs)
+            self.lagrangian = None
+
+    def compute_loss(
+        self,
+        predictions: Dict[str, torch.Tensor],
+        batch,
+        return_info: bool = True
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict]]:
+        """
+        Compute loss based on the configured loss type.
+
+        Args:
+            predictions: Model predictions
+            batch: Batch data containing targets and inputs
+            return_info: Whether to return additional loss information
+
+        Returns:
+            If return_info=False: loss tensor
+            If return_info=True: (loss tensor, info dict)
+        """
+        # Extract targets from batch
+        targets = {}
+        for node_type in predictions.keys():
+            if hasattr(batch[node_type], 'y') and batch[node_type].y is not None:
+                targets[node_type] = batch[node_type].y
+
+        if self.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
+            # Compute base MSE loss
+            base_results = self.base_loss(predictions, targets)
+            mse_loss = base_results['total_loss']
+
+            # Compute Lagrangian loss
+            if self.loss_type == 'augmented_lagrangian':
+                # Format predictions and data for augmented Lagrangian
+                constraint_batch = self._create_constraint_batch(batch, predictions)
+                aug_loss, info = self.lagrangian(mse_loss, predictions, constraint_batch)
+
+                if return_info:
+                    info.update(base_results)
+                    info['mse_loss'] = mse_loss.item()
+                    return aug_loss, info
+                else:
+                    return aug_loss
+
+            else:  # violated_lagrangian
+                # Format inputs for violated Lagrangian
+                inputs = self._extract_inputs(batch)
+                vl_loss, info = self.lagrangian(mse_loss, predictions, inputs)
+
+                if return_info:
+                    info.update(base_results)
+                    info['mse_loss'] = mse_loss.item()
+                    return vl_loss, info
+                else:
+                    return vl_loss
+        else:
+            # Standard ML loss
+            results = self.base_loss(predictions, targets)
+            loss = results['total_loss']
+
+            if return_info:
+                return loss, results
+            else:
+                return loss
+
+    def update_lagrangian(self, model, dataloader, constraint_violation: Optional[float] = None):
+        """
+        Update Lagrangian multipliers or penalty parameters.
+
+        Args:
+            model: Neural network model
+            dataloader: Training dataloader
+            constraint_violation: Current constraint violation (for augmented Lagrangian)
+        """
+        if self.lagrangian is None:
+            return
+
+        if self.loss_type == 'augmented_lagrangian':
+            # Update based on constraint violation
+            if constraint_violation is not None:
+                prev_violation = (
+                    self.lagrangian.constraint_history[-2]
+                    if len(self.lagrangian.constraint_history) > 1
+                    else float('inf')
+                )
+                self.lagrangian.update_penalty_parameter(
+                    constraint_violation, prev_violation
+                )
+
+        elif self.loss_type == 'violated_lagrangian':
+            # Update multipliers based on training data
+            self.lagrangian.update_multipliers(model, dataloader)
+
+    def step_epoch(self):
+        """Call at the end of each epoch for Lagrangian methods."""
+        if self.lagrangian is not None and hasattr(self.lagrangian, 'step_epoch'):
+            self.lagrangian.step_epoch()
+
+    def _create_constraint_batch(self, batch, predictions):
+        """Create batch data format for augmented Lagrangian constraints."""
+        # This creates a simplified batch structure for constraint evaluation
+        constraint_batch = type('ConstraintBatch', (), {})()
+
+        # Copy relevant attributes
+        for node_type in ['bus', 'generator', 'load']:
+            if hasattr(batch, node_type):
+                setattr(constraint_batch, node_type, batch[node_type])
+
+        return constraint_batch
+
+    def _extract_inputs(self, batch):
+        """Extract input data dictionary for violated Lagrangian."""
+        inputs = {}
+
+        # Extract load data
+        if hasattr(batch, 'load') and hasattr(batch['load'], 'x'):
+            inputs['load'] = batch['load'].x
+
+        return inputs
+
+    def get_loss_info(self) -> Dict:
+        """Get information about the configured loss."""
+        info = {
+            'loss_type': self.loss_type,
+        }
+
+        if self.lagrangian is not None:
+            if hasattr(self.lagrangian, 'mu_k'):
+                info['penalty_parameter'] = self.lagrangian.mu_k
+            if hasattr(self.lagrangian, 'current_epoch'):
+                info['lagrangian_epoch'] = self.lagrangian.current_epoch
+
+        if hasattr(self.base_loss, 'get_loss_info'):
+            info.update(self.base_loss.get_loss_info())
+
+        return info
+
+
 """
 Flexible Loss Function Classes for ACOPF Training
 

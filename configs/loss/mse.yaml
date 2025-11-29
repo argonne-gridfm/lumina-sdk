@@ -1,0 +1,18 @@
+# Configuration for Standard MSE Loss Training
+# This is the baseline configuration using Mean Squared Error loss
+# without any physics-based constraints.
+
+loss_type: mse
+
+# No lagrangian configuration needed for standard ML losses
+
+# Note: You can also use other standard loss types:
+# - rmse: Root Mean Squared Error
+# - mae: Mean Absolute Error  
+# - mape: Mean Absolute Percentage Error
+# - smooth_l1: Smooth L1 Loss (Huber Loss)
+
+# Example usage:
+# python example/opf/train_opf.py --case case14 --loss_type mse --config configs/config.yaml
+# python example/opf/train_opf.py --case case14 --loss_type rmse --config configs/config.yaml
+# python example/opf/train_opf.py --case case14 --loss_type mae --config configs/config.yaml

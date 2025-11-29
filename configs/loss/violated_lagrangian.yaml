@@ -1,0 +1,28 @@
+# Configuration for Violated (Violation-based) Lagrangian Loss Training
+# This loss method uses linear penalties proportional to constraint violations,
+# with Lagrange multipliers updated based on accumulated violations.
+
+loss_type: violated_lagrangian
+
+# Lagrangian-specific configuration
+lagrangian:
+  # Initial value for inequality multiplier updates
+  rho_init: 0.001
+  
+  # Initial value for equality multiplier updates
+  s_init: 0.001
+  
+  # Number of warmup epochs before starting multiplier updates
+  warmup_iter: 10
+  
+  # Update multipliers every N epochs
+  update_frequency: 5
+  
+  # Whether to include angle difference constraints
+  use_angle_diff: true
+  
+  # Verbose logging
+  verbose: false
+
+# Example usage:
+# python example/opf/train_opf.py --case case14 --loss_type violated_lagrangian --config configs/config.yaml

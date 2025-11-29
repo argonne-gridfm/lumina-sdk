@@ -30,6 +30,7 @@ except ImportError:
 
 from lumina.dataset.opf.opf_dataset import OPFDataset
 from lumina.model.opf.augmented_lagrangian import AugmentedLagrangianACOPF
+from lumina.model.opf.losses import OPFLossManager
 from lumina.model.opf.homo_model import get_gnnNets
 from lumina.model.opf.hetero_model import HEAT, HGT, RGAT, OPFHeteroGNN
 from lumina.utils.graph_utils import HomoOPFDataset, convert_opf_to_homo
@@ -98,21 +99,21 @@ def parse_case_name(case_input: str) -> str:
 
 
 class OPFLightningModule(pl.LightningModule):
-    def __init__(self, config, case_name, group_id, model_type, use_lagrangian=True):
+    def __init__(self, config, case_name, group_id, model_type, loss_type='mse'):
         super().__init__()
         self.save_hyperparameters()
         self.config = config
         self.case_name = case_name
         self.group_id = group_id
         self.model_type = model_type
-        self.use_lagrangian = use_lagrangian
+        self.loss_type = loss_type
 
         # Initialize dataset and model
         self._load_dataset()
         self._create_model()
 
-        if self.use_lagrangian:
-            self.augmented_lagrangian = self._initialize_augmented_lagrangian()
+        # Initialize loss manager with appropriate loss type
+        self._initialize_loss_manager()
 
         self.training_step_outputs = []
         self.validation_step_outputs = []
@@ -211,8 +212,49 @@ class OPFLightningModule(pl.LightningModule):
             initialize_model(self.model, homo_sample, torch.device('cpu'))
             print(f"✓ {self.model_type} Model created")
 
+    def _initialize_loss_manager(self):
+        """Initialize loss manager based on loss_type configuration."""
+        # Get grid data path for Lagrangian methods
+        grid_data = None
+        if self.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
+            # Construct path to grid case file
+            import os
+            root_path = self.config.get('root', 'data')
+            grid_data = os.path.join(root_path, self.case_name, 'raw', f'{self.case_name}.m')
+
+            if not os.path.exists(grid_data):
+                # Try alternate path
+                grid_data = os.path.join(root_path, 'raw', self.case_name, f'{self.case_name}.m')
+
+            if not os.path.exists(grid_data):
+                print(f"Warning: Grid data file not found at {grid_data}")
+                print("Attempting to use first .m file in raw directory...")
+                raw_dir = os.path.join(root_path, self.case_name, 'raw')
+                if os.path.exists(raw_dir):
+                    m_files = [f for f in os.listdir(raw_dir) if f.endswith('.m')]
+                    if m_files:
+                        grid_data = os.path.join(raw_dir, m_files[0])
+                        print(f"Using: {grid_data}")
+
+        # Get Lagrangian configuration from config file
+        lagrangian_config = self.config.get('lagrangian', {})
+
+        # Create loss manager
+        self.loss_manager = OPFLossManager(
+            loss_type=self.loss_type,
+            grid_data=grid_data,
+            device=self.device,
+            lagrangian_config=lagrangian_config
+        )
+
+        print(f"✓ Loss Manager initialized with loss_type='{self.loss_type}'")
+
+        # For backward compatibility, set augmented_lagrangian attribute
+        if self.loss_type == 'augmented_lagrangian':
+            self.augmented_lagrangian = self.loss_manager.lagrangian
+
     def _initialize_augmented_lagrangian(self):
-        """Initialize Augmented Lagrangian solver."""
+        """Initialize Augmented Lagrangian solver (deprecated - use _initialize_loss_manager)."""
         augmented_lagrangian = AugmentedLagrangianACOPF(
             mu_0=0.1,
             tolerance=1e-6,
@@ -323,7 +365,8 @@ class OPFLightningModule(pl.LightningModule):
             self.test_dataset = HomoOPFDataset(self.test_dataset)
 
     def on_fit_start(self):
-        if self.use_lagrangian:
+        # Extract network parameters if using augmented lagrangian
+        if self.loss_type == 'augmented_lagrangian':
             self._extract_network_parameters()
 
     def train_dataloader(self):
@@ -380,61 +423,53 @@ class OPFLightningModule(pl.LightningModule):
         else:
             predictions = self(batch)
 
-        # Compute MSE loss
-        target_list = []
-        pred_list = []
-        metadata = self.dataset.metadata()
-        node_types_meta = list(metadata['nodes'].keys())
+        # Use loss manager to compute loss
+        loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
 
-        for node_type in node_types_meta:
-            if node_type in predictions and hasattr(batch[node_type], 'y'):
-                target_list.append(batch[node_type].y.flatten().float())
-                pred_list.append(predictions[node_type].flatten())
+        # Log metrics
+        self.log('train_loss', loss, prog_bar=True, batch_size=batch_size)
 
-        if not target_list:
-            return None
+        if 'mse_loss' in loss_info:
+            self.log('train_mse_loss', loss_info['mse_loss'], prog_bar=True, batch_size=batch_size)
 
-        target = torch.cat(target_list)
-        pred = torch.cat(pred_list)
-        mse_loss = nn.MSELoss()(pred, target)
-
-        if self.use_lagrangian:
-            constraint_batch = self._create_dummy_batch_data(batch, predictions)
-            constraints = self.augmented_lagrangian.compute_constraints(predictions, constraint_batch)
-            augmented_loss, components = self.augmented_lagrangian.compute_augmented_lagrangian(
-                mse_loss, constraints
-            )
-
-            # Update Lagrange multipliers
-            self.augmented_lagrangian.update_lagrange_multipliers(constraints.detach())
-
-            self.log('train_aug_loss', augmented_loss, prog_bar=True, batch_size=batch_size)
-            self.log(
-                'train_constraint_violation',
-                components['constraint_violation'],
-                prog_bar=True,
-                batch_size=batch_size)
-            self.log('penalty_mu', self.augmented_lagrangian.mu_k, batch_size=batch_size)
-
-            loss = augmented_loss
+        if self.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
+            if 'constraint_violation' in loss_info:
+                self.log('train_constraint_violation', loss_info['constraint_violation'],
+                         prog_bar=True, batch_size=batch_size)
+            if 'penalty_parameter' in loss_info:
+                self.log('penalty_mu', loss_info['penalty_parameter'], batch_size=batch_size)
 
             self.training_step_outputs.append({
                 'loss': loss,
-                'constraint_violation': components['constraint_violation']
+                'constraint_violation': loss_info.get('constraint_violation', 0.0)
             })
         else:
-            loss = mse_loss
             self.training_step_outputs.append({'loss': loss})
 
-        self.log('train_mse_loss', mse_loss, prog_bar=True, batch_size=batch_size)
         return loss
 
     def on_train_epoch_end(self):
-        if self.use_lagrangian and self.training_step_outputs:
-            avg_violation = torch.stack([x['constraint_violation'] for x in self.training_step_outputs]).mean()
-            prev_violation = self.augmented_lagrangian.constraint_history[-2] if len(
-                self.augmented_lagrangian.constraint_history) > 1 else float('inf')
-            self.augmented_lagrangian.update_penalty_parameter(avg_violation, prev_violation)
+        if self.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
+            if self.training_step_outputs:
+                if self.loss_type == 'augmented_lagrangian':
+                    # Update penalty parameter for augmented Lagrangian
+                    avg_violation = torch.stack(
+                        [torch.tensor(x['constraint_violation']) for x in self.training_step_outputs]
+                    ).mean().item()
+                    self.loss_manager.update_lagrangian(
+                        self.model,
+                        self.trainer.train_dataloader,
+                        constraint_violation=avg_violation
+                    )
+                elif self.loss_type == 'violated_lagrangian':
+                    # Update multipliers for violated Lagrangian
+                    self.loss_manager.update_lagrangian(
+                        self.model,
+                        self.trainer.train_dataloader
+                    )
+
+        # Step epoch counter for Lagrangian methods
+        self.loss_manager.step_epoch()
 
         self.training_step_outputs.clear()
 
@@ -445,34 +480,25 @@ class OPFLightningModule(pl.LightningModule):
         else:
             predictions = self(batch)
 
-        target_list = []
-        pred_list = []
-        metadata = self.dataset.metadata()
-        node_types_meta = list(metadata['nodes'].keys())
+        # Use loss manager to compute validation loss
+        loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
 
-        for node_type in node_types_meta:
-            if node_type in predictions and hasattr(batch[node_type], 'y'):
-                target_list.append(batch[node_type].y.flatten().float())
-                pred_list.append(predictions[node_type].flatten())
+        # Log validation metrics
+        self.log('val_loss', loss, prog_bar=True, batch_size=batch_size)
 
-        if not target_list:
-            return None
+        if 'mse_loss' in loss_info:
+            self.log('val_mse_loss', loss_info['mse_loss'], prog_bar=True, batch_size=batch_size)
 
-        target = torch.cat(target_list)
-        pred = torch.cat(pred_list)
-        mse_loss = nn.MSELoss()(pred, target)
+        if self.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
+            if 'constraint_violation' in loss_info:
+                self.log('val_constraint_violation', loss_info['constraint_violation'],
+                         prog_bar=True, batch_size=batch_size)
 
-        self.log('val_mse_loss', mse_loss, prog_bar=True, batch_size=batch_size)
-
-        if self.use_lagrangian:
-            constraint_batch = self._create_dummy_batch_data(batch, predictions)
-            constraints = self.augmented_lagrangian.compute_constraints(predictions, constraint_batch)
-            constraint_violation = torch.norm(constraints, p=2)
-            self.log('val_constraint_violation', constraint_violation, prog_bar=True, batch_size=batch_size)
+        return loss
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Augmented Lagrangian ACOPF Training with PyTorch Lightning')
+    parser = argparse.ArgumentParser(description='OPF Training with PyTorch Lightning - Supports Multiple Loss Types')
     parser.add_argument('--case', type=str, default='case14',
                         help='Case name (short form like case14, case2000 or full pglib name)')
     parser.add_argument('--group_id', type=int, default=0,
@@ -482,7 +508,20 @@ def main():
     parser.add_argument('--model_type', type=str, default='HeteroGNN',
                         choices=['HeteroGNN', 'GCN', 'GAT', 'GIN', 'Transformer', 'RGAT', 'HEAT', 'HGT'],
                         help='Model type to train (default: HeteroGNN)')
-    parser.add_argument('--use_lagrangian', action='store_true', default=True,
+    parser.add_argument(
+        '--loss_type',
+        type=str,
+        default='mse',
+        choices=[
+            'mse',
+            'rmse',
+            'mae',
+            'mape',
+            'smooth_l1',
+            'augmented_lagrangian',
+            'violated_lagrangian'],
+        help='Loss function type (default: mse)')
+    parser.add_argument('--use_lagrangian', action='store_true', default=False,
                         help='Use Augmented Lagrangian method (default: True)')
     parser.add_argument('--no_lagrangian', action='store_false', dest='use_lagrangian',
                         help='Disable Augmented Lagrangian method')
@@ -552,13 +591,19 @@ def main():
 
     case_name = parse_case_name(args.case)
 
+    # Handle backward compatibility for --use_lagrangian flag
+    loss_type = args.loss_type
+    if args.use_lagrangian and loss_type == 'mse':
+        loss_type = 'augmented_lagrangian'
+        print("Note: --use_lagrangian flag is deprecated. Using --loss_type augmented_lagrangian instead.")
+
     # Initialize Lightning Module
     model = OPFLightningModule(
         config=config,
         case_name=case_name,
         group_id=args.group_id,
         model_type=args.model_type,
-        use_lagrangian=args.use_lagrangian
+        loss_type=loss_type
     )
 
     # Initialize Trainer
