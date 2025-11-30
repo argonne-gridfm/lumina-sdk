@@ -216,7 +216,7 @@ class OPFLightningModule(pl.LightningModule):
         """Initialize loss manager based on loss_type configuration."""
         # Get grid data path for Lagrangian methods
         grid_data = None
-        if self.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
+        if self.loss_type in ['violated_lagrangian']:
             # Construct path to grid case file
             import os
             root_path = self.config.get('root', 'data')
