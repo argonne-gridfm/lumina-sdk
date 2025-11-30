@@ -424,7 +424,16 @@ class OPFLightningModule(pl.LightningModule):
             predictions = self(batch)
 
         # Use loss manager to compute loss
-        loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
+        if self.loss_type == 'augmented_lagrangian':
+            constraint_batch = self._create_dummy_batch_data(batch, predictions)
+            loss, loss_info = self.loss_manager.compute_loss(
+                predictions,
+                batch,
+                constraint_data=constraint_batch,
+                return_info=True,
+            )
+        else:
+            loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
 
         # Log metrics
         self.log('train_loss', loss, prog_bar=True, batch_size=batch_size)
@@ -481,7 +490,16 @@ class OPFLightningModule(pl.LightningModule):
             predictions = self(batch)
 
         # Use loss manager to compute validation loss
-        loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
+        if self.loss_type == 'augmented_lagrangian':
+            constraint_batch = self._create_dummy_batch_data(batch, predictions)
+            loss, loss_info = self.loss_manager.compute_loss(
+                predictions,
+                batch,
+                constraint_data=constraint_batch,
+                return_info=True,
+            )
+        else:
+            loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
 
         # Log validation metrics
         self.log('val_loss', loss, prog_bar=True, batch_size=batch_size)

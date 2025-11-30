@@ -414,7 +414,8 @@ class OPFLossManager(nn.Module):
         self,
         predictions: Dict[str, torch.Tensor],
         batch,
-        return_info: bool = True
+        return_info: bool = True,
+        constraint_data: Optional[Dict] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict]]:
         """
         Compute loss based on the configured loss type.
@@ -442,7 +443,7 @@ class OPFLossManager(nn.Module):
             # Compute Lagrangian loss
             if self.loss_type == 'augmented_lagrangian':
                 # Format predictions and data for augmented Lagrangian
-                constraint_batch = self._create_constraint_batch(batch, predictions)
+                constraint_batch = constraint_data or self._create_constraint_batch(batch, predictions)
                 aug_loss, info = self.lagrangian(mse_loss, predictions, constraint_batch)
 
                 if return_info:
