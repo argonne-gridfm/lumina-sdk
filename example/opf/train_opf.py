@@ -535,7 +535,7 @@ def main():
 
     args = parser.parse_args()
 
-    print("🚀 ACOPF Training (Lightning) with loss_type = {args.loss_type}")
+    print(f"🚀 ACOPF Training (Lightning) with loss_type = {args.loss_type}")
     print("=" * 60)
 
     config_path = args.config
