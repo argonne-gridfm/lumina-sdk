@@ -12,7 +12,7 @@ All rights reserved.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, List, Union, Optional
+from typing import Dict, List, Union, Optional, Tuple
 import numpy as np
 
 
@@ -363,7 +363,7 @@ class OPFLossManager(nn.Module):
             - 'mse', 'rmse', 'mae', 'mape', 'smooth_l1': Standard ML losses
             - 'augmented_lagrangian': Augmented Lagrangian method
             - 'violated_lagrangian': Violation-based Lagrangian method
-        grid_data (str, optional): Path to grid case file (required for Lagrangian methods)
+        grid_data (str, optional): Path to grid case file (required for violated Lagrangian)
         device (torch.device, optional): Device for computations
         lagrangian_config (dict, optional): Configuration for Lagrangian methods
         **kwargs: Additional arguments passed to the loss function
@@ -382,29 +382,22 @@ class OPFLossManager(nn.Module):
         self.loss_type = loss_type
         self.device = device or torch.device('cpu')
 
-        # Import Lagrangian modules if needed
-        if loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
-            if grid_data is None:
-                raise ValueError(
-                    f"grid_data must be provided for loss_type='{loss_type}'"
-                )
-
         # Initialize the appropriate loss function
         if loss_type == 'augmented_lagrangian':
             from .augmented_lagrangian import AugmentedLagrangianACOPF
 
             lag_config = lagrangian_config or {}
-            self.lagrangian = AugmentedLagrangianACOPF(
-                grid_data=grid_data,
-                device=self.device,
-                **lag_config
-            )
+            self.lagrangian = AugmentedLagrangianACOPF(**lag_config)
             self.base_loss = ACOPFLossFunction(loss_type='mse', **kwargs)
 
         elif loss_type == 'violated_lagrangian':
             from .violated_lagrangian import ViolatedLagrangianACOPF
 
             lag_config = lagrangian_config or {}
+            if grid_data is None:
+                raise ValueError(
+                    f"grid_data must be provided for loss_type='{loss_type}'"
+                )
             self.lagrangian = ViolatedLagrangianACOPF(
                 grid_data=grid_data,
                 device=self.device,
@@ -421,7 +414,8 @@ class OPFLossManager(nn.Module):
         self,
         predictions: Dict[str, torch.Tensor],
         batch,
-        return_info: bool = True
+        return_info: bool = True,
+        constraint_data: Optional[Dict] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict]]:
         """
         Compute loss based on the configured loss type.
@@ -449,7 +443,7 @@ class OPFLossManager(nn.Module):
             # Compute Lagrangian loss
             if self.loss_type == 'augmented_lagrangian':
                 # Format predictions and data for augmented Lagrangian
-                constraint_batch = self._create_constraint_batch(batch, predictions)
+                constraint_batch = constraint_data or self._create_constraint_batch(batch, predictions)
                 aug_loss, info = self.lagrangian(mse_loss, predictions, constraint_batch)
 
                 if return_info:

@@ -25,7 +25,8 @@ dependencies = [
     "pandas",
     "scipy",
     "networkx",
-    "joblib"
+    "joblib",
+    "pyyaml"
 ]
 
 [project.urls]

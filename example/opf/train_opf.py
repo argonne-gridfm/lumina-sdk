@@ -216,7 +216,7 @@ class OPFLightningModule(pl.LightningModule):
         """Initialize loss manager based on loss_type configuration."""
         # Get grid data path for Lagrangian methods
         grid_data = None
-        if self.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
+        if self.loss_type in ['violated_lagrangian']:
             # Construct path to grid case file
             import os
             root_path = self.config.get('root', 'data')
@@ -424,7 +424,16 @@ class OPFLightningModule(pl.LightningModule):
             predictions = self(batch)
 
         # Use loss manager to compute loss
-        loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
+        if self.loss_type == 'augmented_lagrangian':
+            constraint_batch = self._create_dummy_batch_data(batch, predictions)
+            loss, loss_info = self.loss_manager.compute_loss(
+                predictions,
+                batch,
+                constraint_data=constraint_batch,
+                return_info=True,
+            )
+        else:
+            loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
 
         # Log metrics
         self.log('train_loss', loss, prog_bar=True, batch_size=batch_size)
@@ -481,7 +490,16 @@ class OPFLightningModule(pl.LightningModule):
             predictions = self(batch)
 
         # Use loss manager to compute validation loss
-        loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
+        if self.loss_type == 'augmented_lagrangian':
+            constraint_batch = self._create_dummy_batch_data(batch, predictions)
+            loss, loss_info = self.loss_manager.compute_loss(
+                predictions,
+                batch,
+                constraint_data=constraint_batch,
+                return_info=True,
+            )
+        else:
+            loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
 
         # Log validation metrics
         self.log('val_loss', loss, prog_bar=True, batch_size=batch_size)
@@ -535,7 +553,7 @@ def main():
 
     args = parser.parse_args()
 
-    print("🚀 Augmented Lagrangian ACOPF Training (Lightning)")
+    print(f"🚀 ACOPF Training (Lightning) with loss_type = {args.loss_type}")
     print("=" * 60)
 
     config_path = args.config
@@ -624,14 +642,14 @@ def main():
 
     # Setup callbacks
     checkpoint_callback = ModelCheckpoint(
-        monitor='val_mse_loss',
-        filename=f'best-{case_name}-{{epoch:02d}}-{{val_mse_loss:.4f}}',
+        monitor='val_loss',
+        filename=f'best-{case_name}-{{epoch:02d}}-{{val_loss:.4f}}',
         save_top_k=1,
         mode='min',
     )
 
     early_stop_callback = EarlyStopping(
-        monitor='val_mse_loss',
+        monitor='val_loss',
         patience=10,
         verbose=True,
         mode='min'
