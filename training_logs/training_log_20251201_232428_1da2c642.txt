@@ -1,0 +1,181 @@
+================================================================================
+SCUC TRAINING LOG
+Started: 2025-12-01 23:24:28
+Run ID: 20251201_232428_1da2c642
+Log file: training_logs/training_log_20251201_232428_1da2c642.txt
+================================================================================
+
+🔧 Device: cpu
+
+================================================================================
+CONFIGURATION
+================================================================================
+SCUC Head Type: lstm
+Encoder Type: hgt
+SCUC Cases: ['case14', 'case30', 'case57', 'case118', 'case300']
+
+✅ Loaded 5 SCUC dataset(s)
+   Sample data: HeteroData(
+  case_id=[1],
+  case_name='case14',
+  bus={
+    x=[14, 4],
+    temp_load=[14, 36],
+  },
+  generator={
+    x=[5, 21],
+    y=[5, 36, 4],
+  },
+  (generator, generator_link, bus)={ edge_index=[2, 5] },
+  (bus, generator_link, generator)={ edge_index=[2, 5] },
+  (bus, ac_line, bus)={ edge_index=[2, 40] }
+)
+   Total samples: 1822
+   Batches per epoch: 29
+   Samples per batch: 64
+   Total batches in dataset: 29
+
+⚠️  WARNING: Dataset only has 29 batches
+   Will use all 29 batches per epoch
+   Consider: Adding more data OR reducing batch_size to increase batches
+
+Sample SCUC data: HeteroData(
+  case_id=[1],
+  case_name='case14',
+  bus={
+    x=[14, 4],
+    temp_load=[14, 36],
+  },
+  generator={
+    x=[5, 21],
+    y=[5, 36, 4],
+  },
+  (generator, generator_link, bus)={ edge_index=[2, 5] },
+  (bus, generator_link, generator)={ edge_index=[2, 5] },
+  (bus, ac_line, bus)={ edge_index=[2, 40] }
+)
+Metadata: (['bus', 'generator'], [('bus', 'ac_line', 'bus'), ('bus', 'generator_link', 'generator'), ('generator', 'generator_link', 'bus')])
+Input channels: {'bus': 4, 'generator': 21}
+
+🔧 Initializing SCUC Head: LSTM
+   ✅ Using LSTM-based head (bidirectional)
+   Parameters: d_emb=64, d_time=16, n_time=36, hidden_dim=128, n_layers=2, bidirectional=True
+
+================================================================================
+📊 MODEL SIZE ANALYSIS
+================================================================================
+🔧 Encoder (HGT):
+   Parameters: 293,008
+   Size: 1.12 MB
+
+🔧 SCUC Head (LSTM):
+   Parameters: 736,578
+   Size: 2.81 MB
+
+📦 Total Model:
+   Total Parameters: 1,029,586
+   Total Size: 3.93 MB (0.004 GB)
+================================================================================
+
+🔧 Constraint Violation Tracker initialized (soft binary mode)
+
+🔄 Computing SCUC normalization statistics...
+✅ SCUC Pg stats → mean: 105.333466, std: 244.894531
+
+✅ Model save directory: /eagle/projects/GridFM/trained_models
+✅ Best model will be saved as: /eagle/projects/GridFM/trained_models/best_scuc_lstm_model_scuc_lstm_1764631471.pth
+✅ W&B Run name: scuc_lstm_1764631471
+
+================================================================================
+FULL CONFIGURATION DETAILS
+================================================================================
+{
+  "project": "grid-foundation",
+  "entity": null,
+  "run_name": "scuc_lstm_1764631471",
+  "datasets": {
+    "SCUC_cases": [
+      "case14",
+      "case30",
+      "case57",
+      "case118",
+      "case300"
+    ],
+    "len_scuc": 1822,
+    "batch_size": 64,
+    "shuffle": true,
+    "total_batches_available": 29,
+    "max_steps_per_epoch": 29
+  },
+  "model": {
+    "encoder": {
+      "arch": "hgt",
+      "hidden_channels": 64,
+      "num_layers": 8,
+      "heads": 8,
+      "backend": null,
+      "input_channels_per_ntype": {
+        "bus": 4,
+        "generator": 21
+      },
+      "metadata_node_types": [
+        "bus",
+        "generator"
+      ],
+      "metadata_edge_types": [
+        "('bus', 'ac_line', 'bus')",
+        "('bus', 'generator_link', 'generator')",
+        "('generator', 'generator_link', 'bus')"
+      ]
+    },
+    "scuc_head": {
+      "type": "lstm",
+      "d_emb": 64,
+      "d_time": 16,
+      "n_time": 36,
+      "hidden_dim": 128,
+      "n_layers": 2,
+      "n_heads": null,
+      "bidirectional": true
+    }
+  },
+  "optim": {
+    "optimizer": "Adam",
+    "lr": 0.0005,
+    "num_epochs": 150,
+    "losses": {
+      "scuc_pg": "MSELoss (normalized Pg)",
+      "scuc_unit": "BCEWithLogitsLoss (binary commitment, pos_weight adjusted)"
+    },
+    "normalization": {
+      "scuc_pg_mean": 105.33346557617188,
+      "scuc_pg_std": 244.89453125
+    }
+  },
+  "env": {
+    "device": "cpu",
+    "python": "3.11.5",
+    "torch": "2.7.1+cu126",
+    "torch_cuda": null,
+    "cuda_available": false,
+    "gpu_name": null,
+    "platform": "Linux-6.4.0-150600.23.53-default-x86_64-with-glibc2.38",
+    "git_commit": "3bd5bc700611022170b8292f0a1e0db3a1c24386"
+  }
+}
+================================================================================
+
+🌐 Initializing Weights & Biases...
+✅ W&B initialized: Project='grid-foundation', Run='scuc_lstm_1764631471'
+
+================================================================================
+🚀 Starting SCUC Training
+================================================================================
+Epochs: 150
+Batch Size: 64
+Steps per Epoch: 29 (dataset has 29 batches)
+⚠️  WARNING: Dataset only has 29 batches (< 300)
+   Consider adding more data or reducing batch size
+================================================================================
+
+📅 Starting Epoch 1/150 (processing 29 batches)
