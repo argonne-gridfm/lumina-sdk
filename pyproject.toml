@@ -105,4 +105,5 @@ all = [
     "sphinx-rtd-theme",
     "sphinx-autodoc-typehints",
     "lightning",
+    "pyyaml",
 ]
