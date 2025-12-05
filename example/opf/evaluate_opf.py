@@ -188,7 +188,7 @@ print("Loading dataset...")
 from lumina.dataset.opf.opf_dataset import OPFDataset
 from lumina.loader.opf.opf_loader import DataLoader
 
-dataset = OPFDataset(root='/home/yijiang.li/opf_data', case_name='pglib_opf_case14_ieee')
+dataset = OPFDataset(root='./opf_data', case_name='pglib_opf_case14_ieee')
 
 test_loader = DataLoader(dataset, batch_size=32, shuffle=False)
 
