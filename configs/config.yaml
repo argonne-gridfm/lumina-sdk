@@ -22,9 +22,10 @@ lagrangian:
   tolerance: 1.0e-06
   constraint_tolerance: 0.01
   max_outer_iterations: 20
-  mu_increase_factor: 1.0
-  max_mu: 100.0
+  mu_increase_factor: 1.5
+  max_mu: 10000.0
   normalize_constraints: true
+  lagrangian_update_frequency: 20
   verbose: false
 trainer:
   accelerator: "auto"

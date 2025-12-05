@@ -495,11 +495,26 @@ class AugmentedLagrangianACOPF(nn.Module):
         p_inj = torch.zeros_like(v_real)
         q_inj = torch.zeros_like(v_imag)
 
+        def _ensure_batch_dims(p_inj, q_inj, vm_pred, va_pred, pg_pred, qg_pred):
+            """Guarantee tensors are 2D for scatter_add and keep batch size aligned."""
+            if p_inj.dim() < 2:
+                p_inj = p_inj.view(1, -1)
+                q_inj = q_inj.view(1, -1)
+            if vm_pred.dim() < 2:
+                vm_pred = vm_pred.view(p_inj.shape[0], -1)
+                va_pred = va_pred.view(p_inj.shape[0], -1)
+            if pg_pred is not None and pg_pred.dim() < 2:
+                pg_pred = pg_pred.view(1, -1)
+            if qg_pred is not None and qg_pred.dim() < 2:
+                qg_pred = qg_pred.view(1, -1)
+            return p_inj, q_inj, vm_pred, va_pred, pg_pred, qg_pred, p_inj.size(0)
+
+        p_inj, q_inj, vm_pred, va_pred, pg_pred, qg_pred, batch_size = _ensure_batch_dims(
+            p_inj, q_inj, vm_pred, va_pred, pg_pred, qg_pred
+        )
+
         # Add generation at generator buses (already in per-unit, so no division by base_mva)
         if gen_bus_indices is not None and pg_pred is not None:
-            # Determine batch size
-            batch_size = vm_pred.shape[0]
-
             # Ensure gen_bus_indices doesn't exceed the number of buses or generators
             max_gen_idx = min(len(gen_bus_indices), pg_pred.shape[1] if pg_pred.dim() > 1 else pg_pred.shape[0])
             gen_indices_limited = gen_bus_indices[:max_gen_idx]

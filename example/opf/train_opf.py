@@ -328,6 +328,12 @@ class OPFLightningModule(pl.LightningModule):
         # Use loss manager to compute loss
         loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
 
+        # Update Lagrange multipliers/penalty on a configurable schedule
+        self.loss_manager.maybe_update_lagrangian(
+            info=loss_info,
+            is_training=self.training
+        )
+
         # Log metrics
         self.log('train_loss', loss, prog_bar=True, batch_size=batch_size)
 

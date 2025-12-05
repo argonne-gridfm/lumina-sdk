@@ -382,27 +382,33 @@ class OPFLossManager(nn.Module):
 
         self.loss_type = loss_type
         self.device = device or torch.device('cpu')
+        lag_config = lagrangian_config or {}
+        # Controls how often we update λ and μ during training steps
+        self.lagrangian_update_frequency = max(1, int(lag_config.get('lagrangian_update_frequency', 1)))
+        self._lagrangian_step = 0
 
         # Initialize the appropriate loss function
         if loss_type == 'augmented_lagrangian':
             from .augmented_lagrangian import AugmentedLagrangianACOPF
 
-            lag_config = lagrangian_config or {}
-            self.lagrangian = AugmentedLagrangianACOPF(**lag_config)
+            lagrangian_kwargs = dict(lag_config)
+            lagrangian_kwargs.pop('lagrangian_update_frequency', None)
+            self.lagrangian = AugmentedLagrangianACOPF(**lagrangian_kwargs)
             self.base_loss = ACOPFLossFunction(loss_type='mse', **kwargs)
 
         elif loss_type == 'violated_lagrangian':
             from .violated_lagrangian import ViolatedLagrangianACOPF
 
-            lag_config = lagrangian_config or {}
             if grid_data is None:
                 raise ValueError(
                     f"grid_data must be provided for loss_type='{loss_type}'"
                 )
+            lagrangian_kwargs = dict(lag_config)
+            lagrangian_kwargs.pop('lagrangian_update_frequency', None)
             self.lagrangian = ViolatedLagrangianACOPF(
                 grid_data=grid_data,
                 device=self.device,
-                **lag_config
+                **lagrangian_kwargs
             )
             self.base_loss = ACOPFLossFunction(loss_type='mse', **kwargs)
 
@@ -410,6 +416,9 @@ class OPFLossManager(nn.Module):
             # Standard ML loss
             self.base_loss = ACOPFLossFunction(loss_type=loss_type, **kwargs)
             self.lagrangian = None
+
+        # Track whether Lagrangian network parameters have been initialized
+        self._lagrangian_initialized = False
 
     def compute_loss(
         self,
@@ -444,7 +453,15 @@ class OPFLossManager(nn.Module):
             # Compute Lagrangian loss
             if self.loss_type == 'augmented_lagrangian':
                 # Format predictions and data for augmented Lagrangian
-                self._ensure_network_parameters(batch, predictions['bus'].device)
+                current_n_bus = batch['bus'].x.size(0)
+                stored_Y = getattr(self.lagrangian, 'Y_real', None)
+                need_init = (
+                    not self._lagrangian_initialized
+                    or stored_Y is None
+                    or stored_Y.size(0) != current_n_bus
+                )
+                if need_init:
+                    self._ensure_network_parameters(batch, predictions['bus'].device)
                 constraint_batch = constraint_data or self._create_constraint_batch(batch, predictions)
                 aug_loss, info = self.lagrangian(mse_loss, predictions, constraint_batch)
 
@@ -476,7 +493,14 @@ class OPFLossManager(nn.Module):
             else:
                 return loss
 
-    def update_lagrangian(self, model, dataloader, constraint_violation: Optional[float] = None):
+    def update_lagrangian(
+        self,
+        model=None,
+        dataloader=None,
+        constraint_violation: Optional[float] = None,
+        constraints: Optional[torch.Tensor] = None,
+        update_penalty: bool = True,
+    ):
         """
         Update Lagrangian multipliers or penalty parameters.
 
@@ -484,13 +508,19 @@ class OPFLossManager(nn.Module):
             model: Neural network model
             dataloader: Training dataloader
             constraint_violation: Current constraint violation (for augmented Lagrangian)
+            constraints: Constraint vector (for updating multipliers in augmented Lagrangian)
+            update_penalty: Whether to update the penalty parameter μ
         """
         if self.lagrangian is None:
             return
 
         if self.loss_type == 'augmented_lagrangian':
-            # Update based on constraint violation
-            if constraint_violation is not None:
+            # Update multipliers using latest constraints (if provided)
+            if constraints is not None:
+                self.lagrangian.update_lagrange_multipliers(constraints)
+
+            # Optionally update penalty parameter using constraint violation history
+            if update_penalty and constraint_violation is not None:
                 prev_violation = (
                     self.lagrangian.constraint_history[-2]
                     if len(self.lagrangian.constraint_history) > 1
@@ -502,7 +532,44 @@ class OPFLossManager(nn.Module):
 
         elif self.loss_type == 'violated_lagrangian':
             # Update multipliers based on training data
+            if model is None or dataloader is None:
+                return
             self.lagrangian.update_multipliers(model, dataloader)
+
+    def maybe_update_lagrangian(
+        self,
+        info: Optional[Dict] = None,
+        is_training: bool = True,
+        model=None,
+        dataloader=None,
+    ):
+        """
+        Conditionally update λ and μ based on a configured iteration frequency.
+
+        Args:
+            info: Loss info dict returned from compute_loss (may contain constraints and violation)
+            is_training: Whether we are in a training step (skip for val/test)
+            model: Model handle (needed for violated_lagrangian updates)
+            dataloader: Dataloader handle (needed for violated_lagrangian updates)
+        """
+        if not is_training or self.lagrangian is None:
+            return
+
+        self._lagrangian_step += 1
+        if (self._lagrangian_step % self.lagrangian_update_frequency) != 0:
+            return
+
+        if self.loss_type == 'augmented_lagrangian':
+            constraint_violation = info.get('constraint_violation') if info else None
+            constraints = info.get('constraints') if info else None
+            self.update_lagrangian(
+                model=None,
+                dataloader=None,
+                constraint_violation=constraint_violation,
+                constraints=constraints,
+            )
+        elif self.loss_type == 'violated_lagrangian' and model is not None and dataloader is not None:
+            self.update_lagrangian(model=model, dataloader=dataloader)
 
     def step_epoch(self):
         """Call at the end of each epoch for Lagrangian methods."""
@@ -668,6 +735,10 @@ class OPFLossManager(nn.Module):
             base_mva=base_mva
         )
 
+        # Avoid re-initializing network parameters on subsequent calls
+        self._lagrangian_initialized = True
+        self._lagrangian_bus_count = n_bus
+
     def _extract_inputs(self, batch):
         """Extract input data dictionary for violated Lagrangian."""
         inputs = {}
@@ -685,6 +756,7 @@ class OPFLossManager(nn.Module):
         }
 
         if self.lagrangian is not None:
+            info['lagrangian_update_frequency'] = self.lagrangian_update_frequency
             if hasattr(self.lagrangian, 'mu_k'):
                 info['penalty_parameter'] = self.lagrangian.mu_k
             if hasattr(self.lagrangian, 'current_epoch'):

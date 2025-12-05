@@ -1,4 +1,5 @@
 import torch
+from types import MethodType
 from torch_geometric.data import HeteroData
 
 from lumina.model.opf.losses import OPFLossManager
@@ -56,3 +57,53 @@ def test_network_parameters_initialized_from_batch():
     assert manager.lagrangian.Y_imag.shape == (2, 2)
     assert manager.lagrangian.line_limits is not None
     assert manager.lagrangian.line_limits.numel() == 1
+
+
+def test_ensure_network_parameters_called_once():
+    device = torch.device("cpu")
+    manager = OPFLossManager(loss_type='augmented_lagrangian')
+    batch = _build_dummy_batch(device)
+
+    predictions = {
+        'bus': torch.zeros((2, 2), device=device),
+        'generator': torch.zeros((1, 2), device=device),
+    }
+    batch['bus'].y = torch.zeros_like(predictions['bus'])
+    batch['generator'].y = torch.zeros_like(predictions['generator'])
+
+    call_count = {'n': 0}
+    original_ensure = manager._ensure_network_parameters
+
+    def wrapped(self, batch_arg, device_arg):
+        call_count['n'] += 1
+        return original_ensure(batch_arg, device_arg)
+
+    manager._ensure_network_parameters = MethodType(wrapped, manager)
+
+    manager.compute_loss(predictions, batch, return_info=True)
+    manager.compute_loss(predictions, batch, return_info=True)
+
+    assert call_count['n'] == 1
+
+
+def test_augmented_lagrangian_state_accumulates():
+    device = torch.device("cpu")
+    manager = OPFLossManager(loss_type='augmented_lagrangian')
+    batch = _build_dummy_batch(device)
+
+    predictions = {
+        'bus': torch.zeros((2, 2), device=device),
+        'generator': torch.zeros((1, 2), device=device),
+    }
+
+    # Provide matching targets so base loss computes successfully
+    batch['bus'].y = torch.zeros_like(predictions['bus'])
+    batch['generator'].y = torch.zeros_like(predictions['generator'])
+
+    _, _ = manager.compute_loss(predictions, batch, return_info=True)
+    lambda_after_first = manager.lagrangian.lambda_k.clone()
+
+    _, _ = manager.compute_loss(predictions, batch, return_info=True)
+    lambda_after_second = manager.lagrangian.lambda_k
+
+    assert torch.any(lambda_after_second != lambda_after_first)
