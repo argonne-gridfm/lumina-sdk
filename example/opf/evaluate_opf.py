@@ -193,7 +193,7 @@ dataset = OPFDataset(root='./opf_data', case_name='pglib_opf_case14_ieee')
 test_loader = DataLoader(dataset, batch_size=32, shuffle=False)
 
 # loss function
-from loss_functions import ACOPFLossFunction
+from lumina.model.opf.losses import ACOPFLossFunction
 loss_manager = ACOPFLossFunction(loss_type="mse")
 
 
