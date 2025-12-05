@@ -1,6 +1,8 @@
 ---
-root: "/lus/eagle/projects/GridFM/datasets/"
-logging_dir: "/lus/eagle/projects/GridFM/logs/"
+# root: "/lus/eagle/projects/GridFM/datasets/"
+root: "/lus/eagle/projects/GridFM/datasets/acopf"
+# logging_dir: "/lus/eagle/projects/GridFM/logs/"
+logging_dir: "/lus/eagle/projects/GridFM/logs/acopf/"
 optimizer:
   Adam:
     lr: 1.0e-04
@@ -52,4 +54,5 @@ trainer:
   barebones: false
   plugins: null
   reload_dataloaders_every_n_epochs: 0
-  default_root_dir: "/lus/eagle/projects/GridFM/lightning/"
+  # default_root_dir: "/lus/eagle/projects/GridFM/lightning/"
+  default_root_dir: "/lus/eagle/projects/GridFM/acopf/"
