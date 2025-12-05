@@ -1,6 +1,6 @@
 ---
-root: "/lus/eagle/projects/GridFM/datasets/"
-logging_dir: "/lus/eagle/projects/GridFM/logs/"
+root: "./opf_data/"
+logging_dir: "./logs/"
 optimizer:
   Adam:
     lr: 1.0e-04
@@ -62,4 +62,4 @@ trainer:
   barebones: false
   plugins: null
   reload_dataloaders_every_n_epochs: 0
-  default_root_dir: "/lus/eagle/projects/GridFM/lightning/"
+  default_root_dir: "./lightning/"

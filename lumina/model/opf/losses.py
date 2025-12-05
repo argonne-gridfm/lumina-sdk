@@ -517,6 +517,9 @@ class OPFLossManager(nn.Module):
         base_mva = getattr(batch, 'baseMVA', None)
         if base_mva is None and hasattr(batch, 'base_mva'):
             base_mva = getattr(batch, 'base_mva')
+        if torch.is_tensor(base_mva):
+            # baseMVA comes as a length-1 tensor; extract safely
+            base_mva = base_mva.view(-1)[0].item()
         base_mva = float(base_mva) if base_mva is not None else 100.0
 
         # Aggregate load (pd, qd) onto buses using bus->load links
@@ -654,6 +657,8 @@ class OPFLossManager(nn.Module):
         base_mva = getattr(batch, 'baseMVA', None)
         if base_mva is None and hasattr(batch, 'base_mva'):
             base_mva = getattr(batch, 'base_mva')
+        if torch.is_tensor(base_mva):
+            base_mva = base_mva.view(-1)[0].item()
         base_mva = float(base_mva) if base_mva is not None else 100.0
 
         self.lagrangian.set_network_parameters(

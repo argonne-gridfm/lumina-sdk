@@ -327,7 +327,9 @@ class AugmentedLagrangianACOPF(nn.Module):
         constraint_tolerance: float = 1e-4,
         max_outer_iterations: int = 20,
         max_inner_iterations: int = 50,
-        normalize_constraints: bool = True
+        normalize_constraints: bool = True,
+        verbose: bool = False,
+        **_
     ):
         """
         Initialize Augmented Lagrangian solver.
@@ -341,6 +343,8 @@ class AugmentedLagrangianACOPF(nn.Module):
             max_outer_iterations(int): Maximum outer iterations(penalty updates)
             max_inner_iterations(int): Maximum inner iterations(optimization steps)
             normalize_constraints(bool): Whether to normalize constraint violations
+            verbose(bool): Unused flag kept for backward compatibility with older configs
+            **_: Ignore extra keyword arguments for forward compatibility
         """
         super().__init__()
 
@@ -353,6 +357,7 @@ class AugmentedLagrangianACOPF(nn.Module):
         self.max_outer_iterations = max_outer_iterations
         self.max_inner_iterations = max_inner_iterations
         self.normalize_constraints = normalize_constraints
+        self.verbose = verbose
 
         # Current algorithm state
         self.mu_k = mu_0
