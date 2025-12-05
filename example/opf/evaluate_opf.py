@@ -1,10 +1,14 @@
 import torch
+import os
+import argparse
 from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file
 import json
 import re
 import lightning as L
 import ast
+from torch.utils.data import Subset
+
 
 class ACOPFEvaluationModule(L.LightningModule):
     """Lightning Module for ACOPF model evaluation"""
@@ -55,14 +59,12 @@ class ACOPFEvaluationModule(L.LightningModule):
     
     def _convert_batch_to_float32(self, batch):
         """Convert all tensors in batch to float32"""
-        # Convert node features
         for node_type in batch.node_types:
             if hasattr(batch[node_type], 'x') and batch[node_type].x is not None:
                 batch[node_type].x = batch[node_type].x.float()
             if hasattr(batch[node_type], 'y') and batch[node_type].y is not None:
                 batch[node_type].y = batch[node_type].y.float()
         
-        # Convert edge attributes
         for edge_type in batch.edge_types:
             if hasattr(batch[edge_type], 'edge_attr') and batch[edge_type].edge_attr is not None:
                 batch[edge_type].edge_attr = batch[edge_type].edge_attr.float()
@@ -96,13 +98,13 @@ class ACOPFEvaluationModule(L.LightningModule):
                     print(f"  Targets (first 5 nodes):")
                     print(f"    {target[:5]}")
 
-                    # Compute per-dimension errors
                     errors = torch.abs(pred - target)
                     mean_errors = errors.mean(dim=0)
                     max_errors = errors.max(dim=0)[0]
 
                     print(f"  Mean absolute errors per dimension: {mean_errors}")
                     print(f"  Max absolute errors per dimension: {max_errors}")
+
 
 def convert_checkpoint_key_to_model_key(key):
     """Convert checkpoint key format to model's internal format"""
@@ -111,127 +113,219 @@ def convert_checkpoint_key_to_model_key(key):
         content = match.group(1)
         parts = content.split('___')
         return f"('{parts[0]}', '{parts[1]}', '{parts[2]}')"
-    key = re.sub(pattern, replacer, key)
+    return re.sub(pattern, replacer, key)
+
+
+def parse_args():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(
+        description='Evaluate ACOPF model',
+    )
     
-    return key
-
-token = "your_HF_token_here"  # Replace with your HuggingFace token
-# Download model files
-print("Downloading model files from HuggingFace...")
-config_path = hf_hub_download(repo_id="argonne/LUMINA-1B", filename="config.json", token=token)
-safetensors_path = hf_hub_download(repo_id="argonne/LUMINA-1B", filename="model.safetensors", token=token)
-
-model_path = hf_hub_download(repo_id="argonne/LUMINA-1B", filename="model.pt", token=token)
-checkpoint = torch.load(model_path, map_location='cpu')
-
-# Load config
-with open(config_path, 'r') as f:
-    config_data = json.load(f)
-
-# # print the content of config.json
-# for key in config_data:
-#     print(f"{key}: {config_data[key]}")
-
-# FIX 1: Convert metadata edge keys from strings to tuples
-print("Converting metadata edge keys to tuples...")
-if 'edges' in config_data['metadata']:
-    edges_dict = {}
-    for key, value in config_data['metadata']['edges'].items():
-        if isinstance(key, str) and key.startswith('('):
-            key = ast.literal_eval(key)
-        edges_dict[key] = value
-    config_data['metadata']['edges'] = edges_dict
-
-print("Creating model...")
-from lumina.model.opf.hetero_model import OPFHeteroGNN
-
-model = OPFHeteroGNN(
-    metadata=config_data['metadata'],
-    input_channels=config_data['input_channels'],
-    hidden_channels=config_data['config']['models']['HeteroGNN']['hidden_channels'],
-    num_layers=config_data['config']['models']['HeteroGNN']['num_layers'],
-    backend=config_data['config']['models']['HeteroGNN']['backend'],
-)
-
-# print("Loading model weights...")
-# state_dict = load_file(safetensors_path)
-# new_state_dict = {convert_key(k): v for k, v in state_dict.items()}
-# model.load_state_dict(new_state_dict)
-
-print("Loading model weights...")
-state_dict = load_file(safetensors_path)
-checkpoint_dict = {}
-for k, v in state_dict.items():
-    new_k = convert_checkpoint_key_to_model_key(k)
-    checkpoint_dict[new_k] = v
-
-# Now match with model parameters
-for param_name, param in model.named_parameters():
-    # Convert model param name to checkpoint format
-    checkpoint_key = convert_checkpoint_key_to_model_key(param_name)
-    if checkpoint_key in checkpoint_dict:
-        param.data.copy_(checkpoint_dict[checkpoint_key])
-
-# Also copy buffers
-for buffer_name, buffer in model.named_buffers():
-    checkpoint_key = convert_checkpoint_key_to_model_key(buffer_name)
-    if checkpoint_key in checkpoint_dict:
-        buffer.data.copy_(checkpoint_dict[checkpoint_key])
-
-print("Model weights loaded successfully!")
-
-# model.load_state_dict(checkpoint['model_state_dict'])
-model.eval()
-
-# data 
-print("Loading dataset...")
-from lumina.dataset.opf.opf_dataset import OPFDataset
-from lumina.loader.opf.opf_loader import DataLoader
-
-dataset = OPFDataset(root='./opf_data', case_name='pglib_opf_case14_ieee')
-
-test_loader = DataLoader(dataset, batch_size=32, shuffle=False)
-
-# loss function
-from lumina.model.opf.losses import ACOPFLossFunction
-loss_manager = ACOPFLossFunction(loss_type="mse")
+    # Model arguments
+    parser.add_argument('--repo-id', type=str, default='argonne/LUMINA-1B',
+                        help='HuggingFace repository ID')
+    parser.add_argument('--hf-token', type=str, default=None,
+                        help='HuggingFace token')
+    
+    # Dataset arguments
+    parser.add_argument('--data-root', type=str, default='./opf_data',
+                        help='Root directory for dataset')
+    parser.add_argument('--case-name', type=str, default='pglib_opf_case14_ieee',
+                        help='OPF case name')
+    parser.add_argument('--num-samples', type=int, default=None,
+                        help='Limit number of samples (None = use all)')
+    
+    # Training arguments
+    parser.add_argument('--batch-size', type=int, default=32,
+                        help='Batch size for evaluation')
+    parser.add_argument('--loss-type', type=str, default='mse',
+                        choices=['mse', 'rmse', 'mae', 'mape', 'smooth_l1'],
+                        help='Loss function type')
+    
+    # Lightning Trainer arguments
+    parser.add_argument('--accelerator', type=str, default='cuda',
+                        choices=['cpu', 'cuda', 'mps', 'tpu'],
+                        help='Accelerator type')
+    parser.add_argument('--devices', type=int, default=1,
+                        help='Number of devices to use')
+    parser.add_argument('--precision', type=str, default='32-true',
+                        choices=['32-true', '16-mixed', 'bf16-mixed'],
+                        help='Training precision')
+    
+    # Output arguments
+    parser.add_argument('--verbose', action='store_true',
+                        help='Print detailed predictions vs targets')
+    parser.add_argument('--progress-bar', action='store_true', default=True,
+                        help='Show progress bar')
+    
+    return parser.parse_args()
 
 
-lightning_module = ACOPFEvaluationModule(
-    model=model,
-    loss_manager=loss_manager,
-    verbose=False,
-)
+def load_model_from_hub(repo_id, token):
+    """Load model configuration and weights from HuggingFace Hub"""
+    print("Downloading model files from HuggingFace...")
+    config_path = hf_hub_download(repo_id=repo_id, filename="config.json", token=token)
+    safetensors_path = hf_hub_download(repo_id=repo_id, filename="model.safetensors", token=token)
+    
+    # Load config
+    with open(config_path, 'r') as f:
+        config_data = json.load(f)
+    
+    # Convert metadata edge keys to tuples
+    print("Converting metadata edge keys to tuples...")
+    if 'edges' in config_data['metadata']:
+        edges_dict = {}
+        for key, value in config_data['metadata']['edges'].items():
+            if isinstance(key, str) and key.startswith('('):
+                key = ast.literal_eval(key)
+            edges_dict[key] = value
+        config_data['metadata']['edges'] = edges_dict
+    
+    return config_data, safetensors_path
 
-# Create Lightning Trainer for evaluation
-trainer = L.Trainer(
-    accelerator="cuda",
-    devices=1,
-    precision="32-true",
-    logger=False,  # Disable logger for simple evaluation
-    enable_checkpointing=False,  # No checkpointing needed
-    enable_progress_bar=True,
-    enable_model_summary=False
-)
 
-print(f"\n{'='*60}")
-print("Running Evaluation")
-print(f"{'='*60}")
-print(f"Accelerator: cuda")
-print(f"Devices: 1")
-print(f"Precision: 32-true")
+def create_model(config_data):
+    """Create model from configuration"""
+    print("Creating model...")
+    from lumina.model.opf.hetero_model import OPFHeteroGNN
+    
+    model = OPFHeteroGNN(
+        metadata=config_data['metadata'],
+        input_channels=config_data['input_channels'],
+        hidden_channels=config_data['config']['models']['HeteroGNN']['hidden_channels'],
+        num_layers=config_data['config']['models']['HeteroGNN']['num_layers'],
+        backend=config_data['config']['models']['HeteroGNN']['backend'],
+    )
+    
+    return model
 
-# Run evaluation
-results = trainer.test(lightning_module, dataloaders=test_loader)
 
-# Print results summary
-print(f"\n{'='*60}")
-print("Evaluation Results Summary")
-print(f"{'='*60}")
-if results:
-    for metric_name, metric_value in results[0].items():
-        print(f"{metric_name}: {metric_value:.6f}")
+def load_model_weights(model, safetensors_path):
+    """Load model weights from safetensors file"""
+    print("Loading model weights...")
+    state_dict = load_file(safetensors_path)
+    
+    # Convert checkpoint keys
+    checkpoint_dict = {}
+    for k, v in state_dict.items():
+        new_k = convert_checkpoint_key_to_model_key(k)
+        checkpoint_dict[new_k] = v
+    
+    # Match with model parameters
+    for param_name, param in model.named_parameters():
+        checkpoint_key = convert_checkpoint_key_to_model_key(param_name)
+        if checkpoint_key in checkpoint_dict:
+            param.data.copy_(checkpoint_dict[checkpoint_key])
+    
+    # Copy buffers
+    for buffer_name, buffer in model.named_buffers():
+        checkpoint_key = convert_checkpoint_key_to_model_key(buffer_name)
+        if checkpoint_key in checkpoint_dict:
+            buffer.data.copy_(checkpoint_dict[checkpoint_key])
+    
+    print("Model weights loaded successfully!")
+    return model
 
-print(f"\n{'='*60}")
-print("Evaluation Complete")
-print(f"{'='*60}")
+
+def load_dataset(data_root, case_name, num_samples=None):
+    """Load OPF dataset"""
+    print("Loading dataset...")
+    from lumina.dataset.opf.opf_dataset import OPFDataset
+    
+    dataset = OPFDataset(root=data_root, case_name=case_name)
+    
+    # Limit dataset size if specified
+    if num_samples is not None and num_samples < len(dataset):
+        print(f"Limiting dataset to {num_samples} samples")
+        dataset = Subset(dataset, range(num_samples))
+    
+    print(f"Dataset size: {len(dataset)}")
+    
+    return dataset
+
+
+def main():
+    # Parse arguments
+    args = parse_args()
+    
+    # Get HuggingFace token
+    token = args.hf_token
+    if not token:
+        raise ValueError(
+            "HuggingFace token not provided"
+        )
+    
+    # Load model from HuggingFace Hub
+    config_data, safetensors_path = load_model_from_hub(args.repo_id, token)
+    
+    # Create and load model
+    model = create_model(config_data)
+    model = load_model_weights(model, safetensors_path)
+    model.eval()
+    
+    # Load dataset
+    dataset = load_dataset(args.data_root, args.case_name, args.num_samples)
+    
+    # Create dataloader
+    from lumina.loader.opf.opf_loader import DataLoader
+    test_loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
+    
+    # Create loss function
+    from lumina.model.opf.losses import ACOPFLossFunction
+    loss_manager = ACOPFLossFunction(loss_type=args.loss_type)
+    
+    # Create Lightning module
+    lightning_module = ACOPFEvaluationModule(
+        model=model,
+        loss_manager=loss_manager,
+        verbose=args.verbose,
+    )
+    
+    # Create Lightning Trainer
+    trainer = L.Trainer(
+        accelerator=args.accelerator,
+        devices=args.devices,
+        precision=args.precision,
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=args.progress_bar,
+        enable_model_summary=False
+    )
+    
+    # Print configuration
+    print(f"\n{'='*60}")
+    print("Evaluation Configuration")
+    print(f"{'='*60}")
+    print(f"Repository: {args.repo_id}")
+    print(f"Case: {args.case_name}")
+    print(f"Dataset size: {len(dataset)}")
+    print(f"Batch size: {args.batch_size}")
+    print(f"Loss type: {args.loss_type}")
+    print(f"Accelerator: {args.accelerator}")
+    print(f"Devices: {args.devices}")
+    print(f"Precision: {args.precision}")
+    print(f"Verbose: {args.verbose}")
+    
+    # Run evaluation
+    print(f"\n{'='*60}")
+    print("Running Evaluation")
+    print(f"{'='*60}")
+    
+    results = trainer.test(lightning_module, dataloaders=test_loader)
+    
+    # Print results
+    print(f"\n{'='*60}")
+    print("Evaluation Results Summary")
+    print(f"{'='*60}")
+    if results:
+        for metric_name, metric_value in results[0].items():
+            print(f"{metric_name}: {metric_value:.6f}")
+    
+    print(f"\n{'='*60}")
+    print("Evaluation Complete")
+    print(f"{'='*60}")
+
+
+if __name__ == "__main__":
+    main()
