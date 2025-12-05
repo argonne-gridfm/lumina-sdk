@@ -444,6 +444,7 @@ class OPFLossManager(nn.Module):
             # Compute Lagrangian loss
             if self.loss_type == 'augmented_lagrangian':
                 # Format predictions and data for augmented Lagrangian
+                self._ensure_network_parameters(batch, predictions['bus'].device)
                 constraint_batch = constraint_data or self._create_constraint_batch(batch, predictions)
                 aug_loss, info = self.lagrangian(mse_loss, predictions, constraint_batch)
 
@@ -509,16 +510,158 @@ class OPFLossManager(nn.Module):
             self.lagrangian.step_epoch()
 
     def _create_constraint_batch(self, batch, predictions):
-        """Create batch data format for augmented Lagrangian constraints."""
-        # This creates a simplified batch structure for constraint evaluation
-        constraint_batch = type('ConstraintBatch', (), {})()
+        """Create constraint data using actual OPF batch fields (no random stubs)."""
+        device = predictions['bus'].device
+        n_bus = batch['bus'].x.size(0)
 
-        # Copy relevant attributes
-        for node_type in ['bus', 'generator', 'load']:
-            if hasattr(batch, node_type):
-                setattr(constraint_batch, node_type, batch[node_type])
+        base_mva = getattr(batch, 'baseMVA', None)
+        if base_mva is None and hasattr(batch, 'base_mva'):
+            base_mva = getattr(batch, 'base_mva')
+        base_mva = float(base_mva) if base_mva is not None else 100.0
 
-        return constraint_batch
+        # Aggregate load (pd, qd) onto buses using bus->load links
+        pd = torch.zeros(n_bus, device=device)
+        qd = torch.zeros(n_bus, device=device)
+        if ('bus', 'load_link', 'load') in getattr(batch, 'edge_types', []) and ('load' in getattr(batch, 'node_types', [])):
+            load_edge = batch['bus', 'load_link', 'load'].edge_index.to(device)
+            load_x = batch['load'].x.to(device)
+            load_pd = load_x[:, 0]
+            load_qd = load_x[:, 1] if load_x.size(1) > 1 else torch.zeros_like(load_pd)
+
+            bus_idx = load_edge[0].clamp(max=n_bus - 1)
+            load_idx = load_edge[1].clamp(max=load_pd.size(0) - 1)
+            pd.index_add_(0, bus_idx, load_pd[load_idx])
+            qd.index_add_(0, bus_idx, load_qd[load_idx])
+        elif 'load' in getattr(batch, 'node_types', []):
+            load_x = batch['load'].x.to(device)
+            n_load = load_x.size(0)
+            take = min(n_load, n_bus)
+            pd[:take] += load_x[:take, 0]
+            if load_x.size(1) > 1:
+                qd[:take] += load_x[:take, 1]
+
+        # Map generators to buses using bus->generator links
+        gen_pred = predictions.get('generator', None)
+        n_generators = gen_pred.size(0) if gen_pred is not None else batch['generator'].x.size(0)
+        gen_bus_indices = torch.zeros(n_generators, device=device, dtype=torch.long)
+        if ('bus', 'generator_link', 'generator') in getattr(batch, 'edge_types', []):
+            gen_edge = batch['bus', 'generator_link', 'generator'].edge_index.to(device)
+            bus_idx = gen_edge[0].clamp(max=n_bus - 1)
+            gen_idx = gen_edge[1].clamp(max=n_generators - 1)
+            gen_bus_indices[gen_idx] = bus_idx
+
+        # Collect load bus indices (unique) for convenience
+        load_bus_indices = None
+        if ('bus', 'load_link', 'load') in getattr(batch, 'edge_types', []):
+            load_bus_indices = batch['bus', 'load_link', 'load'].edge_index[0].to(device)
+
+        # Line topology and limits
+        line_edge_index = None
+        line_limits = None
+        if ('bus', 'ac_line', 'bus') in getattr(batch, 'edge_types', []):
+            line_edge_index = batch['bus', 'ac_line', 'bus'].edge_index.to(device)
+            if batch['bus', 'ac_line', 'bus'].edge_attr is not None:
+                edge_attr = batch['bus', 'ac_line', 'bus'].edge_attr.to(device)
+                # rate_a if available; otherwise no limits
+                if edge_attr.size(1) >= 7:
+                    line_limits = edge_attr[:, 6].abs()
+
+        # Build constraint batch wrapper
+        class ConstraintBatch:
+            def __init__(self):
+                self.baseMVA = base_mva
+                self.n_bus = n_bus
+
+            def get(self, key, default=None):
+                if key == 'pd':
+                    return pd
+                if key == 'qd':
+                    return qd
+                if key == 'gen_bus_indices':
+                    return gen_bus_indices
+                if key == 'load_bus_indices':
+                    return load_bus_indices
+                if key == 'line_edge_index':
+                    return line_edge_index
+                if key == 'line_limits':
+                    return line_limits
+                return default
+
+        return ConstraintBatch()
+
+    def _build_admittance_from_batch(self, batch, device):
+        """Approximate Y-bus (real/imag) from line r/x; ignores shunts/transformers for now."""
+        if ('bus', 'ac_line', 'bus') not in batch.edge_index_dict:
+            return None, None
+
+        edge_index = batch['bus', 'ac_line', 'bus'].edge_index.to(device)
+        edge_attr = batch['bus', 'ac_line', 'bus'].edge_attr
+        if edge_attr is None or edge_attr.size(0) != edge_index.size(1) or edge_attr.size(1) < 6:
+            return None, None
+
+        edge_attr = edge_attr.to(device)
+        r = edge_attr[:, 4]
+        x = edge_attr[:, 5]
+        denom = (r ** 2 + x ** 2).clamp_min(1e-6)
+        y_real = r / denom
+        y_imag = -x / denom
+
+        n_bus = batch['bus'].x.size(0)
+        Y_real = torch.zeros(n_bus, n_bus, device=device)
+        Y_imag = torch.zeros(n_bus, n_bus, device=device)
+
+        i = edge_index[0].clamp(max=n_bus - 1)
+        j = edge_index[1].clamp(max=n_bus - 1)
+
+        # Off-diagonal
+        Y_real.index_put_((i, j), -y_real, accumulate=True)
+        Y_real.index_put_((j, i), -y_real, accumulate=True)
+        Y_imag.index_put_((i, j), -y_imag, accumulate=True)
+        Y_imag.index_put_((j, i), -y_imag, accumulate=True)
+
+        # Diagonal
+        Y_real.index_put_((i, i), y_real, accumulate=True)
+        Y_real.index_put_((j, j), y_real, accumulate=True)
+        Y_imag.index_put_((i, i), y_imag, accumulate=True)
+        Y_imag.index_put_((j, j), y_imag, accumulate=True)
+
+        return Y_real, Y_imag
+
+    def _ensure_network_parameters(self, batch, device):
+        """Initialize AugLag network parameters from batch data when needed."""
+        if self.lagrangian is None:
+            return
+
+        n_bus = batch['bus'].x.size(0)
+        need_init = (
+            getattr(self.lagrangian, 'Y_real', None) is None
+            or self.lagrangian.Y_real.size(0) != n_bus
+        )
+
+        if not need_init:
+            return
+
+        Y_real, Y_imag = self._build_admittance_from_batch(batch, device)
+        if Y_real is None or Y_imag is None:
+            return
+
+        line_limits = None
+        if ('bus', 'ac_line', 'bus') in getattr(batch, 'edge_types', []):
+            edge_attr = batch['bus', 'ac_line', 'bus'].edge_attr
+            if edge_attr is not None and edge_attr.size(1) >= 7:
+                line_limits = edge_attr[:, 6].abs().to(device)
+
+        base_mva = getattr(batch, 'baseMVA', None)
+        if base_mva is None and hasattr(batch, 'base_mva'):
+            base_mva = getattr(batch, 'base_mva')
+        base_mva = float(base_mva) if base_mva is not None else 100.0
+
+        self.lagrangian.set_network_parameters(
+            Y_real=Y_real,
+            Y_imag=Y_imag,
+            line_limits=line_limits,
+            base_mva=base_mva
+        )
 
     def _extract_inputs(self, batch):
         """Extract input data dictionary for violated Lagrangian."""

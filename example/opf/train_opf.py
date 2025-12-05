@@ -253,103 +253,6 @@ class OPFLightningModule(pl.LightningModule):
         if self.loss_type == 'augmented_lagrangian':
             self.augmented_lagrangian = self.loss_manager.lagrangian
 
-    def _initialize_augmented_lagrangian(self):
-        """Initialize Augmented Lagrangian solver (deprecated - use _initialize_loss_manager)."""
-        augmented_lagrangian = AugmentedLagrangianACOPF(
-            mu_0=0.1,
-            tolerance=1e-6,
-            constraint_tolerance=1e-2,
-            max_outer_iterations=20,
-            mu_increase_factor=1.0,
-            max_mu=100.0,
-            normalize_constraints=True
-        )
-        print("✓ Augmented Lagrangian initialized")
-        return augmented_lagrangian
-
-    def _extract_network_parameters(self):
-        """Extract network parameters from dataset sample."""
-        sample = self.dataset[0]
-        n_bus = sample['bus'].x.shape[0]
-
-        if hasattr(sample, 'Y'):
-            Y_dense = torch.tensor(sample.Y.todense(), dtype=torch.float32)
-            Y_real = Y_dense.real
-            Y_imag = Y_dense.imag
-        else:
-            Y_real = torch.zeros(n_bus, n_bus, dtype=torch.float32)
-            Y_imag = torch.zeros(n_bus, n_bus, dtype=torch.float32)
-            Y_real.fill_diagonal_(0.1)
-            Y_imag.fill_diagonal_(-0.5)
-            for i in range(n_bus - 1):
-                Y_real[i, i + 1] = Y_real[i + 1, i] = -0.05
-                Y_imag[i, i + 1] = Y_imag[i + 1, i] = 0.2
-
-        if ('bus', 'ac_line', 'bus') in sample.edge_index_dict:
-            n_lines = sample[('bus', 'ac_line', 'bus')].edge_index.shape[1]
-        else:
-            n_lines = n_bus - 1
-
-        line_limits = torch.ones(n_lines, dtype=torch.float32) * 100.0
-
-        self.augmented_lagrangian.set_network_parameters(
-            Y_real=Y_real.to(self.device),
-            Y_imag=Y_imag.to(self.device),
-            line_limits=line_limits.to(self.device),
-            base_mva=sample.base_mva if hasattr(sample, 'base_mva') else 100.0
-        )
-        self.n_bus = n_bus
-        self.n_lines = n_lines
-        print(f"✓ Network parameters set on {self.device}")
-
-    def _create_dummy_batch_data(self, batch, predictions=None):
-        """Create dummy batch data for constraint evaluation."""
-        if self.model_type in ['HeteroGNN', 'RGAT', 'HEAT', 'HGT']:
-            batch_size = batch['bus'].x.shape[0] if batch['bus'].x.dim() > 1 else 1
-            device = batch['bus'].x.device
-
-            if predictions is not None and 'generator' in predictions:
-                pred_shape = predictions['generator'].shape
-                if len(pred_shape) == 2:
-                    n_generators = pred_shape[0] // batch_size if pred_shape[0] % batch_size == 0 else pred_shape[0]
-                else:
-                    n_generators = pred_shape[1]
-            else:
-                n_generators = batch['generator'].x.shape[0] if 'generator' in batch else 5
-        else:
-            if hasattr(batch, 'ptr'):
-                batch_size = batch.ptr.size(0) - 1
-            else:
-                batch_size = 1
-            device = batch.x.device
-            n_generators = (batch.node_type == 1).sum().item()
-
-        class ConstraintBatch:
-            def __init__(self, device, n_generators, n_bus):
-                self.baseMVA = 100.0
-                self.device = device
-                self.n_generators = n_generators
-                self.n_bus = n_bus
-
-            def get(self, key, default=None):
-                if key == 'pd':
-                    return torch.rand(batch_size, self.n_bus, device=self.device) * 50
-                elif key == 'qd':
-                    return torch.rand(batch_size, self.n_bus, device=self.device) * 25
-                elif key == 'gen_bus_indices':
-                    return torch.tensor(list(range(self.n_generators)), device=self.device)
-                elif key == 'load_bus_indices':
-                    return torch.tensor(list(range(2, min(self.n_bus, 7))), device=self.device)
-                elif key == 'line_edge_index':
-                    from_buses = list(range(self.n_bus - 1))
-                    to_buses = list(range(1, self.n_bus))
-                    return torch.tensor([from_buses, to_buses], device=self.device)
-                else:
-                    return default
-
-        constraint_batch = ConstraintBatch(device, n_generators, self.n_bus)
-        return constraint_batch
-
     def setup(self, stage=None):
         n_samples = len(self.dataset)
         n_train = int(n_samples * self.config['train_split'])
@@ -365,9 +268,8 @@ class OPFLightningModule(pl.LightningModule):
             self.test_dataset = HomoOPFDataset(self.test_dataset)
 
     def on_fit_start(self):
-        # Extract network parameters if using augmented lagrangian
-        if self.loss_type == 'augmented_lagrangian':
-            self._extract_network_parameters()
+        # Loss manager will initialize network parameters on first batch
+        pass
 
     def train_dataloader(self):
         loader_config = self.config['loader']
@@ -424,16 +326,7 @@ class OPFLightningModule(pl.LightningModule):
             predictions = self(batch)
 
         # Use loss manager to compute loss
-        if self.loss_type == 'augmented_lagrangian':
-            constraint_batch = self._create_dummy_batch_data(batch, predictions)
-            loss, loss_info = self.loss_manager.compute_loss(
-                predictions,
-                batch,
-                constraint_data=constraint_batch,
-                return_info=True,
-            )
-        else:
-            loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
+        loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
 
         # Log metrics
         self.log('train_loss', loss, prog_bar=True, batch_size=batch_size)
@@ -490,16 +383,7 @@ class OPFLightningModule(pl.LightningModule):
             predictions = self(batch)
 
         # Use loss manager to compute validation loss
-        if self.loss_type == 'augmented_lagrangian':
-            constraint_batch = self._create_dummy_batch_data(batch, predictions)
-            loss, loss_info = self.loss_manager.compute_loss(
-                predictions,
-                batch,
-                constraint_data=constraint_batch,
-                return_info=True,
-            )
-        else:
-            loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
+        loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
 
         # Log validation metrics
         self.log('val_loss', loss, prog_bar=True, batch_size=batch_size)

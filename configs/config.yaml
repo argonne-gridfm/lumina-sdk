@@ -16,6 +16,16 @@ optimizer:
       - 0.999
     eps: 1.0e-08
     weight_decay: 0
+
+lagrangian:
+  mu_0: 0.1
+  tolerance: 1.0e-06
+  constraint_tolerance: 0.01
+  max_outer_iterations: 20
+  mu_increase_factor: 1.0
+  max_mu: 100.0
+  normalize_constraints: true
+  verbose: false
 trainer:
   accelerator: "auto"
   strategy: "ddp_find_unused_parameters_true"

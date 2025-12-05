@@ -580,10 +580,8 @@ class AugmentedLagrangianACOPF(nn.Module):
         Returns:
             Line flow constraint violations
         """
-        # Temporarily disable line flow constraints to focus on power flow constraints
-        # The neural network outputs are not properly scaled for power flow calculations
-        # NOTE: ignore the line flow constraints for now
-        return torch.tensor([], device=vm.device, requires_grad=True)
+        if line_edge_index is None or self.line_limits is None or self.line_limits.numel() == 0:
+            return torch.tensor([], device=vm.device, requires_grad=True)
 
         batch_size = vm.size(0) if vm.dim() > 1 else 1
         device = vm.device
@@ -631,7 +629,8 @@ class AugmentedLagrangianACOPF(nn.Module):
                 # For now, we'll use the constraint violation directly
                 line_limit_val = float(self.line_limits[k])
                 violation = s_magnitude_squared - line_limit_val**2
-                line_violations.append(torch.relu(violation))  # Only consider violations
+                # Only consider positive violations; scale to keep magnitudes stable
+                line_violations.append(torch.relu(violation))
 
             line_constraint = torch.stack(line_violations).mean()
             line_constraints.append(line_constraint)
