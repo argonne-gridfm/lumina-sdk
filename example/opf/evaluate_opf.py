@@ -115,7 +115,7 @@ def convert_checkpoint_key_to_model_key(key):
     
     return key
 
-token = "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"
+token = "your_HF_token_here"  # Replace with your HuggingFace token
 # Download model files
 print("Downloading model files from HuggingFace...")
 config_path = hf_hub_download(repo_id="argonne/LUMINA-1B", filename="config.json", token=token)
