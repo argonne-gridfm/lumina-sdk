@@ -152,6 +152,8 @@ def parse_args():
     parser.add_argument('--precision', type=str, default='32-true',
                         choices=['32-true', '16-mixed', 'bf16-mixed'],
                         help='Training precision')
+    parser.add_argument('--fail-on-missing', action='store_true',
+                        help='Raise an error if checkpoint is missing model keys.')
     
     # Output arguments
     parser.add_argument('--verbose', action='store_true',
@@ -203,8 +205,41 @@ def create_model(config_data):
     return model
 
 
-def load_model_weights(model, safetensors_path):
-    """Load model weights from safetensors file"""
+def _load_checkpoint_into_model(
+    model: torch.nn.Module,
+    checkpoint_dict,
+    *,
+    fail_on_missing: bool = False,
+    verbose: bool = True,
+):
+    """Load a checkpoint dict into model with reporting of missing/unexpected keys."""
+    model_state = model.state_dict()
+    used_keys = set()
+    missing_keys = []
+
+    remapped_state = {}
+    for model_key in model_state.keys():
+        ck = convert_checkpoint_key_to_model_key(model_key)
+        if ck in checkpoint_dict:
+            remapped_state[model_key] = checkpoint_dict[ck]
+            used_keys.add(ck)
+
+    unexpected_keys = [k for k in checkpoint_dict.keys() if k not in used_keys]
+
+    load_result = model.load_state_dict(remapped_state, strict=False)
+    missing_keys = list(load_result.missing_keys)
+    unexpected_keys.extend(list(load_result.unexpected_keys))
+
+    if verbose and (missing_keys or unexpected_keys):
+        print(f"[CHECKPOINT LOAD] Missing keys: {missing_keys}, Unexpected keys: {unexpected_keys}")
+    if fail_on_missing and missing_keys:
+        raise ValueError(f"Missing keys during load: {missing_keys}")
+
+    return {"missing_keys": missing_keys, "unexpected_keys": unexpected_keys}
+
+
+def load_model_weights(model, safetensors_path, *, fail_on_missing: bool = False):
+    """Load model weights from safetensors file."""
     print("Loading model weights...")
     state_dict = load_file(safetensors_path)
     
@@ -214,17 +249,12 @@ def load_model_weights(model, safetensors_path):
         new_k = convert_checkpoint_key_to_model_key(k)
         checkpoint_dict[new_k] = v
     
-    # Match with model parameters
-    for param_name, param in model.named_parameters():
-        checkpoint_key = convert_checkpoint_key_to_model_key(param_name)
-        if checkpoint_key in checkpoint_dict:
-            param.data.copy_(checkpoint_dict[checkpoint_key])
-    
-    # Copy buffers
-    for buffer_name, buffer in model.named_buffers():
-        checkpoint_key = convert_checkpoint_key_to_model_key(buffer_name)
-        if checkpoint_key in checkpoint_dict:
-            buffer.data.copy_(checkpoint_dict[checkpoint_key])
+    _load_checkpoint_into_model(
+        model,
+        checkpoint_dict,
+        fail_on_missing=fail_on_missing,
+        verbose=True,
+    )
     
     print("Model weights loaded successfully!")
     return model
@@ -263,7 +293,11 @@ def main():
     
     # Create and load model
     model = create_model(config_data)
-    model = load_model_weights(model, safetensors_path)
+    model = load_model_weights(
+        model,
+        safetensors_path,
+        fail_on_missing=args.fail_on_missing,
+    )
     model.eval()
     
     # Load dataset

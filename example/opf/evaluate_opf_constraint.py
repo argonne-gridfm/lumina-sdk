@@ -28,7 +28,51 @@ def convert_checkpoint_key_to_model_key(key: str) -> str:
     return re.sub(pattern, replacer, key)
 
 
-def load_model(device: torch.device, repo_id: str, token: str):
+def _load_checkpoint_into_model(
+    model: torch.nn.Module,
+    checkpoint_dict,
+    *,
+    fail_on_missing: bool = False,
+    verbose: bool = True,
+):
+    """
+    Load a checkpoint dict into model with reporting of missing/unexpected keys.
+
+    If use_legacy is True, uses the previous manual copy approach for comparison.
+    """
+    model_state = model.state_dict()
+    used_keys = set()
+    missing_keys = []
+
+    remapped_state = {}
+    for model_key in model_state.keys():
+        ck = convert_checkpoint_key_to_model_key(model_key)
+        if ck in checkpoint_dict:
+            remapped_state[model_key] = checkpoint_dict[ck]
+            used_keys.add(ck)
+
+    unexpected_keys = [k for k in checkpoint_dict.keys() if k not in used_keys]
+
+    load_result = model.load_state_dict(remapped_state, strict=False)
+    missing_keys = list(load_result.missing_keys)
+    unexpected_keys.extend(list(load_result.unexpected_keys))
+
+    if verbose and (missing_keys or unexpected_keys):
+        print(f"[CHECKPOINT LOAD] Missing keys: {missing_keys}, Unexpected keys: {unexpected_keys}")
+    if fail_on_missing and missing_keys:
+        raise ValueError(f"Missing keys during load: {missing_keys}")
+
+    return {"missing_keys": missing_keys, "unexpected_keys": unexpected_keys}
+
+
+def load_model(
+    device: torch.device,
+    repo_id: str,
+    token: str,
+    *,
+    fail_on_missing: bool = False,
+    verbose: bool = True,
+):
     """Load OPF model and config from HuggingFace."""
     config_path = hf_hub_download(repo_id=repo_id, filename="config.json", token=token)
     safetensors_path = hf_hub_download(repo_id=repo_id, filename="model.safetensors", token=token)
@@ -56,16 +100,12 @@ def load_model(device: torch.device, repo_id: str, token: str):
     state_dict = load_file(safetensors_path)
     checkpoint_dict = {convert_checkpoint_key_to_model_key(k): v for k, v in state_dict.items()}
 
-    # Manually load parameters and buffers
-    for name, param in model.named_parameters():
-        ck = convert_checkpoint_key_to_model_key(name)
-        if ck in checkpoint_dict:
-            param.data.copy_(checkpoint_dict[ck])
-
-    for name, buf in model.named_buffers():
-        ck = convert_checkpoint_key_to_model_key(name)
-        if ck in checkpoint_dict:
-            buf.data.copy_(checkpoint_dict[ck])
+    _load_checkpoint_into_model(
+        model,
+        checkpoint_dict,
+        fail_on_missing=fail_on_missing,
+        verbose=verbose,
+    )
 
     model.eval()
     return model, config_data
@@ -215,6 +255,7 @@ def main():
     parser.add_argument("--case-name", default="pglib_opf_case14_ieee", help="Case name to load.")
     parser.add_argument("--batch-size", type=int, default=1, help="Evaluation batch size.")
     parser.add_argument("--max-batches", type=int, default=None, help="Limit number of batches to evaluate (None = all).")
+    parser.add_argument("--fail-on-missing", action="store_true", help="Raise an error if checkpoint is missing model keys.")
     args = parser.parse_args()
 
     token = args.hf_token or os.getenv("HF_TOKEN")
@@ -224,7 +265,13 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     print("Downloading model and loading weights...")
-    model, _ = load_model(device, repo_id=args.repo_id, token=token)
+    model, _ = load_model(
+        device,
+        repo_id=args.repo_id,
+        token=token,
+        fail_on_missing=args.fail_on_missing,
+        verbose=True,
+    )
 
     print("Loading OPF dataset...")
     dataset = OPFDataset(root='./opf_data', case_name=args.case_name)
