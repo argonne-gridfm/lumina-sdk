@@ -13,6 +13,9 @@ from lumina.dataset.opf.opf_dataset import OPFDataset
 from lumina.loader.opf.opf_loader import DataLoader
 from lumina.evaluator.opf.evaluator import ACOPFConstraintEvaluator
 
+# Cache per-case line parameters to avoid rebuilding dense admittance each batch
+_LINE_CACHE = {}
+
 
 def convert_checkpoint_key_to_model_key(key: str) -> str:
     """Convert checkpoint key format to model's internal format."""
@@ -122,7 +125,7 @@ def _derive_generation_limits(gen_x: torch.Tensor, device: torch.device):
     return {'pmin': pmin, 'pmax': pmax, 'qmin': qmin, 'qmax': qmax}
 
 
-def _derive_line_params(batch, device: torch.device):
+def _derive_line_params(batch, device: torch.device, cache_key: str = None):
     """
     Build line limits and admittance matrix (Y_real, Y_imag) from ac_line edges.
 
@@ -130,6 +133,9 @@ def _derive_line_params(batch, device: torch.device):
     [ang_min, ang_max, b_shunt, b_shunt_to, r, x, rate_a, rate_b, rate_c]
     Only r/x/b_shunt and rate_a are used here.
     """
+    if cache_key and cache_key in _LINE_CACHE:
+        return _LINE_CACHE[cache_key]
+
     if ('bus', 'ac_line', 'bus') not in batch.edge_types:
         return None, None, None, None
 
@@ -174,10 +180,13 @@ def _derive_line_params(batch, device: torch.device):
         Y_real[j, j] += g
         Y_imag[j, j] += b
 
-    return line_limits, Y_real, Y_imag, edge_index
+    result = (line_limits, Y_real, Y_imag, edge_index)
+    if cache_key:
+        _LINE_CACHE[cache_key] = result
+    return result
 
 
-def build_constraint_evaluator(batch, device: torch.device):
+def build_constraint_evaluator(batch, device: torch.device, cache_key: str = None):
     """Build ACOPFConstraintEvaluator using dataset-provided limits when available."""
     bus_x = batch['bus'].x if hasattr(batch['bus'], 'x') else None
     gen_x = batch['generator'].x if 'generator' in batch.node_types and hasattr(batch['generator'], 'x') else None
@@ -185,7 +194,7 @@ def build_constraint_evaluator(batch, device: torch.device):
     voltage_limits = _derive_voltage_limits(bus_x, device)
     generation_limits = _derive_generation_limits(gen_x, device)
 
-    line_limits, Y_real, Y_imag, edge_index = _derive_line_params(batch, device)
+    line_limits, Y_real, Y_imag, edge_index = _derive_line_params(batch, device, cache_key=cache_key)
 
     return ACOPFConstraintEvaluator(
         voltage_limits=voltage_limits,
@@ -241,7 +250,7 @@ def main():
                 batch.edge_attr_dict if hasattr(batch, 'edge_attr_dict') else None,
             )
 
-            evaluator = build_constraint_evaluator(batch, device)
+            evaluator = build_constraint_evaluator(batch, device, cache_key=args.case_name)
             violations = evaluator.evaluate_all_constraints(
                 predictions=predictions,
                 batch_data=batch,
