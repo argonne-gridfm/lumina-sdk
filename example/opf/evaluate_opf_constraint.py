@@ -1,6 +1,7 @@
 import json
 import ast
 import re
+import os
 
 import argparse
 import torch
@@ -24,12 +25,10 @@ def convert_checkpoint_key_to_model_key(key: str) -> str:
     return re.sub(pattern, replacer, key)
 
 
-def load_model(device: torch.device):
+def load_model(device: torch.device, repo_id: str, token: str):
     """Load OPF model and config from HuggingFace."""
-    token = "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"
-
-    config_path = hf_hub_download(repo_id="argonne/LUMINA-1B", filename="config.json", token=token)
-    safetensors_path = hf_hub_download(repo_id="argonne/LUMINA-1B", filename="model.safetensors", token=token)
+    config_path = hf_hub_download(repo_id=repo_id, filename="config.json", token=token)
+    safetensors_path = hf_hub_download(repo_id=repo_id, filename="model.safetensors", token=token)
 
     with open(config_path, 'r') as f:
         config_data = json.load(f)
@@ -202,15 +201,21 @@ def build_constraint_evaluator(batch, device: torch.device):
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate ACOPF constraint violations on OPF dataset.")
+    parser.add_argument("--repo-id", default="argonne/LUMINA-1B", help="HuggingFace repository ID.")
+    parser.add_argument("--hf-token", default=None, help="HuggingFace access token (or set HF_TOKEN env).")
     parser.add_argument("--case-name", default="pglib_opf_case14_ieee", help="Case name to load.")
     parser.add_argument("--batch-size", type=int, default=1, help="Evaluation batch size.")
     parser.add_argument("--max-batches", type=int, default=None, help="Limit number of batches to evaluate (None = all).")
     args = parser.parse_args()
 
+    token = args.hf_token or os.getenv("HF_TOKEN")
+    if not token:
+        raise ValueError("HuggingFace token not provided. Supply --hf-token or set HF_TOKEN.")
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     print("Downloading model and loading weights...")
-    model, _ = load_model(device)
+    model, _ = load_model(device, repo_id=args.repo_id, token=token)
 
     print("Loading OPF dataset...")
     dataset = OPFDataset(root='./opf_data', case_name=args.case_name)
@@ -224,6 +229,7 @@ def main():
     with torch.no_grad():
         accum_sum = {}
         accum_sq = {}
+        accum_weight = {}
         batches_seen = 0
 
         for batch_idx, batch in enumerate(loader):
@@ -244,11 +250,13 @@ def main():
             )
             summary = evaluator.get_violation_summary(violations)
 
-            # accumulate mean and mean of squares for variance later
+            # accumulate weighted sums and sums of squares for variance later
+            sample_weight = batch['bus'].batch.max().item() + 1 if hasattr(batch['bus'], 'batch') else args.batch_size
             for key, value in summary.items():
                 v = float(value)
-                accum_sum[key] = accum_sum.get(key, 0.0) + v
-                accum_sq[key] = accum_sq.get(key, 0.0) + v * v
+                accum_sum[key] = accum_sum.get(key, 0.0) + v * sample_weight
+                accum_sq[key] = accum_sq.get(key, 0.0) + v * v * sample_weight
+                accum_weight[key] = accum_weight.get(key, 0.0) + sample_weight
 
             batches_seen += 1
 
@@ -261,8 +269,11 @@ def main():
         print(f"Constraint violation stats over {batches_seen} batch(es)")
         print(f"{'=' * 60}")
         for key in sorted(accum_sum.keys()):
-            mean = accum_sum[key] / batches_seen
-            mean_sq = accum_sq[key] / batches_seen
+            weight = accum_weight.get(key, 0.0)
+            if weight == 0:
+                continue
+            mean = accum_sum[key] / weight
+            mean_sq = accum_sq[key] / weight
             var = mean_sq - mean * mean
             print(f"{key}: mean={mean:.6f}, var={var:.6e}")
 
