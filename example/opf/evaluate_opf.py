@@ -156,8 +156,10 @@ def parse_args():
     # Output arguments
     parser.add_argument('--verbose', action='store_true',
                         help='Print detailed predictions vs targets')
-    parser.add_argument('--progress-bar', action='store_true', default=True,
-                        help='Show progress bar')
+    parser.add_argument('--progress-bar', dest='progress_bar', action='store_true', default=True,
+                        help='Show progress bar (default: on)')
+    parser.add_argument('--no-progress-bar', dest='progress_bar', action='store_false',
+                        help='Disable progress bar')
     
     return parser.parse_args()
 
