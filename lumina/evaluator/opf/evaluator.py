@@ -614,10 +614,10 @@ class ACOPFConstraintEvaluator(nn.Module):
         all_violations.update(line_violations)
 
         # Compute total constraint violation
-        violation_keys = ['bound_total_bound_violations', 'power_flow_violations', 'line_flow_violations']
-        total_violation = sum(all_violations.get(key, torch.tensor(0.0, device=self.device))
-                              for key in violation_keys)
-        all_violations['total_constraint_violations'] = total_violation
+        # violation_keys = ['bound_total_bound_violations', 'real_power_flow_violations', 'reactive_power_flow_violations', 'line_flow_violations']
+        # total_violation = sum(all_violations.get(key, torch.tensor(0.0, device=self.device))
+        #                       for key in violation_keys)
+        # all_violations['total_constraint_violations'] = total_violation
 
         return all_violations
 

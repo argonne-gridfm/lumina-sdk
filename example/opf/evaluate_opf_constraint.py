@@ -279,9 +279,9 @@ def main():
     dataset = OPFDataset(root='./opf_data', case_name=args.case_name)
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
 
-    print(f"\n{'=' * 60}")
+    print(f"\n{'=' * 80}")
     print("Running constraint evaluation")
-    print(f"{'=' * 60}")
+    print(f"{'=' * 80}")
     print(f"Device: {device}")
 
     with torch.no_grad():
@@ -309,7 +309,7 @@ def main():
                 predictions=predictions,
                 batch_data=batch,
                 normalize=True,
-                return_individual=True,
+                return_individual=False,
             )
             summary = evaluator.get_violation_summary(violations)
 
@@ -324,13 +324,13 @@ def main():
             batches_seen += 1
 
             if args.max_batches is not None and (batch_idx + 1) >= args.max_batches:
-                print(f"\nReached max_batches={args.max_batches}; stopping early.")
+                print(f"\nReached max_batches={args.max_batches}.")
                 break
 
     if batches_seen > 0:
-        print(f"\n{'=' * 60}")
+        print(f"\n{'=' * 80}")
         print(f"Constraint violation stats over {batches_seen} batch(es)")
-        print(f"{'=' * 60}")
+        print(f"{'=' * 80}")
         for key in sorted(accum_sum.keys()):
             weight = accum_weight.get(key, 0.0)
             if weight == 0:
@@ -338,7 +338,7 @@ def main():
             mean = accum_sum[key] / weight
             mean_sq = accum_sq[key] / weight
             var = mean_sq - mean * mean
-            print(f"{key}: mean={mean:.6f}, var={var:.6e}")
+            print(f"{key:35s}: mean={mean:.6f}, var={var:.6e}")
 
 
 if __name__ == '__main__':
