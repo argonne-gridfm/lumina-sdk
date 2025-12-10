@@ -297,6 +297,7 @@ def main():
                 batch.x_dict,
                 batch.edge_index_dict,
                 batch.edge_attr_dict if hasattr(batch, 'edge_attr_dict') else None,
+                minmax_scaling=True,
             )
 
             # Parse slack bus indices (default to [0] if not provided)
