@@ -42,7 +42,6 @@ def compute_power_flow_violation(VM, VA, P_inj, Q_inj, Y_real, Y_imag, normalize
         Q_inj=Q_inj,
         Y_real=Y_real,
         Y_imag=Y_imag,
-        normalize=normalize,
     )
     per_bus = p_per_bus**2 + q_per_bus**2
     if normalize:
