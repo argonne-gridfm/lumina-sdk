@@ -43,6 +43,7 @@ class ACOPFConstraintEvaluator(nn.Module):
         Y_imag: Optional[torch.Tensor] = None,
         edge_index: Optional[torch.Tensor] = None,
         base_mva: float = 100.0,
+        slack_bus_indices: Optional[List[int]] = None,
         device: Optional[torch.device] = None
     ):
         """
@@ -70,6 +71,7 @@ class ACOPFConstraintEvaluator(nn.Module):
         self.Y_real = Y_real
         self.Y_imag = Y_imag
         self.edge_index = edge_index
+        self.slack_bus_indices = slack_bus_indices or [0]
 
         # Move tensors to device if provided
         self._move_to_device()
@@ -666,6 +668,7 @@ def create_constraint_evaluator(
     Y_imag = case_data.get('Y_imag')
     edge_index = case_data.get('edge_index')
     base_mva = case_data.get('base_mva', 100.0)
+    slack_bus_indices = case_data.get('slack_bus_indices')
 
     return ACOPFConstraintEvaluator(
         voltage_limits=voltage_limits,
@@ -675,7 +678,8 @@ def create_constraint_evaluator(
         Y_imag=Y_imag,
         edge_index=edge_index,
         base_mva=base_mva,
-        device=device
+        device=device,
+        slack_bus_indices=slack_bus_indices,
     )
 
 

@@ -256,6 +256,8 @@ def main():
     parser.add_argument("--batch-size", type=int, default=1, help="Evaluation batch size.")
     parser.add_argument("--max-batches", type=int, default=None, help="Limit number of batches to evaluate (None = all).")
     parser.add_argument("--fail-on-missing", action="store_true", help="Raise an error if checkpoint is missing model keys.")
+    parser.add_argument("--slack-bus-indices", default="0",
+                        help="Comma-separated slack bus indices (default: 0).")
     args = parser.parse_args()
 
     token = args.hf_token or os.getenv("HF_TOKEN")
@@ -297,7 +299,11 @@ def main():
                 batch.edge_attr_dict if hasattr(batch, 'edge_attr_dict') else None,
             )
 
+            # Parse slack bus indices (default to [0] if not provided)
+            slack_bus_indices = [int(x) for x in args.slack_bus_indices.split(",") if x.strip() != ""]
+
             evaluator = build_constraint_evaluator(batch, device, cache_key=args.case_name)
+            evaluator.slack_bus_indices = slack_bus_indices
             violations = evaluator.evaluate_all_constraints(
                 predictions=predictions,
                 batch_data=batch,
