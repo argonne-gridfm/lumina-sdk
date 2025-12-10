@@ -9,21 +9,13 @@ from pandapower.pypower.idx_cost import (COST, MODEL, NCOST, POLYNOMIAL,
                                          PW_LINEAR, SHUTDOWN, STARTUP)
 
 
-def compute_power_flow_violation(VM, VA, P_inj, Q_inj, Y_real, Y_imag, normalize=False):
-    r"""Compute the power flow violation using real values. (bus loss)
+def compute_power_flow_violation_per_constraint(VM, VA, P_inj, Q_inj, Y_real, Y_imag, normalize=False):
+    r"""Return per-bus power flow violations (constraint-wise).
 
-    Args:
-        VM (torch.Tensor): Voltage magnitudes.
-        VA (torch.Tensor): Voltage angles in degrees.
-        P_inj (torch.Tensor): Active power injections.
-        Q_inj (torch.Tensor): Reactive power injections.
-        Y_real (np.ndarray): Real part of admittance matrix.
-        Y_imag (np.ndarray): Imaginary part of admittance matrix.
-
-    Returns:
-        torch.Tensor: Power flow violation.
+    Computes the active/reactive power balance at each bus and returns the
+    per-bus violation magnitude ``(P_balance**2 + Q_balance**2)``. Useful for
+    reporting or reducing violations per constraint instead of an aggregated scalar.
     """
-    # Convert angles from degrees to radians
     VA_rad = torch.deg2rad(VA)
 
     # Calculate the voltage components
@@ -34,19 +26,28 @@ def compute_power_flow_violation(VM, VA, P_inj, Q_inj, Y_real, Y_imag, normalize
     P_flow = torch.matmul(V_real, Y_real) - torch.matmul(V_imag, Y_imag)
     Q_flow = torch.matmul(V_real, Y_imag) + torch.matmul(V_imag, Y_real)
 
-    # Calculate the power balance
+    # Power balance per bus
     P_balance = P_inj - P_flow
     Q_balance = Q_inj - Q_flow
 
-    # Calculate the power flow violation
-    # due the batch loading of the data
-    if not normalize:
-        # TODO: with square format
-        power_flow_violation = torch.norm(P_balance, p=2)**2 + torch.norm(Q_balance, p=2)**2
-    else:
-        power_flow_violation = (torch.norm(P_balance, p=2)**2 + torch.norm(Q_balance, p=2)**2) / len(VM)
+    return torch.abs(P_balance), torch.abs(Q_balance)
 
-    return power_flow_violation
+
+def compute_power_flow_violation(VM, VA, P_inj, Q_inj, Y_real, Y_imag, normalize=False):
+    r"""Compute aggregated power flow violation using per-bus violations."""
+    p_per_bus, q_per_bus = compute_power_flow_violation_per_constraint(
+        VM=VM,
+        VA=VA,
+        P_inj=P_inj,
+        Q_inj=Q_inj,
+        Y_real=Y_real,
+        Y_imag=Y_imag,
+        normalize=normalize,
+    )
+    per_bus = p_per_bus**2 + q_per_bus**2
+    if normalize:
+        per_bus = per_bus / len(VM)
+    return per_bus.sum()
 
 
 def complex_csc_to_torch_sparse_csc(csc_mat):
@@ -243,7 +244,8 @@ def compute_line_limit_violation(VM, VA, Y_real, Y_imag, line_limits, edge_index
         Viol_to[k] = P_to**2 + Q_to**2 - VM[j]**2 * line_limits[k]**2
 
     # Calculate the line limit violation
-    line_limit_violation = torch.relu(Viol_from).sum() + torch.relu(Viol_to).sum()
+    # line_limit_violation = torch.relu(Viol_from).sum() + torch.relu(Viol_to).sum()
+    line_limit_violation = torch.max(torch.relu(Viol_from).max(), torch.relu(Viol_to).max())
 
     if normalize:
         return line_limit_violation / len(edge_index[0])

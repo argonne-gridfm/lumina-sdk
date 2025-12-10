@@ -18,6 +18,7 @@ import numpy as np
 from .constraints import (
     compute_power_flow_violation,
     compute_power_flow_violation_v2,
+    compute_power_flow_violation_per_constraint,
     compute_line_limit_violation,
     compute_generation_cost
 )
@@ -215,8 +216,8 @@ class ACOPFConstraintEvaluator(nn.Module):
                     vmax_cat = vmax.to(self.device)
 
                 # Voltage magnitude violations
-                vm_low_viol = torch.relu(vmin_cat - vm) ** 2
-                vm_high_viol = torch.relu(vm - vmax_cat) ** 2
+                vm_low_viol = torch.relu(vmin_cat - vm)
+                vm_high_viol = torch.relu(vm - vmax_cat)
                 vm_violations = vm_low_viol + vm_high_viol
 
                 violations['voltage_magnitude'] = vm_violations.mean()
@@ -255,8 +256,8 @@ class ACOPFConstraintEvaluator(nn.Module):
                     pmin_cat = pmin.to(self.device)
                     pmax_cat = pmax.to(self.device)
 
-                pg_low_viol = torch.relu(pmin_cat - pg) ** 2
-                pg_high_viol = torch.relu(pg - pmax_cat) ** 2
+                pg_low_viol = torch.relu(pmin_cat - pg)
+                pg_high_viol = torch.relu(pg - pmax_cat)
                 pg_violations = pg_low_viol + pg_high_viol
 
                 violations['active_power_generation'] = pg_violations.mean()
@@ -289,8 +290,8 @@ class ACOPFConstraintEvaluator(nn.Module):
                     qmin_cat = qmin.to(self.device)
                     qmax_cat = qmax.to(self.device)
 
-                qg_low_viol = torch.relu(qmin_cat - qg) ** 2
-                qg_high_viol = torch.relu(qg - qmax_cat) ** 2
+                qg_low_viol = torch.relu(qmin_cat - qg)
+                qg_high_viol = torch.relu(qg - qmax_cat)
                 qg_violations = qg_low_viol + qg_high_viol
 
                 violations['reactive_power_generation'] = qg_violations.mean()
@@ -350,7 +351,8 @@ class ACOPFConstraintEvaluator(nn.Module):
             n_gen = gen_pred.shape[0] // batch_size if gen_pred.shape[0] > 0 else 0
 
             # Process each sample in the batch
-            sample_violations = []
+            sample_p_violations = []
+            sample_q_violations = []
 
             for sample_idx in range(batch_size):
                 try:
@@ -421,30 +423,47 @@ class ACOPFConstraintEvaluator(nn.Module):
                         q_inj_sample = torch.zeros(n_bus, device=self.device)
 
                     # Compute power flow violation for this sample using single-case admittance
-                    sample_violation = compute_power_flow_violation(
+                    p_per_bus_violation, q_per_bus_violation = compute_power_flow_violation_per_constraint(
                         VM=vm_sample,
                         VA=va_sample,
                         P_inj=p_inj_sample,
                         Q_inj=q_inj_sample,
                         Y_real=self.Y_real,  # Single case admittance matrix
                         Y_imag=self.Y_imag,
-                        normalize=False  # We'll normalize after aggregating
                     )
+                    slack_indices = [i for i in (self.slack_bus_indices or []) if 0 <= i < n_bus]
+                    if slack_indices:
+                        p_per_bus_violation = p_per_bus_violation.clone()
+                        q_per_bus_violation = q_per_bus_violation.clone()
+                        p_per_bus_violation[slack_indices] = 0.0
+                        q_per_bus_violation[slack_indices] = 0.0
 
-                    sample_violations.append(sample_violation)
+                    sample_p_violation = p_per_bus_violation.max()
+                    sample_q_violation = q_per_bus_violation.max()
+
+                    sample_p_violations.append(sample_p_violation)
+                    sample_q_violations.append(sample_q_violation)
 
                 except Exception as e:
                     print(f"Warning: Error processing sample {sample_idx}: {e}")
-                    sample_violations.append(torch.tensor(0.0, device=self.device))
+                    sample_p_violations.append(torch.tensor(0.0, device=self.device))
+                    sample_q_violations.append(torch.tensor(0.0, device=self.device))
 
             # Aggregate violations across batch
-            if sample_violations:
-                total_violation = torch.stack(sample_violations).sum()
+            if sample_p_violations:
+                total_violation = torch.stack(sample_p_violations).sum()
                 if normalize:
-                    total_violation = total_violation / len(sample_violations)
-                violations['power_flow_violations'] = total_violation
+                    total_violation = total_violation / len(sample_p_violations)
+                violations['real_power_flow_violations'] = total_violation
             else:
-                violations['power_flow_violations'] = torch.tensor(0.0, device=self.device)
+                violations['real_power_flow_violations'] = torch.tensor(0.0, device=self.device)
+            if sample_q_violations:
+                total_violation = torch.stack(sample_q_violations).sum()
+                if normalize:
+                    total_violation = total_violation / len(sample_q_violations)
+                violations['reactive_power_flow_violations'] = total_violation
+            else:
+                violations['reactive_power_flow_violations'] = torch.tensor(0.0, device=self.device)
 
         except Exception as e:
             print(f"Warning: Could not compute power flow violations: {e}")
