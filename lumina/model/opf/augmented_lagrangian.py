@@ -677,19 +677,14 @@ class AugmentedLagrangianACOPF(nn.Module):
         Returns:
             Constraint vector c(x)
         """
-        # Extract predictions
+        # Extract predictions (bus order is [va, vm])
         bus_pred = predictions['bus']
         gen_pred = predictions['generator']
 
-        # Extract and normalize predictions for power flow calculations
-        vm = torch.sigmoid(bus_pred[..., 0])  # Voltage magnitude - normalize to [0,1], then scale to [0.9, 1.1]
-        vm = 0.9 + 0.2 * vm  # Scale to reasonable voltage range [0.9, 1.1] p.u.
-
-        va = torch.tanh(bus_pred[..., 1]) * 30.0  # Voltage angle - limit to [-30, 30] degrees
-
-        # Normalize power generation outputs
-        pg = torch.tanh(gen_pred[..., 0]) * 2.0  # Active power: [-2, 2] p.u.
-        qg = torch.tanh(gen_pred[..., 1]) * 1.0  # Reactive power: [-1, 1] p.u.
+        va = bus_pred[..., 0]
+        vm = bus_pred[..., 1]
+        pg = gen_pred[..., 0]
+        qg = gen_pred[..., 1]
 
         # Extract data
         pd = data.get('pd', None)
