@@ -329,7 +329,7 @@ def main():
 
     if batches_seen > 0:
         print(f"\n{'=' * 80}")
-        print(f"Constraint violation stats over {batches_seen} batch(es)")
+        print(f"Normalized constraint violation stats over {batches_seen} batch(es)")
         print(f"{'=' * 80}")
         for key in sorted(accum_sum.keys()):
             weight = accum_weight.get(key, 0.0)

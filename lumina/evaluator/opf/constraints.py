@@ -9,7 +9,7 @@ from pandapower.pypower.idx_cost import (COST, MODEL, NCOST, POLYNOMIAL,
                                          PW_LINEAR, SHUTDOWN, STARTUP)
 
 
-def compute_power_flow_violation_per_constraint(VM, VA, P_inj, Q_inj, Y_real, Y_imag, normalize=False):
+def compute_power_flow_violation_per_constraint(VM, VA, P_inj, Q_inj, Y_real, Y_imag):
     r"""Return per-bus power flow violations (constraint-wise).
 
     Computes the active/reactive power balance at each bus and returns the

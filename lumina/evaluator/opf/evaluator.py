@@ -72,6 +72,7 @@ class ACOPFConstraintEvaluator(nn.Module):
         self.Y_imag = Y_imag
         self.edge_index = edge_index
         self.slack_bus_indices = slack_bus_indices or [0]
+        self.total_real_power_demand = 0.0
 
         # Move tensors to device if provided
         self._move_to_device()
@@ -364,7 +365,7 @@ class ACOPFConstraintEvaluator(nn.Module):
                     sample_bus_pred = bus_pred[bus_start:bus_end]  # [n_bus, 2] -> [VA, VM]
 
                     vm_sample = sample_bus_pred[:, 1]  # Voltage magnitude
-                    va_sample = sample_bus_pred[:, 0] * 360 - 180 # Voltage angle (degrees)
+                    va_sample = sample_bus_pred[:, 0]  # Voltage angle (degrees)
 
                     # Extract per-sample generator predictions
                     if n_gen > 0:
@@ -466,6 +467,10 @@ class ACOPFConstraintEvaluator(nn.Module):
                         p_per_bus_violation[slack_indices] = 0.0
                         q_per_bus_violation[slack_indices] = 0.0
 
+                    if normalize:
+                        p_per_bus_violation = p_per_bus_violation / (self.total_real_power_demand + 1e-6)
+                        q_per_bus_violation = q_per_bus_violation / (self.total_real_power_demand + 1e-6)
+
                     sample_p_violation = p_per_bus_violation.max()
                     sample_q_violation = q_per_bus_violation.max()
 
@@ -558,6 +563,8 @@ class ACOPFConstraintEvaluator(nn.Module):
                         edge_index=self.edge_index,
                         normalize=False  # We'll normalize after aggregating
                     )
+                    if normalize:
+                        sample_violation = sample_violation / (self.total_real_power_demand + 1e-6)
 
                     sample_violations.append(sample_violation)
 
@@ -599,6 +606,18 @@ class ACOPFConstraintEvaluator(nn.Module):
         Returns:
             Dictionary containing all constraint violations
         """
+        self.total_real_power_demand = 0.0
+
+        if batch_data is not None and hasattr(batch_data, 'x_dict') and 'load' in batch_data.x_dict:
+            load_feat = batch_data.x_dict['load']
+            if ('load', 'load_link', 'bus') in batch_data.edge_index_dict:
+                load_bus_edges = batch_data[('load', 'load_link', 'bus')].edge_index
+                for k in range(load_bus_edges.shape[1]):
+                    lidx = int(load_bus_edges[0, k].item())
+                    self.total_real_power_demand += load_feat[lidx, 0].abs().sum()
+            else:
+                self.total_real_power_demand += load_feat[:, 0].abs().sum()
+
         all_violations = {}
 
         # Evaluate bound constraints
