@@ -180,12 +180,13 @@ class ACOPFConstraintEvaluator(nn.Module):
         violations = {}
 
         # Extract predictions (concatenated over the batch: [total_nodes, feat])
-        bus_pred = predictions['bus']  # [total_bus_nodes, 2] -> [VM, VA]
+        # Model outputs bus as [VA, VM], generator as [PG, QG]
+        bus_pred = predictions['bus']  # [total_bus_nodes, 2] -> [VA, VM]
         gen_pred = predictions['generator']  # [total_gen_nodes, 2] -> [PG, QG]
 
         # Voltage magnitude and angle violations
         if self.voltage_limits is not None:
-            vm = bus_pred[..., 0]  # Voltage magnitude (concatenated)
+            vm = bus_pred[..., 1]  # Voltage magnitude (concatenated)
 
             if 'vmin' in self.voltage_limits and 'vmax' in self.voltage_limits:
                 vmin = self.voltage_limits['vmin']
@@ -332,9 +333,9 @@ class ACOPFConstraintEvaluator(nn.Module):
             return violations
 
         try:
-            # Extract concatenated predictions
-            bus_pred = predictions['bus']  # [total_bus_nodes, feat]
-            gen_pred = predictions['generator']  # [total_gen_nodes, feat]
+            # Extract concatenated predictions (bus: [VA, VM], generator: [PG, QG])
+            bus_pred = predictions['bus']
+            gen_pred = predictions['generator']
 
             # Determine batch size and per-case dimensions
             n_bus = self.Y_real.shape[0]  # Number of buses per case
@@ -356,10 +357,10 @@ class ACOPFConstraintEvaluator(nn.Module):
                     # Extract per-sample predictions
                     bus_start = sample_idx * n_bus
                     bus_end = (sample_idx + 1) * n_bus
-                    sample_bus_pred = bus_pred[bus_start:bus_end]  # [n_bus, 2]
+                    sample_bus_pred = bus_pred[bus_start:bus_end]  # [n_bus, 2] -> [VA, VM]
 
-                    vm_sample = sample_bus_pred[:, 0]  # Voltage magnitude
-                    va_sample = sample_bus_pred[:, 1] * 180.0  # Convert to degrees
+                    vm_sample = sample_bus_pred[:, 1]  # Voltage magnitude
+                    va_sample = sample_bus_pred[:, 0] * 360 - 180 # Voltage angle (degrees)
 
                     # Extract per-sample generator predictions
                     if n_gen > 0:
@@ -475,8 +476,8 @@ class ACOPFConstraintEvaluator(nn.Module):
             return violations
 
         try:
-            # Extract concatenated predictions
-            bus_pred = predictions['bus']  # [total_bus_nodes, feat]
+            # Extract concatenated predictions (bus: [VA, VM])
+            bus_pred = predictions['bus']
 
             # Determine batch size and per-case dimensions
             n_bus = self.Y_real.shape[0]
@@ -495,10 +496,10 @@ class ACOPFConstraintEvaluator(nn.Module):
                     # Extract per-sample bus predictions
                     bus_start = sample_idx * n_bus
                     bus_end = (sample_idx + 1) * n_bus
-                    sample_bus_pred = bus_pred[bus_start:bus_end]  # [n_bus, 2]
+                    sample_bus_pred = bus_pred[bus_start:bus_end]  # [n_bus, 2] -> [VA, VM]
 
-                    vm_sample = sample_bus_pred[:, 0]  # Voltage magnitude
-                    va_sample = sample_bus_pred[:, 1] * 180.0  # Convert to degrees
+                    vm_sample = sample_bus_pred[:, 1]  # Voltage magnitude
+                    va_sample = sample_bus_pred[:, 0]  # Voltage angle (degrees)
 
                     # Compute line flow violation for this sample
                     sample_violation = compute_line_limit_violation(

@@ -146,8 +146,8 @@ def _derive_generation_limits(gen_x: torch.Tensor, device: torch.device):
     Heuristic mapping based on dataset feature layout:
     - pmin: column 2
     - pmax: column 3
-    - qmax: column 1
     - qmin: column 5
+    - qmax: column 6
     """
     if gen_x is None or gen_x.numel() == 0:
         return None
@@ -159,8 +159,8 @@ def _derive_generation_limits(gen_x: torch.Tensor, device: torch.device):
 
     pmin = col_or_default(2, 0.0)
     pmax = col_or_default(3, 2.0)
-    qmax = col_or_default(1, 1.0)
     qmin = col_or_default(5, -1.0)
+    qmax = col_or_default(6, 1.0)
 
     return {'pmin': pmin, 'pmax': pmax, 'qmin': qmin, 'qmax': qmax}
 
