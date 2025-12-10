@@ -422,6 +422,32 @@ class ACOPFConstraintEvaluator(nn.Module):
                         p_inj_sample = torch.zeros(n_bus, device=self.device)
                         q_inj_sample = torch.zeros(n_bus, device=self.device)
 
+                    # Subtract load demand if available: batch_data.x_dict['load'] stores [pd, qd]
+                    if batch_data is not None and hasattr(batch_data, 'x_dict') and 'load' in batch_data.x_dict:
+                        load_feat = batch_data.x_dict['load']
+                        if ('load', 'load_link', 'bus') in batch_data.edge_index_dict:
+                            load_bus_edges = batch_data[('load', 'load_link', 'bus')].edge_index
+                            # Filter edges for this sample (assuming contiguous batching)
+                            n_load = load_feat.shape[0] // batch_size if batch_size > 0 else 0
+                            for k in range(load_bus_edges.shape[1]):
+                                lidx = int(load_bus_edges[0, k].item())
+                                bidx = int(load_bus_edges[1, k].item())
+                                sample_lidx = lidx - sample_idx * n_load
+                                sample_bidx = bidx - sample_idx * n_bus
+                                if 0 <= sample_lidx < n_load and 0 <= sample_bidx < n_bus:
+                                    # print(f"sample_bidx {sample_bidx}: load_feat {load_feat[sample_lidx, :]}")  # DEBUG
+                                    p_inj_sample[sample_bidx] -= load_feat[sample_lidx, 0]
+                                    q_inj_sample[sample_bidx] -= load_feat[sample_lidx, 1]
+                        else:
+                            # Fallback: if load count matches buses per sample, align directly
+                            n_load = load_feat.shape[0] // batch_size if batch_size > 0 else 0
+                            if n_load == n_bus:
+                                load_start = sample_idx * n_load
+                                load_end = (sample_idx + 1) * n_load
+                                sample_load = load_feat[load_start:load_end]
+                                p_inj_sample -= sample_load[:, 0]
+                                q_inj_sample -= sample_load[:, 1]
+
                     # Compute power flow violation for this sample using single-case admittance
                     p_per_bus_violation, q_per_bus_violation = compute_power_flow_violation_per_constraint(
                         VM=vm_sample,
