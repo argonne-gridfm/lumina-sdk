@@ -99,7 +99,7 @@ def parse_case_name(case_input: str) -> str:
 
 
 class OPFLightningModule(pl.LightningModule):
-    def __init__(self, config, case_name, group_id, model_type, loss_type='mse'):
+    def __init__(self, config, case_name, group_id, model_type, loss_type='mse', minmax_scaling=True):
         super().__init__()
         self.save_hyperparameters()
         self.config = config
@@ -107,6 +107,7 @@ class OPFLightningModule(pl.LightningModule):
         self.group_id = group_id
         self.model_type = model_type
         self.loss_type = loss_type
+        self.minmax_scaling = minmax_scaling
 
         # Initialize dataset and model
         self._load_dataset()
@@ -294,7 +295,7 @@ class OPFLightningModule(pl.LightningModule):
         if self.model_type in ['HeteroGNN', 'RGAT', 'HEAT', 'HGT']:
             # Ensure inputs are float32
             x_dict = {k: v.float() for k, v in batch.x_dict.items()}
-            return self.model(x_dict, batch.edge_index_dict)
+            return self.model(x_dict, batch.edge_index_dict, minmax_scaling=self.minmax_scaling)
         else:
             if isinstance(batch, torch.Tensor) or hasattr(batch, 'node_type'):
                 homo_batch = batch
@@ -433,9 +434,14 @@ def main():
                         help='Use Augmented Lagrangian method (default: True)')
     parser.add_argument('--no_lagrangian', action='store_false', dest='use_lagrangian',
                         help='Disable Augmented Lagrangian method')
+    parser.add_argument('--minmax_scaling', dest='minmax_scaling', action='store_true',
+                        help='Apply min-max scaling to model outputs (default: enabled)')
+    parser.add_argument('--no_minmax_scaling', dest='minmax_scaling', action='store_false',
+                        help='Disable min-max scaling of model outputs')
+    parser.set_defaults(minmax_scaling=True)
 
     parser.add_argument('--accelerator', type=str, default='auto', help='Accelerator type (default: auto)')
-    parser.add_argument('--devices', type=int, default=4, help='Number of devices (default: 1)')
+    parser.add_argument('--devices', type=int, default=1, help='Number of devices (default: 1)')
     parser.add_argument('--num_nodes', type=int, default=1, help='Number of nodes (default: 1)')
     parser.add_argument('--precision', type=str, default='32-true', help='Precision (default: 32-true)')
     parser.add_argument('--strategy', type=str, default='ddp_find_unused_parameters_true',
@@ -498,6 +504,7 @@ def main():
         config['val_split'] = 0.1
 
     case_name = parse_case_name(args.case)
+    print(f"Using case: {case_name}")
 
     # Handle backward compatibility for --use_lagrangian flag
     loss_type = args.loss_type
@@ -511,7 +518,8 @@ def main():
         case_name=case_name,
         group_id=args.group_id,
         model_type=args.model_type,
-        loss_type=loss_type
+        loss_type=loss_type,
+        minmax_scaling=args.minmax_scaling
     )
 
     # Initialize Trainer

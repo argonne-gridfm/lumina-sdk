@@ -25,7 +25,7 @@ lagrangian:
   mu_increase_factor: 1.5
   max_mu: 10000.0
   normalize_constraints: true
-  lagrangian_update_frequency: 20
+  lagrangian_update_frequency: 200
   verbose: false
 trainer:
   accelerator: "auto"
