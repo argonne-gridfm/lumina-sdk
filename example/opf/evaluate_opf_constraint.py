@@ -7,6 +7,7 @@ import argparse
 import torch
 from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file
+from tqdm.auto import tqdm
 
 from lumina.model.opf.hetero_model import OPFHeteroGNN
 from lumina.dataset.opf.opf_dataset import OPFDataset
@@ -290,7 +291,17 @@ def main():
         accum_weight = {}
         batches_seen = 0
 
-        for batch_idx, batch in enumerate(loader):
+        total_batches = None
+        try:
+            total_batches = len(loader)
+        except TypeError:
+            total_batches = None
+        if total_batches is not None and args.max_batches is not None:
+            total_batches = min(total_batches, args.max_batches)
+
+        progress_iter = tqdm(loader, total=total_batches, desc="Evaluating samples")
+
+        for batch_idx, batch in enumerate(progress_iter):
             batch = to_float32(batch).to(device)
 
             predictions = model(
@@ -323,9 +334,13 @@ def main():
 
             batches_seen += 1
 
+            progress_iter.set_postfix(batches=batches_seen, refresh=False)
+
             if args.max_batches is not None and (batch_idx + 1) >= args.max_batches:
-                print(f"\nReached max_batches={args.max_batches}.")
+                progress_iter.write(f"Reached max_batches={args.max_batches}.")
                 break
+
+        progress_iter.close()
 
     if batches_seen > 0:
         print(f"\n{'=' * 80}")
