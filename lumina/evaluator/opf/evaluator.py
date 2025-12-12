@@ -359,6 +359,12 @@ class ACOPFConstraintEvaluator(nn.Module):
 
             for sample_idx in range(batch_size):
                 try:
+                    sample_total_real_power = self._compute_sample_real_power_demand(
+                        batch_data=batch_data,
+                        sample_idx=sample_idx,
+                        batch_size=batch_size,
+                    )
+
                     # Extract per-sample predictions
                     bus_start = sample_idx * n_bus
                     bus_end = (sample_idx + 1) * n_bus
@@ -468,8 +474,9 @@ class ACOPFConstraintEvaluator(nn.Module):
                         q_per_bus_violation[slack_indices] = 0.0
 
                     if normalize:
-                        p_per_bus_violation = p_per_bus_violation / (self.total_real_power_demand + 1e-6)
-                        q_per_bus_violation = q_per_bus_violation / (self.total_real_power_demand + 1e-6)
+                        denom = self._get_normalization_denominator(sample_total_real_power)
+                        p_per_bus_violation = p_per_bus_violation / denom
+                        q_per_bus_violation = q_per_bus_violation / denom
 
                     sample_p_violation = p_per_bus_violation.max()
                     sample_q_violation = q_per_bus_violation.max()
@@ -545,6 +552,12 @@ class ACOPFConstraintEvaluator(nn.Module):
 
             for sample_idx in range(batch_size):
                 try:
+                    sample_total_real_power = self._compute_sample_real_power_demand(
+                        batch_data=batch_data,
+                        sample_idx=sample_idx,
+                        batch_size=batch_size,
+                    )
+
                     # Extract per-sample bus predictions
                     bus_start = sample_idx * n_bus
                     bus_end = (sample_idx + 1) * n_bus
@@ -564,7 +577,8 @@ class ACOPFConstraintEvaluator(nn.Module):
                         normalize=False  # We'll normalize after aggregating
                     )
                     if normalize:
-                        sample_violation = sample_violation / (self.total_real_power_demand + 1e-6)
+                        denom = self._get_normalization_denominator(sample_total_real_power)
+                        sample_violation = sample_violation / denom
 
                     sample_violations.append(sample_violation)
 
@@ -587,6 +601,40 @@ class ACOPFConstraintEvaluator(nn.Module):
 
         return violations
 
+    def _compute_sample_real_power_demand(self, batch_data, sample_idx: int, batch_size: int):
+        """Compute total real power demand for a specific sample in the batch."""
+        if batch_data is None or not hasattr(batch_data, 'x_dict') or 'load' not in batch_data.x_dict:
+            return None
+
+        load_feat = batch_data.x_dict['load']
+        total_demand = torch.tensor(0.0, device=load_feat.device if torch.is_tensor(load_feat) else self.device)
+
+        if ('load', 'load_link', 'bus') in batch_data.edge_index_dict:
+            load_bus_edges = batch_data[('load', 'load_link', 'bus')].edge_index
+            n_load = load_feat.shape[0] // batch_size if batch_size > 0 else 0
+            for k in range(load_bus_edges.shape[1]):
+                lidx = int(load_bus_edges[0, k].item())
+                sample_lidx = lidx - sample_idx * n_load
+                if 0 <= sample_lidx < n_load:
+                    total_demand += load_feat[sample_lidx, 0].abs()
+            return total_demand
+
+        n_load = load_feat.shape[0] // batch_size if batch_size > 0 else 0
+        if n_load == 0:
+            return None
+
+        load_start = sample_idx * n_load
+        load_end = (sample_idx + 1) * n_load
+        return load_feat[load_start:load_end, 0].abs().sum()
+
+    def _get_normalization_denominator(self, sample_total_real_power):
+        denom = sample_total_real_power if sample_total_real_power is not None else self.total_real_power_demand
+        if denom is None:
+            return torch.tensor(1e-6, device=self.device)
+        if not torch.is_tensor(denom):
+            denom = torch.tensor(float(denom), device=self.device)
+        return denom + 1e-6
+
     def evaluate_all_constraints(
         self,
         predictions: Dict[str, torch.Tensor],
@@ -606,7 +654,7 @@ class ACOPFConstraintEvaluator(nn.Module):
         Returns:
             Dictionary containing all constraint violations
         """
-        self.total_real_power_demand = 0.0
+        self.total_real_power_demand = torch.tensor(0.0, device=self.device)
 
         if batch_data is not None and hasattr(batch_data, 'x_dict') and 'load' in batch_data.x_dict:
             load_feat = batch_data.x_dict['load']
