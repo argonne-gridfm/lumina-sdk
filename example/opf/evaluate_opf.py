@@ -29,7 +29,8 @@ class ACOPFEvaluationModule(L.LightningModule):
         predictions = self.model(
             batch.x_dict,
             batch.edge_index_dict,
-            batch.edge_attr_dict if hasattr(batch, 'edge_attr_dict') else None
+            batch.edge_attr_dict if hasattr(batch, 'edge_attr_dict') else None,
+            minmax_scaling=True,
         )
 
         # Compute losses
