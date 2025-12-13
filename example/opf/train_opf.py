@@ -289,7 +289,8 @@ class OPFLightningModule(pl.LightningModule):
                           shuffle=False, num_workers=loader_config['num_workers'])
 
     def configure_optimizers(self):
-        return optim.Adam(self.parameters(), **self.config['optimizer']['Adam'])
+        # return optim.Adam(self.parameters(), **self.config['optimizer']['Adam'])
+        return optim.AdamW(self.parameters(), **self.config['optimizer']['AdamW'])
 
     def forward(self, batch):
         if self.model_type in ['HeteroGNN', 'RGAT', 'HEAT', 'HGT']:
