@@ -553,6 +553,14 @@ def main():
     else:
         trainer_config['sync_batchnorm'] = False
 
+    # Initialize WandB logger
+    from lightning.pytorch.loggers import WandbLogger
+    wandb_logger = WandbLogger(
+        project='lumina-training',
+        name=f'{case_name}-{args.model_type}-{loss_type}',
+        log_model=False
+    )
+
     # Setup callbacks
     checkpoint_callback = ModelCheckpoint(
         monitor='val/feas/total_violation',
@@ -570,6 +578,7 @@ def main():
 
     trainer = pl.Trainer(
         **trainer_config,
+        logger=wandb_logger,
         callbacks=[checkpoint_callback, early_stop_callback]
     )
 
