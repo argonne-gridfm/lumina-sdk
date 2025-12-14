@@ -327,8 +327,19 @@ class AugmentedLagrangianACOPF(nn.Module):
         constraint_tolerance: float = 1e-4,
         max_outer_iterations: int = 20,
         max_inner_iterations: int = 50,
-        normalize_constraints: bool = True,
+        normalize_constraints: bool = False,
         verbose: bool = False,
+        warmup_epochs: int = 0,
+        ema_beta: float = 0.9,
+        penalty_check_interval: int = 5,
+        penalty_drop_ratio: float = 0.5,
+        penalty_increase_factor: Optional[float] = None,
+        min_penalty: Optional[float] = None,
+        max_penalty: Optional[float] = None,
+        multiplier_clip: float = 1000.0,
+        multiplier_improve_ratio: float = 0.0,
+        multiplier_check_interval: int = 1,
+        multiplier_min_improve: float = 0.0,
         **_
     ):
         """
@@ -344,6 +355,17 @@ class AugmentedLagrangianACOPF(nn.Module):
             max_inner_iterations(int): Maximum inner iterations(optimization steps)
             normalize_constraints(bool): Whether to normalize constraint violations
             verbose(bool): Unused flag kept for backward compatibility with older configs
+            warmup_epochs(int): Number of epochs to run penalty-only (λ = 0)
+            ema_beta(float): Exponential moving average factor for constraint violations
+            penalty_check_interval(int): Epoch interval for checking penalty increases
+            penalty_drop_ratio(float): Required reduction ratio to avoid penalty increase
+            penalty_increase_factor(Optional[float]): Factor to scale μ when increasing
+            min_penalty(Optional[float]): Lower bound for μ (defaults to mu_0)
+            max_penalty(Optional[float]): Upper bound for μ (defaults to max_mu)
+            multiplier_clip(float): Clamp range for λ updates
+            multiplier_improve_ratio(float): Require violation ≤ ratio * last_violation to update λ (<=0 disables check)
+            multiplier_check_interval(int): Minimum steps between multiplier updates
+            multiplier_min_improve(float): Absolute improvement required to update λ (0 disables)
             **_: Ignore extra keyword arguments for forward compatibility
         """
         super().__init__()
@@ -352,17 +374,30 @@ class AugmentedLagrangianACOPF(nn.Module):
         self.mu_0 = mu_0
         self.tolerance = tolerance
         self.mu_increase_factor = mu_increase_factor
+        self.penalty_increase_factor = penalty_increase_factor or mu_increase_factor
         self.max_mu = max_mu
         self.constraint_tolerance = constraint_tolerance
         self.max_outer_iterations = max_outer_iterations
         self.max_inner_iterations = max_inner_iterations
         self.normalize_constraints = normalize_constraints
         self.verbose = verbose
+        self.warmup_epochs = warmup_epochs
+        self.ema_beta = ema_beta
+        self.penalty_check_interval = max(1, penalty_check_interval)
+        self.penalty_drop_ratio = penalty_drop_ratio
+        self.multiplier_clip = multiplier_clip
+        self.multiplier_improve_ratio = multiplier_improve_ratio
+        self.multiplier_check_interval = max(1, multiplier_check_interval)
+        self.multiplier_min_improve = multiplier_min_improve
+        self.min_penalty = min_penalty if min_penalty is not None else mu_0
+        self.max_penalty = max_penalty if max_penalty is not None else max_mu
+        self.max_mu = self.max_penalty
 
         # Current algorithm state
-        self.mu_k = mu_0
+        self.mu_k = float(np.clip(mu_0, self.min_penalty, self.max_penalty))
         self.lambda_k = None  # Lagrange multipliers
         self.outer_iteration = 0
+        self.current_epoch = 0
 
         # Network parameters (to be set)
         self.Y_real = None
@@ -374,6 +409,21 @@ class AugmentedLagrangianACOPF(nn.Module):
         self.constraint_history = []
         self.lagrange_history = []
         self.penalty_history = []
+        self.constraint_ema: Optional[torch.Tensor] = None
+        self._latest_constraints: Optional[torch.Tensor] = None
+        self._latest_constraint_signal: Optional[torch.Tensor] = None
+        self._raw_violation: Optional[float] = None
+        self._ema_violation: Optional[float] = None
+        self._epochs_since_penalty_check = 0
+        self._last_penalty_check_violation: Optional[float] = None
+        self._last_multiplier_norm: Optional[float] = None
+        self._last_multiplier_violation: Optional[float] = None
+        self._multiplier_steps_since_update: int = 0
+        self._last_multiplier_updated: bool = False
+        # Last computed RMS values for P and Q balance and line limit(float or None)
+        self._last_p_balance_rms: Optional[float] = None
+        self._last_q_balance_rms: Optional[float] = None
+        self._last_line_limit_rms: Optional[float] = None
 
     def set_network_parameters(
         self,
@@ -410,12 +460,131 @@ class AugmentedLagrangianACOPF(nn.Module):
 
         # Initialize Lagrange multipliers to zero
         self.lambda_k = torch.zeros(total_constraints, device=device)
+        self.constraint_ema = torch.zeros_like(self.lambda_k)
+        self._latest_constraints = None
+        self._latest_constraint_signal = None
+        self._raw_violation = None
+        self._ema_violation = None
+        self._last_penalty_check_violation = None
+        self._epochs_since_penalty_check = 0
 
-        print("Initialized Augmented Lagrangian with:")
-        print(f"- Power flow constraints: {n_equality}")
-        print(f"- Line flow constraints: {n_inequality}")
-        print(f"- Total constraints: {total_constraints}")
-        print(f"- Initial penalty parameter μ: {self.mu_k}")
+        # print("Initialized Augmented Lagrangian with:")
+        # print(f"- Power flow constraints: {n_equality}")
+        # print(f"- Line flow constraints: {n_inequality}")
+        # print(f"- Total constraints: {total_constraints}")
+        # print(f"- Initial penalty parameter μ: {self.mu_k}")
+
+    def _should_use_multipliers(self) -> bool:
+        """Return True when multiplier updates are allowed (post-warmup)."""
+        return self.current_epoch >= self.warmup_epochs
+
+    def _init_constraint_buffers(self, constraints: torch.Tensor):
+        """Initialize buffers that depend on the constraint dimension."""
+        if constraints is None or constraints.numel() == 0:
+            return
+        if self.constraint_ema is None or self.constraint_ema.numel() != constraints.numel():
+            self.constraint_ema = torch.zeros_like(constraints.detach())
+        if self.lambda_k is None or self.lambda_k.numel() != constraints.numel():
+            self.lambda_k = torch.zeros(constraints.numel(), device=constraints.device)
+
+    def _compute_violation_norm(self, constraints: Optional[torch.Tensor]) -> float:
+        """Compute L2 norm of a constraint vector (safe for None or empty)."""
+        if constraints is None or constraints.numel() == 0:
+            return 0.0
+        return float(torch.norm(constraints, p=2).detach().item())
+
+    def _constraint_signal_for_loss(self, constraints: torch.Tensor) -> torch.Tensor:
+        """
+        Compute the smoothed constraint signal used for both penalty and multiplier terms.
+
+        EMA buffer is updated without gradients; the returned tensor preserves gradients
+        through the current constraints (scaled by 1 - beta).
+        """
+        if constraints.numel() == 0:
+            return constraints
+
+        self._init_constraint_buffers(constraints)
+
+        # EMA for the loss (keeps gradients for the current step)
+        ema_for_loss = self.ema_beta * self.constraint_ema + (1 - self.ema_beta) * constraints
+
+        # Update running EMA buffer without tracking gradients
+        with torch.no_grad():
+            self.constraint_ema = self.ema_beta * self.constraint_ema + (1 - self.ema_beta) * constraints.detach()
+
+        # Cache latest signals for logging/updating
+        self._latest_constraints = constraints.detach()
+        self._latest_constraint_signal = self.constraint_ema.detach()
+        self._raw_violation = self._compute_violation_norm(constraints)
+        self._ema_violation = self._compute_violation_norm(self.constraint_ema)
+
+        return ema_for_loss
+
+    def _maybe_update_penalty(self, current_violation: Optional[float], force: bool = False):
+        """Increase μ if violations are not shrinking enough based on EMA trend."""
+        if current_violation is None:
+            return
+        if torch.is_tensor(current_violation):
+            current_violation = float(current_violation.detach().item())
+
+        # Always ensure μ stays within bounds
+        self.mu_k = float(np.clip(self.mu_k, self.min_penalty, self.max_penalty))
+
+        # During warmup, just seed the baseline and skip updates
+        if self.current_epoch < self.warmup_epochs and not force:
+            self._last_penalty_check_violation = current_violation
+            return
+
+        if not force:
+            self._epochs_since_penalty_check += 1
+            if self._epochs_since_penalty_check < self.penalty_check_interval:
+                return
+            self._epochs_since_penalty_check = 0
+
+        if self._last_penalty_check_violation is None:
+            self._last_penalty_check_violation = current_violation
+            self.penalty_history.append(self.mu_k)
+            return
+
+        # If violation did not drop enough, bump μ
+        if current_violation > self.penalty_drop_ratio * self._last_penalty_check_violation:
+            old_mu = self.mu_k
+            self.mu_k = min(max(self.mu_k * self.penalty_increase_factor, self.min_penalty), self.max_penalty)
+            if self.mu_k > old_mu and self.verbose:
+                print(f"Increased penalty parameter from {old_mu:.3e} to μ = {self.mu_k:.3e}")
+
+        self._last_penalty_check_violation = current_violation
+        self.penalty_history.append(self.mu_k)
+
+    def _should_update_multipliers_now(self, violation: Optional[float]) -> bool:
+        """Decide whether to update λ based on violation improvement and interval."""
+        if violation is None:
+            return False
+
+        # Default: always update when gating disabled
+        gating_disabled = self.multiplier_improve_ratio <= 0.0 and self.multiplier_min_improve <= 0.0
+        if gating_disabled:
+            return True
+
+        # First observation, allow an update to establish baseline
+        if self._last_multiplier_violation is None:
+            return True
+
+        # Respect minimum interval between updates
+        if self._multiplier_steps_since_update < self.multiplier_check_interval - 1:
+            self._multiplier_steps_since_update += 1
+            return False
+
+        ratio_ok = (
+            self.multiplier_improve_ratio <= 0.0
+            or violation <= self.multiplier_improve_ratio * self._last_multiplier_violation
+        )
+        abs_ok = (
+            self.multiplier_min_improve <= 0.0
+            or violation <= self._last_multiplier_violation - self.multiplier_min_improve
+        )
+
+        return ratio_ok and abs_ok
 
     def compute_power_flow_constraints(
         self,
@@ -557,6 +726,20 @@ class AugmentedLagrangianACOPF(nn.Module):
         p_balance = p_inj - p_calc
         q_balance = q_inj - q_calc
 
+        # Compute RMS of P and Q balance across buses (averaged over batch if present)
+        try:
+            p_mean = p_balance.mean(dim=0) if p_balance.dim() > 1 else p_balance
+            q_mean = q_balance.mean(dim=0) if q_balance.dim() > 1 else q_balance
+            p_rms = torch.sqrt(torch.mean(p_mean**2) + 1e-12)
+            q_rms = torch.sqrt(torch.mean(q_mean**2) + 1e-12)
+            # store as plain Python floats for easy external inspection
+            self._last_p_balance_rms = float(p_rms.detach().item())
+            self._last_q_balance_rms = float(q_rms.detach().item())
+        except Exception:
+            # In case of unexpected shapes or device issues, leave as None
+            self._last_p_balance_rms = None
+            self._last_q_balance_rms = None
+
         # Combine P and Q constraints: [P_1, P_2, ..., P_n, Q_1, Q_2, ..., Q_n]
         constraints = torch.cat([p_balance, q_balance], dim=-1)  # Shape: [batch_size, 2*n_bus]
 
@@ -648,9 +831,9 @@ class AugmentedLagrangianACOPF(nn.Module):
                 # Convert to equality with slack: |S|² - S_max² + slack² = 0
                 # For now, we'll use the constraint violation directly
                 line_limit_val = float(self.line_limits[k])
-                violation = s_magnitude_squared - line_limit_val**2
+                violation_squared = s_magnitude_squared - line_limit_val**2
                 # Only consider positive violations; scale to keep magnitudes stable
-                line_violations.append(torch.relu(violation))
+                line_violations.append(torch.sqrt(torch.relu(violation_squared)))
 
             line_constraint = torch.stack(line_violations).mean()
             line_constraints.append(line_constraint)
@@ -659,6 +842,8 @@ class AugmentedLagrangianACOPF(nn.Module):
             constraints = torch.stack(line_constraints)
         else:
             constraints = torch.tensor([], device=device, requires_grad=True)
+
+        self._last_line_limit_rms = float(torch.sqrt(torch.mean(constraints**2)).detach().item()) if constraints.numel() > 0 else 0.0
 
         return constraints
 
@@ -733,38 +918,82 @@ class AugmentedLagrangianACOPF(nn.Module):
         """
         if constraints.numel() == 0:
             # No constraints - return pure objective
+            zero = torch.tensor(0.0, device=mse_loss.device)
+            self._raw_violation = 0.0
+            self._ema_violation = 0.0
+            self._latest_constraints = None
+            self._latest_constraint_signal = None
             return mse_loss, {
                 'objective': mse_loss,
-                'lagrange_term': torch.tensor(0.0, device=mse_loss.device),
-                'penalty_term': torch.tensor(0.0, device=mse_loss.device)
+                'lagrange_term': zero,
+                'penalty_term': zero,
+                'constraint_violation': zero,
+                'raw_constraint_violation': zero,
+                'ema_constraint_violation': zero,
+                'multipliers_active': False
             }
 
+        # Smooth constraints for stability
+        constraint_signal = self._constraint_signal_for_loss(constraints)
+        self._init_constraint_buffers(constraint_signal)
+
         # Ensure λ and constraints have compatible dimensions
-        if self.lambda_k.size(0) != constraints.size(-1):
-            warnings.warn(f"Lagrange multiplier dimension mismatch. "
-                          f"Expected {constraints.size(-1)}, got {self.lambda_k.size(0)}. "
-                          f"Reinitializing λ.")
-            self.lambda_k = torch.zeros(constraints.size(-1), device=constraints.device)
+        if self.lambda_k.size(0) != constraint_signal.size(-1):
+            warnings.warn(
+                f"Lagrange multiplier dimension mismatch. Expected {constraint_signal.size(-1)}, "
+                f"got {self.lambda_k.size(0)}. Reinitializing λ."
+            )
+            self.lambda_k = torch.zeros(constraint_signal.size(-1), device=constraint_signal.device)
 
         # Lagrange term: -Σ λ_i c_i(x)
-        lagrange_term = -torch.dot(self.lambda_k, constraints)
+        lagrange_term = torch.tensor(0.0, device=mse_loss.device)
+        if self._should_use_multipliers():
+            lagrange_term = -torch.dot(self.lambda_k, constraint_signal)
 
         # Penalty term: (μ/2) Σ c_i(x)^2
-        penalty_term = (self.mu_k / 2.0) * torch.sum(constraints**2)
+        penalty_term = (self.mu_k / 2.0) * torch.sum(constraint_signal**2)
 
         # Augmented Lagrangian
-        augmented_lagrangian = mse_loss + lagrange_term + penalty_term
+        augmented_lagrangian = mse_loss + penalty_term + (lagrange_term if self._should_use_multipliers() else 0.0)
+
+        # Track violations (EMA-driven)
+        violation_value = self._ema_violation if self._ema_violation is not None else self._raw_violation
+        if violation_value is None:
+            violation_value = self._compute_violation_norm(constraints)
+        self.constraint_history.append(violation_value)
+        constraint_violation = torch.tensor(violation_value, device=mse_loss.device)
+        raw_violation = torch.tensor(self._raw_violation if self._raw_violation is not None else violation_value,
+                                     device=mse_loss.device)
+        ema_violation = torch.tensor(self._ema_violation if self._ema_violation is not None else violation_value,
+                                     device=mse_loss.device)
+        last_multiplier_violation = torch.tensor(
+            self._last_multiplier_violation if self._last_multiplier_violation is not None else violation_value,
+            device=mse_loss.device
+        )
+        last_multiplier_norm = torch.tensor(
+            self._last_multiplier_norm if self._last_multiplier_norm is not None else 0.0,
+            device=mse_loss.device
+        )
 
         components = {
             'objective': mse_loss,
             'lagrange_term': lagrange_term,
             'penalty_term': penalty_term,
-            'constraint_violation': torch.norm(constraints, p=2)
+            'constraint_violation': constraint_violation,
+            'raw_constraint_violation': raw_violation,
+            'ema_constraint_violation': ema_violation,
+            'p_balance_rmse': self._last_p_balance_rms,
+            'q_balance_rmse': self._last_q_balance_rms,
+            'line_limit_rmse': self._last_line_limit_rms,
+            'multipliers_active': self._should_use_multipliers(),
+            'multiplier_updated': self._last_multiplier_updated,
+            'last_multiplier_norm': last_multiplier_norm,
+            'last_multiplier_violation': last_multiplier_violation
         }
 
         return augmented_lagrangian, components
 
-    def update_lagrange_multipliers(self, constraints: torch.Tensor):
+    def update_lagrange_multipliers(self, constraints: Optional[torch.Tensor] = None):
         """
         Update Lagrange multipliers using equation (17.39):
         λ^{k+1} = λ^k - μ_k c_i(x_k)
@@ -772,24 +1001,46 @@ class AugmentedLagrangianACOPF(nn.Module):
         Args:
             constraints: Current constraint vector c(x_k)
         """
-        if constraints.numel() == 0:
+        if not self._should_use_multipliers():
+            self._last_multiplier_updated = False
             return
 
-        # Ensure dimensions match
-        if self.lambda_k.size(0) != constraints.size(-1):
-            self.lambda_k = torch.zeros(constraints.size(-1), device=constraints.device)
+        # Default to the latest EMA signal if explicit constraints are not provided
+        if constraints is None or constraints.numel() == 0:
+            constraint_signal = self.constraint_ema
+        else:
+            self._init_constraint_buffers(constraints)
+            constraint_signal = self.constraint_ema
+
+        if constraint_signal is None or constraint_signal.numel() == 0:
+            self._last_multiplier_updated = False
+            return
+
+        violation_val = self._ema_violation if self._ema_violation is not None else self._compute_violation_norm(constraint_signal)
+        should_update = self._should_update_multipliers_now(violation_val)
+        if not should_update:
+            self._last_multiplier_updated = False
+            return
+
+        self._multiplier_steps_since_update = 0
 
         # Update multipliers with clipping to prevent explosive growth
-        update = self.mu_k * constraints.detach()
+        update = self.mu_k * constraint_signal.detach()
         self.lambda_k = self.lambda_k - update
 
         # Clip multipliers to reasonable range to prevent divergence
-        self.lambda_k = torch.clamp(self.lambda_k, -1000.0, 1000.0)
+        if self.multiplier_clip is not None:
+            self.lambda_k = torch.clamp(self.lambda_k, -self.multiplier_clip, self.multiplier_clip)
+        # print(f"Updated multiplers: {torch.norm(self.lambda_k).item()}, violation: {violation_val}")
+
+        self._last_multiplier_norm = torch.norm(self.lambda_k).item()
+        self._last_multiplier_violation = violation_val
+        self._last_multiplier_updated = True
 
         # Store history
         self.lagrange_history.append(self.lambda_k.clone().cpu().numpy())
 
-    def update_penalty_parameter(self, constraint_violation: float, prev_violation: float):
+    def update_penalty_parameter(self, constraint_violation: float, prev_violation: float = None):
         """
         Update penalty parameter μ if constraint violation is not decreasing sufficiently.
 
@@ -797,23 +1048,11 @@ class AugmentedLagrangianACOPF(nn.Module):
             constraint_violation: Current constraint violation norm
             prev_violation: Previous constraint violation norm
         """
-        # Only update every few epochs to allow convergence
-        # NOTE: disable the periodic update to make the penalty parameter update more conservative
-        # if len(self.penalty_history) % 5 != 0:
-        #     self.penalty_history.append(self.mu_k)
-        #     return
-
-        # Check if constraint violation improved sufficiently
-        improvement_ratio = (prev_violation - constraint_violation) / max(prev_violation, 1e-8)
-
-        # More conservative update: only increase if constraints are getting worse or no improvement
-        if improvement_ratio < 0.1 and constraint_violation > self.constraint_tolerance:  # Less than 10% improvement
-            old_mu = self.mu_k
-            self.mu_k = min(self.mu_k * self.mu_increase_factor, self.max_mu)
-            if self.mu_k > old_mu:
-                print(f"Increased penalty parameter from {old_mu:.2e} to μ = {self.mu_k:.2e}")
-
-        self.penalty_history.append(self.mu_k)
+        # Allow manual/legacy updates by forcing an immediate penalty check
+        self._epochs_since_penalty_check = 0
+        if prev_violation is not None:
+            self._last_penalty_check_violation = prev_violation
+        self._maybe_update_penalty(constraint_violation, force=True)
 
     def check_convergence(self, constraint_violation: float) -> bool:
         """
@@ -852,17 +1091,13 @@ class AugmentedLagrangianACOPF(nn.Module):
         # Compute augmented Lagrangian
         aug_lag_loss, components = self.compute_augmented_lagrangian(mse_loss, constraints)
 
-        # Track constraint violation
-        constraint_violation = components['constraint_violation'].item()
-        self.constraint_history.append(constraint_violation)
-
         # Return loss and information
         info = {
-            'constraint_violation': constraint_violation,
+            **components,
             'penalty_parameter': self.mu_k,
             'n_constraints': constraints.numel(),
             'constraints': constraints.detach(),
-            **components
+            'multipliers_active': self._should_use_multipliers(),
         }
 
         return aug_lag_loss, info
@@ -874,11 +1109,8 @@ class AugmentedLagrangianACOPF(nn.Module):
         Args:
             constraint_violation: Current constraint violation norm
         """
-        # Get previous constraint violation for comparison
-        prev_violation = self.constraint_history[-2] if len(self.constraint_history) > 1 else float('inf')
-
         # Update penalty parameter if needed
-        self.update_penalty_parameter(constraint_violation, prev_violation)
+        self.update_penalty_parameter(constraint_violation, prev_violation=None)
 
         # Update Lagrange multipliers (will be done after constraint computation)
         self.outer_iteration += 1
@@ -886,11 +1118,28 @@ class AugmentedLagrangianACOPF(nn.Module):
         print(f"Outer iteration {self.outer_iteration}: "
               f"constraint_violation={constraint_violation:.2e}, μ={self.mu_k:.2e}")
 
+    def step_epoch(self):
+        """Advance epoch counter and run scheduled penalty updates."""
+        current_violation = self._ema_violation if self._ema_violation is not None else self._raw_violation
+        self._maybe_update_penalty(current_violation)
+        self.current_epoch += 1
+
     def reset_for_new_problem(self):
         """Reset algorithm state for a new optimization problem."""
-        self.mu_k = self.mu_0
+        self.mu_k = float(np.clip(self.mu_0, self.min_penalty, self.max_penalty))
         self.lambda_k = None
         self.outer_iteration = 0
         self.constraint_history = []
         self.lagrange_history = []
         self.penalty_history = []
+        self.constraint_ema = None
+        self._latest_constraints = None
+        self._latest_constraint_signal = None
+        self._raw_violation = None
+        self._ema_violation = None
+        self.current_epoch = 0
+        self._epochs_since_penalty_check = 0
+        self._last_penalty_check_violation = None
+        self._last_multiplier_violation = None
+        self._multiplier_steps_since_update = 0
+        self._last_multiplier_updated = False

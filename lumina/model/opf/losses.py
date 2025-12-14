@@ -383,16 +383,14 @@ class OPFLossManager(nn.Module):
         self.loss_type = loss_type
         self.device = device or torch.device('cpu')
         lag_config = lagrangian_config or {}
-        # Controls how often we update λ and μ during training steps
-        self.lagrangian_update_frequency = max(1, int(lag_config.get('lagrangian_update_frequency', 1)))
-        self._lagrangian_step = 0
+        self._last_lagrangian_loss = None
+        self._iters_since_lagrangian_update = 0
 
         # Initialize the appropriate loss function
         if loss_type == 'augmented_lagrangian':
             from .augmented_lagrangian import AugmentedLagrangianACOPF
 
             lagrangian_kwargs = dict(lag_config)
-            lagrangian_kwargs.pop('lagrangian_update_frequency', None)
             self.lagrangian = AugmentedLagrangianACOPF(**lagrangian_kwargs)
             self.base_loss = ACOPFLossFunction(loss_type='mse', **kwargs)
 
@@ -404,7 +402,6 @@ class OPFLossManager(nn.Module):
                     f"grid_data must be provided for loss_type='{loss_type}'"
                 )
             lagrangian_kwargs = dict(lag_config)
-            lagrangian_kwargs.pop('lagrangian_update_frequency', None)
             self.lagrangian = ViolatedLagrangianACOPF(
                 grid_data=grid_data,
                 device=self.device,
@@ -500,76 +497,39 @@ class OPFLossManager(nn.Module):
         constraint_violation: Optional[float] = None,
         constraints: Optional[torch.Tensor] = None,
         update_penalty: bool = True,
+        is_training: bool = True,
+        force: bool = False,
     ):
         """
         Update Lagrangian multipliers or penalty parameters.
 
         Args:
-            model: Neural network model
-            dataloader: Training dataloader
+            model: Neural network model (used for violated Lagrangian updates)
+            dataloader: Training dataloader (used for violated Lagrangian updates)
             constraint_violation: Current constraint violation (for augmented Lagrangian)
             constraints: Constraint vector (for updating multipliers in augmented Lagrangian)
             update_penalty: Whether to update the penalty parameter μ
+            is_training: Whether updates should run (skip during eval)
+            force: Bypass loss-based trigger and update immediately
         """
-        if self.lagrangian is None:
+        if self.lagrangian is None or not is_training:
             return
 
         if self.loss_type == 'augmented_lagrangian':
-            # Update multipliers using latest constraints (if provided)
-            if constraints is not None:
-                self.lagrangian.update_lagrange_multipliers(constraints)
+            # After warmup, always update multipliers using the EMA constraints.
+            constraint_tensor = constraints if constraints is not None else None
+            self.lagrangian.update_lagrange_multipliers(constraint_tensor)
 
-            # Optionally update penalty parameter using constraint violation history
-            if update_penalty and constraint_violation is not None:
-                prev_violation = (
-                    self.lagrangian.constraint_history[-2]
-                    if len(self.lagrangian.constraint_history) > 1
-                    else float('inf')
-                )
-                self.lagrangian.update_penalty_parameter(
-                    constraint_violation, prev_violation
-                )
+            # Penalty updates are handled on epoch boundaries via step_epoch; allow
+            # a manual/forced update if explicitly requested.
+            if force and update_penalty and constraint_violation is not None:
+                self.lagrangian.update_penalty_parameter(constraint_violation)
 
         elif self.loss_type == 'violated_lagrangian':
             # Update multipliers based on training data
             if model is None or dataloader is None:
                 return
             self.lagrangian.update_multipliers(model, dataloader)
-
-    def maybe_update_lagrangian(
-        self,
-        info: Optional[Dict] = None,
-        is_training: bool = True,
-        model=None,
-        dataloader=None,
-    ):
-        """
-        Conditionally update λ and μ based on a configured iteration frequency.
-
-        Args:
-            info: Loss info dict returned from compute_loss (may contain constraints and violation)
-            is_training: Whether we are in a training step (skip for val/test)
-            model: Model handle (needed for violated_lagrangian updates)
-            dataloader: Dataloader handle (needed for violated_lagrangian updates)
-        """
-        if not is_training or self.lagrangian is None:
-            return
-
-        self._lagrangian_step += 1
-        if (self._lagrangian_step % self.lagrangian_update_frequency) != 0:
-            return
-
-        if self.loss_type == 'augmented_lagrangian':
-            constraint_violation = info.get('constraint_violation') if info else None
-            constraints = info.get('constraints') if info else None
-            self.update_lagrangian(
-                model=None,
-                dataloader=None,
-                constraint_violation=constraint_violation,
-                constraints=constraints,
-            )
-        elif self.loss_type == 'violated_lagrangian' and model is not None and dataloader is not None:
-            self.update_lagrangian(model=model, dataloader=dataloader)
 
     def step_epoch(self):
         """Call at the end of each epoch for Lagrangian methods."""
@@ -756,11 +716,14 @@ class OPFLossManager(nn.Module):
         }
 
         if self.lagrangian is not None:
-            info['lagrangian_update_frequency'] = self.lagrangian_update_frequency
             if hasattr(self.lagrangian, 'mu_k'):
                 info['penalty_parameter'] = self.lagrangian.mu_k
             if hasattr(self.lagrangian, 'current_epoch'):
                 info['lagrangian_epoch'] = self.lagrangian.current_epoch
+            if hasattr(self.lagrangian, 'warmup_epochs'):
+                info['lagrangian_warmup_epochs'] = self.lagrangian.warmup_epochs
+            if hasattr(self.lagrangian, 'ema_beta'):
+                info['lagrangian_ema_beta'] = self.lagrangian.ema_beta
 
         if hasattr(self.base_loss, 'get_loss_info'):
             info.update(self.base_loss.get_loss_info())

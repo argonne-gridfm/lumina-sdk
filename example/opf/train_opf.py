@@ -330,58 +330,63 @@ class OPFLightningModule(pl.LightningModule):
         # Use loss manager to compute loss
         loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
 
-        # Update Lagrange multipliers/penalty on a configurable schedule
-        self.loss_manager.maybe_update_lagrangian(
-            info=loss_info,
+        # Update Lagrange multipliers/penalty when triggers are met
+        self.loss_manager.update_lagrangian(
+            constraint_violation=loss_info.get('constraint_violation'),
+            constraints=loss_info.get('constraints'),
             is_training=self.training
         )
 
         # Log metrics
-        self.log('train_loss', loss, prog_bar=True, batch_size=batch_size)
+        self.log('loss/total_step', loss, on_step=True, on_epoch=False, prog_bar=True, sync_dist=True, batch_size=batch_size)
+        self.log('loss/total_epoch', loss, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
 
-        if 'mse_loss' in loss_info:
-            self.log('train_mse_loss', loss_info['mse_loss'], prog_bar=True, batch_size=batch_size)
+        if 'objective' in loss_info:
+            self.log('loss/task_step', loss_info['objective'], 
+                     on_step=True, on_epoch=False, prog_bar=True, sync_dist=True, batch_size=batch_size)
+            self.log('loss/task_epoch', loss_info['objective'], 
+                     on_step=False, on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
 
         if self.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
-            if 'constraint_violation' in loss_info:
-                self.log('train_constraint_violation', loss_info['constraint_violation'],
-                         prog_bar=True, batch_size=batch_size)
+            if 'raw_constraint_violation' in loss_info:
+                self.log('feas/total_violation_step', loss_info['raw_constraint_violation'], 
+                         on_step=True, on_epoch=False, prog_bar=True, sync_dist=True, batch_size=batch_size)
+            if 'ema_constraint_violation' in loss_info:
+                self.log('feas/total_violation_ema', loss_info['ema_constraint_violation'],
+                         on_step=True, on_epoch=False, prog_bar=True, sync_dist=True, batch_size=batch_size)
+            if 'ema_constraint_violation' in loss_info:
+                self.log('feas/total_violation_ema_epoch', loss_info['ema_constraint_violation'],
+                         on_step=False, on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
             if 'penalty_parameter' in loss_info:
-                self.log('penalty_mu', loss_info['penalty_parameter'], batch_size=batch_size)
-
-            self.training_step_outputs.append({
-                'loss': loss,
-                'constraint_violation': loss_info.get('constraint_violation', 0.0)
-            })
-        else:
-            self.training_step_outputs.append({'loss': loss})
+                self.log('al/mu', loss_info['penalty_parameter'], 
+                         on_step=False, on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
+            if 'last_multiplier_norm' in loss_info:
+                self.log('al/lagrangian_norm', loss_info['last_multiplier_norm'], on_step=True, 
+                         on_epoch=False, prog_bar=True, sync_dist=True, batch_size=batch_size)
+            if 'lagrange_term' in loss_info:
+                self.log('loss/lagrangian_epoch', loss_info['lagrange_term'], on_step=False, on_epoch=True, 
+                         prog_bar=False, sync_dist=True, batch_size=batch_size)
+            if 'penalty_term' in loss_info:
+                self.log('loss/penalty_epoch', loss_info['penalty_term'], on_step=False, 
+                         on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
+            if 'p_balance_rmse' in loss_info:
+                self.log('feas/p_balance_rmse_pu', loss_info['p_balance_rmse'], on_step=False, 
+                         on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
+            if 'q_balance_rmse' in loss_info:
+                self.log('feas/q_balance_rmse_pu', loss_info['q_balance_rmse'], on_step=False, 
+                         on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
+            if 'line_limit_rmse' in loss_info:
+                self.log('feas/line_limit_rmse_pu', loss_info['line_limit_rmse'], on_step=False, 
+                         on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
 
         return loss
 
     def on_train_epoch_end(self):
-        if self.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
-            if self.training_step_outputs:
-                if self.loss_type == 'augmented_lagrangian':
-                    # Update penalty parameter for augmented Lagrangian
-                    avg_violation = torch.stack(
-                        [torch.tensor(x['constraint_violation']) for x in self.training_step_outputs]
-                    ).mean().item()
-                    self.loss_manager.update_lagrangian(
-                        self.model,
-                        self.trainer.train_dataloader,
-                        constraint_violation=avg_violation
-                    )
-                elif self.loss_type == 'violated_lagrangian':
-                    # Update multipliers for violated Lagrangian
-                    self.loss_manager.update_lagrangian(
-                        self.model,
-                        self.trainer.train_dataloader
-                    )
 
         # Step epoch counter for Lagrangian methods
         self.loss_manager.step_epoch()
 
-        self.training_step_outputs.clear()
+        # self.training_step_outputs.clear()
 
     def validation_step(self, batch, batch_idx):
         batch_size = getattr(batch, 'num_graphs', 1)
@@ -394,15 +399,24 @@ class OPFLightningModule(pl.LightningModule):
         loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
 
         # Log validation metrics
-        self.log('val_loss', loss, prog_bar=True, batch_size=batch_size)
+        self.log('val/loss/total', loss, prog_bar=True, batch_size=batch_size)
 
         if 'mse_loss' in loss_info:
-            self.log('val_mse_loss', loss_info['mse_loss'], prog_bar=True, batch_size=batch_size)
+            self.log('val/loss/task', loss_info['objective'], prog_bar=True, batch_size=batch_size)
 
         if self.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
-            if 'constraint_violation' in loss_info:
-                self.log('val_constraint_violation', loss_info['constraint_violation'],
+            if 'raw_constraint_violation' in loss_info:
+                self.log('val/feas/total_violation', loss_info['raw_constraint_violation'],
                          prog_bar=True, batch_size=batch_size)
+            if 'p_balance_rmse' in loss_info:
+                self.log('val/feas/p_balance_rmse_pu', loss_info['p_balance_rmse'], on_step=False, 
+                         on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
+            if 'q_balance_rmse' in loss_info:
+                self.log('val/feas/q_balance_rmse_pu', loss_info['q_balance_rmse'], on_step=False, 
+                         on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
+            if 'line_limit_rmse' in loss_info:
+                self.log('val/feas/line_limit_rmse_pu', loss_info['line_limit_rmse'], on_step=False, 
+                         on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
 
         return loss
 
@@ -541,14 +555,14 @@ def main():
 
     # Setup callbacks
     checkpoint_callback = ModelCheckpoint(
-        monitor='val_loss',
-        filename=f'best-{case_name}-{{epoch:02d}}-{{val_loss:.4f}}',
+        monitor='val/feas/total_violation',
+        filename=f'best-{case_name}-{{epoch:02d}}-{{val/feas/total_violation:.4f}}',
         save_top_k=1,
         mode='min',
     )
 
     early_stop_callback = EarlyStopping(
-        monitor='val_loss',
+        monitor='val/feas/total_violation',
         patience=10,
         verbose=True,
         mode='min'
