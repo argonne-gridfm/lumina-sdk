@@ -289,7 +289,6 @@ class OPFLightningModule(pl.LightningModule):
                           shuffle=False, num_workers=loader_config['num_workers'])
 
     def configure_optimizers(self):
-        # return optim.Adam(self.parameters(), **self.config['optimizer']['Adam'])
         return optim.AdamW(self.parameters(), **self.config['optimizer']['AdamW'])
 
     def forward(self, batch):
@@ -353,10 +352,7 @@ class OPFLightningModule(pl.LightningModule):
                          on_step=True, on_epoch=False, prog_bar=True, sync_dist=True, batch_size=batch_size)
             if 'ema_constraint_violation' in loss_info:
                 self.log('feas/total_violation_ema', loss_info['ema_constraint_violation'],
-                         on_step=True, on_epoch=False, prog_bar=True, sync_dist=True, batch_size=batch_size)
-            if 'ema_constraint_violation' in loss_info:
-                self.log('feas/total_violation_ema_epoch', loss_info['ema_constraint_violation'],
-                         on_step=False, on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
+                         on_step=True, on_epoch=True, prog_bar=True, sync_dist=True, batch_size=batch_size)
             if 'penalty_parameter' in loss_info:
                 self.log('al/mu', loss_info['penalty_parameter'], 
                          on_step=False, on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
@@ -386,8 +382,6 @@ class OPFLightningModule(pl.LightningModule):
         # Step epoch counter for Lagrangian methods
         self.loss_manager.step_epoch()
 
-        # self.training_step_outputs.clear()
-
     def validation_step(self, batch, batch_idx):
         batch_size = getattr(batch, 'num_graphs', 1)
         if self.model_type in ['HeteroGNN', 'RGAT', 'HEAT', 'HGT']:
@@ -401,7 +395,7 @@ class OPFLightningModule(pl.LightningModule):
         # Log validation metrics
         self.log('val/loss/total', loss, prog_bar=True, batch_size=batch_size)
 
-        if 'mse_loss' in loss_info:
+        if 'objective' in loss_info:
             self.log('val/loss/task', loss_info['objective'], prog_bar=True, batch_size=batch_size)
 
         if self.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
@@ -562,16 +556,24 @@ def main():
     )
 
     # Setup callbacks
+    if args.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
+        # For Lagrangian methods, monitor constraint violation
+        monitoring_metric = 'val/feas/total_violation'
+        checkpoint_filename = f'best-{case_name}-{{epoch:02d}}-{{val/feas/total_violation:.4f}}'
+    else:
+        monitoring_metric = 'val/loss/total'
+        checkpoint_filename = f'best-{case_name}-{{epoch:02d}}-{{val/loss/total:.4f}}'
+
     checkpoint_callback = ModelCheckpoint(
-        monitor='val/feas/total_violation',
-        filename=f'best-{case_name}-{{epoch:02d}}-{{val/feas/total_violation:.4f}}',
+        monitor=monitoring_metric,
+        filename=checkpoint_filename,
         save_top_k=1,
         mode='min',
     )
 
     early_stop_callback = EarlyStopping(
-        monitor='val/feas/total_violation',
-        patience=10,
+        monitor=monitoring_metric,
+        patience=20,
         verbose=True,
         mode='min'
     )

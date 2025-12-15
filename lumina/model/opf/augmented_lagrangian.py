@@ -354,7 +354,7 @@ class AugmentedLagrangianACOPF(nn.Module):
             max_outer_iterations(int): Maximum outer iterations(penalty updates)
             max_inner_iterations(int): Maximum inner iterations(optimization steps)
             normalize_constraints(bool): Whether to normalize constraint violations
-            verbose(bool): Unused flag kept for backward compatibility with older configs
+            verbose(bool): If True, print penalty update logging during training
             warmup_epochs(int): Number of epochs to run penalty-only (λ = 0)
             ema_beta(float): Exponential moving average factor for constraint violations
             penalty_check_interval(int): Epoch interval for checking penalty increases
@@ -420,7 +420,7 @@ class AugmentedLagrangianACOPF(nn.Module):
         self._last_multiplier_violation: Optional[float] = None
         self._multiplier_steps_since_update: int = 0
         self._last_multiplier_updated: bool = False
-        # Last computed RMS values for P and Q balance and line limit(float or None)
+        # Last computed RMS values for P and Q balance and line limit (float or None)
         self._last_p_balance_rms: Optional[float] = None
         self._last_q_balance_rms: Optional[float] = None
         self._last_line_limit_rms: Optional[float] = None
@@ -468,11 +468,6 @@ class AugmentedLagrangianACOPF(nn.Module):
         self._last_penalty_check_violation = None
         self._epochs_since_penalty_check = 0
 
-        # print("Initialized Augmented Lagrangian with:")
-        # print(f"- Power flow constraints: {n_equality}")
-        # print(f"- Line flow constraints: {n_inequality}")
-        # print(f"- Total constraints: {total_constraints}")
-        # print(f"- Initial penalty parameter μ: {self.mu_k}")
 
     def _should_use_multipliers(self) -> bool:
         """Return True when multiplier updates are allowed (post-warmup)."""
@@ -482,10 +477,15 @@ class AugmentedLagrangianACOPF(nn.Module):
         """Initialize buffers that depend on the constraint dimension."""
         if constraints is None or constraints.numel() == 0:
             return
+        target_device = constraints.device
         if self.constraint_ema is None or self.constraint_ema.numel() != constraints.numel():
             self.constraint_ema = torch.zeros_like(constraints.detach())
+        elif self.constraint_ema.device != target_device:
+            self.constraint_ema = self.constraint_ema.to(target_device)
         if self.lambda_k is None or self.lambda_k.numel() != constraints.numel():
-            self.lambda_k = torch.zeros(constraints.numel(), device=constraints.device)
+            self.lambda_k = torch.zeros(constraints.numel(), device=target_device)
+        elif self.lambda_k.device != target_device:
+            self.lambda_k = self.lambda_k.to(target_device)
 
     def _compute_violation_norm(self, constraints: Optional[torch.Tensor]) -> float:
         """Compute L2 norm of a constraint vector (safe for None or empty)."""
@@ -664,23 +664,18 @@ class AugmentedLagrangianACOPF(nn.Module):
         p_inj = torch.zeros_like(v_real)
         q_inj = torch.zeros_like(v_imag)
 
-        def _ensure_batch_dims(p_inj, q_inj, vm_pred, va_pred, pg_pred, qg_pred):
-            """Guarantee tensors are 2D for scatter_add and keep batch size aligned."""
-            if p_inj.dim() < 2:
-                p_inj = p_inj.view(1, -1)
-                q_inj = q_inj.view(1, -1)
-            if vm_pred.dim() < 2:
-                vm_pred = vm_pred.view(p_inj.shape[0], -1)
-                va_pred = va_pred.view(p_inj.shape[0], -1)
-            if pg_pred is not None and pg_pred.dim() < 2:
-                pg_pred = pg_pred.view(1, -1)
-            if qg_pred is not None and qg_pred.dim() < 2:
-                qg_pred = qg_pred.view(1, -1)
-            return p_inj, q_inj, vm_pred, va_pred, pg_pred, qg_pred, p_inj.size(0)
-
-        p_inj, q_inj, vm_pred, va_pred, pg_pred, qg_pred, batch_size = _ensure_batch_dims(
-            p_inj, q_inj, vm_pred, va_pred, pg_pred, qg_pred
-        )
+        # Guarantee tensors are 2D for scatter_add and keep batch size aligned.
+        if p_inj.dim() < 2:
+            p_inj = p_inj.view(1, -1)
+            q_inj = q_inj.view(1, -1)
+        if vm_pred.dim() < 2:
+            vm_pred = vm_pred.view(p_inj.shape[0], -1)
+            va_pred = va_pred.view(p_inj.shape[0], -1)
+        if pg_pred is not None and pg_pred.dim() < 2:
+            pg_pred = pg_pred.view(1, -1)
+        if qg_pred is not None and qg_pred.dim() < 2:
+            qg_pred = qg_pred.view(1, -1)
+        batch_size = p_inj.size(0)
 
         # Add generation at generator buses (already in per-unit, so no division by base_mva)
         if gen_bus_indices is not None and pg_pred is not None:
@@ -735,8 +730,9 @@ class AugmentedLagrangianACOPF(nn.Module):
             # store as plain Python floats for easy external inspection
             self._last_p_balance_rms = float(p_rms.detach().item())
             self._last_q_balance_rms = float(q_rms.detach().item())
-        except Exception:
-            # In case of unexpected shapes or device issues, leave as None
+        except (RuntimeError, ValueError) as exc:
+            # Log issues while keeping the training loop robust
+            warnings.warn(f"Failed to compute power balance RMS: {exc}")
             self._last_p_balance_rms = None
             self._last_q_balance_rms = None
 
@@ -843,7 +839,10 @@ class AugmentedLagrangianACOPF(nn.Module):
         else:
             constraints = torch.tensor([], device=device, requires_grad=True)
 
-        self._last_line_limit_rms = float(torch.sqrt(torch.mean(constraints**2)).detach().item()) if constraints.numel() > 0 else 0.0
+        if constraints.numel() > 0:
+            self._last_line_limit_rms = float(torch.sqrt(torch.mean(constraints**2)).detach().item())
+        else:
+            self._last_line_limit_rms = 0.0
 
         return constraints
 
@@ -954,7 +953,7 @@ class AugmentedLagrangianACOPF(nn.Module):
         penalty_term = (self.mu_k / 2.0) * torch.sum(constraint_signal**2)
 
         # Augmented Lagrangian
-        augmented_lagrangian = mse_loss + penalty_term + (lagrange_term if self._should_use_multipliers() else 0.0)
+        augmented_lagrangian = mse_loss + penalty_term + lagrange_term
 
         # Track violations (EMA-driven)
         violation_value = self._ema_violation if self._ema_violation is not None else self._raw_violation
@@ -1005,12 +1004,9 @@ class AugmentedLagrangianACOPF(nn.Module):
             self._last_multiplier_updated = False
             return
 
-        # Default to the latest EMA signal if explicit constraints are not provided
-        if constraints is None or constraints.numel() == 0:
-            constraint_signal = self.constraint_ema
-        else:
-            self._init_constraint_buffers(constraints)
-            constraint_signal = self.constraint_ema
+        # Use explicit constraints for multiplier update when provided, otherwise use EMA
+        self._init_constraint_buffers(constraints)
+        constraint_signal = self.constraint_ema
 
         if constraint_signal is None or constraint_signal.numel() == 0:
             self._last_multiplier_updated = False
@@ -1031,7 +1027,6 @@ class AugmentedLagrangianACOPF(nn.Module):
         # Clip multipliers to reasonable range to prevent divergence
         if self.multiplier_clip is not None:
             self.lambda_k = torch.clamp(self.lambda_k, -self.multiplier_clip, self.multiplier_clip)
-        # print(f"Updated multiplers: {torch.norm(self.lambda_k).item()}, violation: {violation_val}")
 
         self._last_multiplier_norm = torch.norm(self.lambda_k).item()
         self._last_multiplier_violation = violation_val
