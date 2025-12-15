@@ -99,7 +99,7 @@ def parse_case_name(case_input: str) -> str:
 
 
 class OPFLightningModule(pl.LightningModule):
-    def __init__(self, config, case_name, group_id, model_type, loss_type='mse'):
+    def __init__(self, config, case_name, group_id, model_type, loss_type='mse', minmax_scaling=True):
         super().__init__()
         self.save_hyperparameters()
         self.config = config
@@ -107,6 +107,7 @@ class OPFLightningModule(pl.LightningModule):
         self.group_id = group_id
         self.model_type = model_type
         self.loss_type = loss_type
+        self.minmax_scaling = minmax_scaling
 
         # Initialize dataset and model
         self._load_dataset()
@@ -253,103 +254,6 @@ class OPFLightningModule(pl.LightningModule):
         if self.loss_type == 'augmented_lagrangian':
             self.augmented_lagrangian = self.loss_manager.lagrangian
 
-    def _initialize_augmented_lagrangian(self):
-        """Initialize Augmented Lagrangian solver (deprecated - use _initialize_loss_manager)."""
-        augmented_lagrangian = AugmentedLagrangianACOPF(
-            mu_0=0.1,
-            tolerance=1e-6,
-            constraint_tolerance=1e-2,
-            max_outer_iterations=20,
-            mu_increase_factor=1.0,
-            max_mu=100.0,
-            normalize_constraints=True
-        )
-        print("✓ Augmented Lagrangian initialized")
-        return augmented_lagrangian
-
-    def _extract_network_parameters(self):
-        """Extract network parameters from dataset sample."""
-        sample = self.dataset[0]
-        n_bus = sample['bus'].x.shape[0]
-
-        if hasattr(sample, 'Y'):
-            Y_dense = torch.tensor(sample.Y.todense(), dtype=torch.float32)
-            Y_real = Y_dense.real
-            Y_imag = Y_dense.imag
-        else:
-            Y_real = torch.zeros(n_bus, n_bus, dtype=torch.float32)
-            Y_imag = torch.zeros(n_bus, n_bus, dtype=torch.float32)
-            Y_real.fill_diagonal_(0.1)
-            Y_imag.fill_diagonal_(-0.5)
-            for i in range(n_bus - 1):
-                Y_real[i, i + 1] = Y_real[i + 1, i] = -0.05
-                Y_imag[i, i + 1] = Y_imag[i + 1, i] = 0.2
-
-        if ('bus', 'ac_line', 'bus') in sample.edge_index_dict:
-            n_lines = sample[('bus', 'ac_line', 'bus')].edge_index.shape[1]
-        else:
-            n_lines = n_bus - 1
-
-        line_limits = torch.ones(n_lines, dtype=torch.float32) * 100.0
-
-        self.augmented_lagrangian.set_network_parameters(
-            Y_real=Y_real.to(self.device),
-            Y_imag=Y_imag.to(self.device),
-            line_limits=line_limits.to(self.device),
-            base_mva=sample.base_mva if hasattr(sample, 'base_mva') else 100.0
-        )
-        self.n_bus = n_bus
-        self.n_lines = n_lines
-        print(f"✓ Network parameters set on {self.device}")
-
-    def _create_dummy_batch_data(self, batch, predictions=None):
-        """Create dummy batch data for constraint evaluation."""
-        if self.model_type in ['HeteroGNN', 'RGAT', 'HEAT', 'HGT']:
-            batch_size = batch['bus'].x.shape[0] if batch['bus'].x.dim() > 1 else 1
-            device = batch['bus'].x.device
-
-            if predictions is not None and 'generator' in predictions:
-                pred_shape = predictions['generator'].shape
-                if len(pred_shape) == 2:
-                    n_generators = pred_shape[0] // batch_size if pred_shape[0] % batch_size == 0 else pred_shape[0]
-                else:
-                    n_generators = pred_shape[1]
-            else:
-                n_generators = batch['generator'].x.shape[0] if 'generator' in batch else 5
-        else:
-            if hasattr(batch, 'ptr'):
-                batch_size = batch.ptr.size(0) - 1
-            else:
-                batch_size = 1
-            device = batch.x.device
-            n_generators = (batch.node_type == 1).sum().item()
-
-        class ConstraintBatch:
-            def __init__(self, device, n_generators, n_bus):
-                self.baseMVA = 100.0
-                self.device = device
-                self.n_generators = n_generators
-                self.n_bus = n_bus
-
-            def get(self, key, default=None):
-                if key == 'pd':
-                    return torch.rand(batch_size, self.n_bus, device=self.device) * 50
-                elif key == 'qd':
-                    return torch.rand(batch_size, self.n_bus, device=self.device) * 25
-                elif key == 'gen_bus_indices':
-                    return torch.tensor(list(range(self.n_generators)), device=self.device)
-                elif key == 'load_bus_indices':
-                    return torch.tensor(list(range(2, min(self.n_bus, 7))), device=self.device)
-                elif key == 'line_edge_index':
-                    from_buses = list(range(self.n_bus - 1))
-                    to_buses = list(range(1, self.n_bus))
-                    return torch.tensor([from_buses, to_buses], device=self.device)
-                else:
-                    return default
-
-        constraint_batch = ConstraintBatch(device, n_generators, self.n_bus)
-        return constraint_batch
-
     def setup(self, stage=None):
         n_samples = len(self.dataset)
         n_train = int(n_samples * self.config['train_split'])
@@ -365,9 +269,8 @@ class OPFLightningModule(pl.LightningModule):
             self.test_dataset = HomoOPFDataset(self.test_dataset)
 
     def on_fit_start(self):
-        # Extract network parameters if using augmented lagrangian
-        if self.loss_type == 'augmented_lagrangian':
-            self._extract_network_parameters()
+        # Loss manager will initialize network parameters on first batch
+        pass
 
     def train_dataloader(self):
         loader_config = self.config['loader']
@@ -386,13 +289,13 @@ class OPFLightningModule(pl.LightningModule):
                           shuffle=False, num_workers=loader_config['num_workers'])
 
     def configure_optimizers(self):
-        return optim.Adam(self.parameters(), **self.config['optimizer']['Adam'])
+        return optim.AdamW(self.parameters(), **self.config['optimizer']['AdamW'])
 
     def forward(self, batch):
         if self.model_type in ['HeteroGNN', 'RGAT', 'HEAT', 'HGT']:
             # Ensure inputs are float32
             x_dict = {k: v.float() for k, v in batch.x_dict.items()}
-            return self.model(x_dict, batch.edge_index_dict)
+            return self.model(x_dict, batch.edge_index_dict, minmax_scaling=self.minmax_scaling)
         else:
             if isinstance(batch, torch.Tensor) or hasattr(batch, 'node_type'):
                 homo_batch = batch
@@ -424,63 +327,60 @@ class OPFLightningModule(pl.LightningModule):
             predictions = self(batch)
 
         # Use loss manager to compute loss
-        if self.loss_type == 'augmented_lagrangian':
-            constraint_batch = self._create_dummy_batch_data(batch, predictions)
-            loss, loss_info = self.loss_manager.compute_loss(
-                predictions,
-                batch,
-                constraint_data=constraint_batch,
-                return_info=True,
-            )
-        else:
-            loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
+        loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
+
+        # Update Lagrange multipliers/penalty when triggers are met
+        self.loss_manager.update_lagrangian(
+            constraint_violation=loss_info.get('constraint_violation'),
+            constraints=loss_info.get('constraints'),
+            is_training=self.training
+        )
 
         # Log metrics
-        self.log('train_loss', loss, prog_bar=True, batch_size=batch_size)
+        self.log('loss/total_step', loss, on_step=True, on_epoch=False, prog_bar=True, sync_dist=True, batch_size=batch_size)
+        self.log('loss/total_epoch', loss, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
 
-        if 'mse_loss' in loss_info:
-            self.log('train_mse_loss', loss_info['mse_loss'], prog_bar=True, batch_size=batch_size)
+        if 'objective' in loss_info:
+            self.log('loss/task_step', loss_info['objective'], 
+                     on_step=True, on_epoch=False, prog_bar=True, sync_dist=True, batch_size=batch_size)
+            self.log('loss/task_epoch', loss_info['objective'], 
+                     on_step=False, on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
 
         if self.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
-            if 'constraint_violation' in loss_info:
-                self.log('train_constraint_violation', loss_info['constraint_violation'],
-                         prog_bar=True, batch_size=batch_size)
+            if 'raw_constraint_violation' in loss_info:
+                self.log('feas/total_violation_step', loss_info['raw_constraint_violation'], 
+                         on_step=True, on_epoch=False, prog_bar=True, sync_dist=True, batch_size=batch_size)
+            if 'ema_constraint_violation' in loss_info:
+                self.log('feas/total_violation_ema', loss_info['ema_constraint_violation'],
+                         on_step=True, on_epoch=True, prog_bar=True, sync_dist=True, batch_size=batch_size)
             if 'penalty_parameter' in loss_info:
-                self.log('penalty_mu', loss_info['penalty_parameter'], batch_size=batch_size)
-
-            self.training_step_outputs.append({
-                'loss': loss,
-                'constraint_violation': loss_info.get('constraint_violation', 0.0)
-            })
-        else:
-            self.training_step_outputs.append({'loss': loss})
+                self.log('al/mu', loss_info['penalty_parameter'], 
+                         on_step=False, on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
+            if 'last_multiplier_norm' in loss_info:
+                self.log('al/lagrangian_norm', loss_info['last_multiplier_norm'], on_step=True, 
+                         on_epoch=False, prog_bar=True, sync_dist=True, batch_size=batch_size)
+            if 'lagrange_term' in loss_info:
+                self.log('loss/lagrangian_epoch', loss_info['lagrange_term'], on_step=False, on_epoch=True, 
+                         prog_bar=False, sync_dist=True, batch_size=batch_size)
+            if 'penalty_term' in loss_info:
+                self.log('loss/penalty_epoch', loss_info['penalty_term'], on_step=False, 
+                         on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
+            if 'p_balance_rmse' in loss_info:
+                self.log('feas/p_balance_rmse_pu', loss_info['p_balance_rmse'], on_step=False, 
+                         on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
+            if 'q_balance_rmse' in loss_info:
+                self.log('feas/q_balance_rmse_pu', loss_info['q_balance_rmse'], on_step=False, 
+                         on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
+            if 'line_limit_rmse' in loss_info:
+                self.log('feas/line_limit_rmse_pu', loss_info['line_limit_rmse'], on_step=False, 
+                         on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
 
         return loss
 
     def on_train_epoch_end(self):
-        if self.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
-            if self.training_step_outputs:
-                if self.loss_type == 'augmented_lagrangian':
-                    # Update penalty parameter for augmented Lagrangian
-                    avg_violation = torch.stack(
-                        [torch.tensor(x['constraint_violation']) for x in self.training_step_outputs]
-                    ).mean().item()
-                    self.loss_manager.update_lagrangian(
-                        self.model,
-                        self.trainer.train_dataloader,
-                        constraint_violation=avg_violation
-                    )
-                elif self.loss_type == 'violated_lagrangian':
-                    # Update multipliers for violated Lagrangian
-                    self.loss_manager.update_lagrangian(
-                        self.model,
-                        self.trainer.train_dataloader
-                    )
 
         # Step epoch counter for Lagrangian methods
         self.loss_manager.step_epoch()
-
-        self.training_step_outputs.clear()
 
     def validation_step(self, batch, batch_idx):
         batch_size = getattr(batch, 'num_graphs', 1)
@@ -490,27 +390,27 @@ class OPFLightningModule(pl.LightningModule):
             predictions = self(batch)
 
         # Use loss manager to compute validation loss
-        if self.loss_type == 'augmented_lagrangian':
-            constraint_batch = self._create_dummy_batch_data(batch, predictions)
-            loss, loss_info = self.loss_manager.compute_loss(
-                predictions,
-                batch,
-                constraint_data=constraint_batch,
-                return_info=True,
-            )
-        else:
-            loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
+        loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
 
         # Log validation metrics
-        self.log('val_loss', loss, prog_bar=True, batch_size=batch_size)
+        self.log('val/loss/total', loss, prog_bar=True, batch_size=batch_size)
 
-        if 'mse_loss' in loss_info:
-            self.log('val_mse_loss', loss_info['mse_loss'], prog_bar=True, batch_size=batch_size)
+        if 'objective' in loss_info:
+            self.log('val/loss/task', loss_info['objective'], prog_bar=True, batch_size=batch_size)
 
         if self.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
-            if 'constraint_violation' in loss_info:
-                self.log('val_constraint_violation', loss_info['constraint_violation'],
+            if 'raw_constraint_violation' in loss_info:
+                self.log('val/feas/total_violation', loss_info['raw_constraint_violation'],
                          prog_bar=True, batch_size=batch_size)
+            if 'p_balance_rmse' in loss_info:
+                self.log('val/feas/p_balance_rmse_pu', loss_info['p_balance_rmse'], on_step=False, 
+                         on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
+            if 'q_balance_rmse' in loss_info:
+                self.log('val/feas/q_balance_rmse_pu', loss_info['q_balance_rmse'], on_step=False, 
+                         on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
+            if 'line_limit_rmse' in loss_info:
+                self.log('val/feas/line_limit_rmse_pu', loss_info['line_limit_rmse'], on_step=False, 
+                         on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
 
         return loss
 
@@ -543,9 +443,14 @@ def main():
                         help='Use Augmented Lagrangian method (default: True)')
     parser.add_argument('--no_lagrangian', action='store_false', dest='use_lagrangian',
                         help='Disable Augmented Lagrangian method')
+    parser.add_argument('--minmax_scaling', dest='minmax_scaling', action='store_true',
+                        help='Apply min-max scaling to model outputs (default: enabled)')
+    parser.add_argument('--no_minmax_scaling', dest='minmax_scaling', action='store_false',
+                        help='Disable min-max scaling of model outputs')
+    parser.set_defaults(minmax_scaling=True)
 
     parser.add_argument('--accelerator', type=str, default='auto', help='Accelerator type (default: auto)')
-    parser.add_argument('--devices', type=int, default=4, help='Number of devices (default: 1)')
+    parser.add_argument('--devices', type=int, default=1, help='Number of devices (default: 1)')
     parser.add_argument('--num_nodes', type=int, default=1, help='Number of nodes (default: 1)')
     parser.add_argument('--precision', type=str, default='32-true', help='Precision (default: 32-true)')
     parser.add_argument('--strategy', type=str, default='ddp_find_unused_parameters_true',
@@ -608,6 +513,7 @@ def main():
         config['val_split'] = 0.1
 
     case_name = parse_case_name(args.case)
+    print(f"Using case: {case_name}")
 
     # Handle backward compatibility for --use_lagrangian flag
     loss_type = args.loss_type
@@ -621,7 +527,8 @@ def main():
         case_name=case_name,
         group_id=args.group_id,
         model_type=args.model_type,
-        loss_type=loss_type
+        loss_type=loss_type,
+        minmax_scaling=args.minmax_scaling
     )
 
     # Initialize Trainer
@@ -640,23 +547,40 @@ def main():
     else:
         trainer_config['sync_batchnorm'] = False
 
+    # Initialize WandB logger
+    from lightning.pytorch.loggers import WandbLogger
+    wandb_logger = WandbLogger(
+        project='lumina-training',
+        name=f'{case_name}-{args.model_type}-{loss_type}',
+        log_model=False
+    )
+
     # Setup callbacks
+    if args.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
+        # For Lagrangian methods, monitor constraint violation
+        monitoring_metric = 'val/feas/total_violation'
+        checkpoint_filename = f'best-{case_name}-{{epoch:02d}}-{{val/feas/total_violation:.4f}}'
+    else:
+        monitoring_metric = 'val/loss/total'
+        checkpoint_filename = f'best-{case_name}-{{epoch:02d}}-{{val/loss/total:.4f}}'
+
     checkpoint_callback = ModelCheckpoint(
-        monitor='val_loss',
-        filename=f'best-{case_name}-{{epoch:02d}}-{{val_loss:.4f}}',
+        monitor=monitoring_metric,
+        filename=checkpoint_filename,
         save_top_k=1,
         mode='min',
     )
 
     early_stop_callback = EarlyStopping(
-        monitor='val_loss',
-        patience=10,
+        monitor=monitoring_metric,
+        patience=20,
         verbose=True,
         mode='min'
     )
 
     trainer = pl.Trainer(
         **trainer_config,
+        logger=wandb_logger,
         callbacks=[checkpoint_callback, early_stop_callback]
     )
 
