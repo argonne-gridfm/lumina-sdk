@@ -21,6 +21,7 @@ import os
 import os.path as osp
 import pickle
 import shutil
+import stat
 import warnings
 from glob import glob
 from typing import Callable, Dict, List, Literal, Optional, Union
@@ -127,6 +128,8 @@ class OPFDataset(InMemoryDataset):
         self.group_id = group_id
         self.topological_perturbations = topological_perturbations
 
+        self._raw_root = osp.join(root, 'OPFData/raw')
+        self._processed_root = osp.join(root, 'OPFData/processed')
         self._release = 'dataset_release_1'
         if topological_perturbations:
             self._release += '_nminusone'
@@ -156,15 +159,22 @@ class OPFDataset(InMemoryDataset):
         # Load only the specified group
         self.data, self.slices = torch.load(self.processed_paths[0], weights_only=False)
 
+        if osp.exists(self._processed_root):
+            try:
+                current_mode = os.stat(self._processed_root).st_mode
+                os.chmod(self._processed_root, current_mode | stat.S_IWGRP)
+            except OSError as exc:
+                warnings.warn(f'Failed to set group write permission on {self._processed_root}: {exc}')
+
     @property
     def raw_dir(self) -> str:
-        r""" Raw data folder. """
-        return osp.join(self.root, self._release, self.case_name, 'raw')
+        r""" Raw data folder """
+        return osp.join(self._raw_root, self._release)
 
     @property
     def processed_dir(self) -> str:
         r""" Processed data folder. """
-        return osp.join(self.root, self._release, self.case_name, "processed")
+        return osp.join(self._processed_root, self._release, self.case_name)
 
     @property
     def tmp_dir(self) -> str:
@@ -232,7 +242,7 @@ class OPFDataset(InMemoryDataset):
         group_json_files = glob(osp.join(self.tmp_dir, f'group_{group_id}', '*.json'))
         #
         if len(group_json_files) < 15000:
-            extract_tar(osp.join(self.raw_dir, self.raw_file_names[group_id]), self.raw_dir)
+            extract_tar(osp.join(self.raw_dir, self.raw_file_names[0]), self.raw_dir)
             group_json_files = glob(osp.join(self.tmp_dir, f'group_{group_id}', '*.json'))
 
         data_list = Parallel(n_jobs=self.n_jobs, backend="threading")(
