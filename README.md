@@ -33,7 +33,7 @@ For detailed information about loss functions and training strategies, see [Loss
 ### ALCF Polaris
 
 ```shell
-bash install/polaris/create_envs.sh
+bash install/polaris/create_env.sh
 ```
 
 See `docs/polaris.md`.
