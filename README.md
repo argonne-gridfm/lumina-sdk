@@ -30,6 +30,16 @@ For detailed information about loss functions and training strategies, see [Loss
 
 ## Install Instructions for Lumina Core
 
+### ALCF Polaris
+
+```shell
+bash install/polaris/create_envs.sh
+```
+
+See `docs/polaris.md`.
+
+### Generis systems
+
 1. create and activate a virtual environment (recommended)
 
 ```
