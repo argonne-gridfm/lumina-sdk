@@ -1,0 +1,3 @@
+# Core deps mirrored from pyproject
+pyyaml
+pandapower
