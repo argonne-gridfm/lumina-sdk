@@ -439,10 +439,6 @@ def main():
             'augmented_lagrangian',
             'violated_lagrangian'],
         help='Loss function type (default: mse)')
-    parser.add_argument('--use_lagrangian', action='store_true', default=False,
-                        help='Use Augmented Lagrangian method (default: True)')
-    parser.add_argument('--no_lagrangian', action='store_false', dest='use_lagrangian',
-                        help='Disable Augmented Lagrangian method')
     parser.add_argument('--minmax_scaling', dest='minmax_scaling', action='store_true',
                         help='Apply min-max scaling to model outputs (default: enabled)')
     parser.add_argument('--no_minmax_scaling', dest='minmax_scaling', action='store_false',
@@ -515,11 +511,7 @@ def main():
     case_name = parse_case_name(args.case)
     print(f"Using case: {case_name}")
 
-    # Handle backward compatibility for --use_lagrangian flag
     loss_type = args.loss_type
-    if args.use_lagrangian and loss_type == 'mse':
-        loss_type = 'augmented_lagrangian'
-        print("Note: --use_lagrangian flag is deprecated. Using --loss_type augmented_lagrangian instead.")
 
     # Initialize Lightning Module
     model = OPFLightningModule(
@@ -550,8 +542,9 @@ def main():
     # Initialize WandB logger
     from lightning.pytorch.loggers import WandbLogger
     wandb_logger = WandbLogger(
+        save_dir=config['logging_dir'],
         project='lumina-training',
-        name=f'{case_name}-{args.model_type}-{loss_type}',
+        name=f'acopf-{args.model_type}-{loss_type}',
         log_model=False
     )
 
