@@ -337,43 +337,28 @@ class OPFLightningModule(pl.LightningModule):
         )
 
         # Log metrics
-        self.log('loss/total_step', loss, on_step=True, on_epoch=False, prog_bar=True, sync_dist=True, batch_size=batch_size)
-        self.log('loss/total_epoch', loss, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
+        self.log('loss/total', loss, batch_size=batch_size)
 
         if 'objective' in loss_info:
-            self.log('loss/task_step', loss_info['objective'], 
-                     on_step=True, on_epoch=False, prog_bar=True, sync_dist=True, batch_size=batch_size)
-            self.log('loss/task_epoch', loss_info['objective'], 
-                     on_step=False, on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
-
-        if self.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
-            if 'raw_constraint_violation' in loss_info:
-                self.log('feas/total_violation_step', loss_info['raw_constraint_violation'], 
-                         on_step=True, on_epoch=False, prog_bar=True, sync_dist=True, batch_size=batch_size)
-            if 'ema_constraint_violation' in loss_info:
-                self.log('feas/total_violation_ema', loss_info['ema_constraint_violation'],
-                         on_step=True, on_epoch=True, prog_bar=True, sync_dist=True, batch_size=batch_size)
-            if 'penalty_parameter' in loss_info:
-                self.log('al/mu', loss_info['penalty_parameter'], 
-                         on_step=False, on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
-            if 'last_multiplier_norm' in loss_info:
-                self.log('al/lagrangian_norm', loss_info['last_multiplier_norm'], on_step=True, 
-                         on_epoch=False, prog_bar=True, sync_dist=True, batch_size=batch_size)
-            if 'lagrange_term' in loss_info:
-                self.log('loss/lagrangian_epoch', loss_info['lagrange_term'], on_step=False, on_epoch=True, 
-                         prog_bar=False, sync_dist=True, batch_size=batch_size)
-            if 'penalty_term' in loss_info:
-                self.log('loss/penalty_epoch', loss_info['penalty_term'], on_step=False, 
-                         on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
-            if 'p_balance_rmse' in loss_info:
-                self.log('feas/p_balance_rmse_pu', loss_info['p_balance_rmse'], on_step=False, 
-                         on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
-            if 'q_balance_rmse' in loss_info:
-                self.log('feas/q_balance_rmse_pu', loss_info['q_balance_rmse'], on_step=False, 
-                         on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
-            if 'line_limit_rmse' in loss_info:
-                self.log('feas/line_limit_rmse_pu', loss_info['line_limit_rmse'], on_step=False, 
-                         on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
+            self.log('loss/task', loss_info['objective'], batch_size=batch_size)
+        if 'lagrange_term' in loss_info:
+            self.log('loss/lagrangian', loss_info['lagrange_term'], batch_size=batch_size)
+        if 'penalty_term' in loss_info:
+            self.log('loss/penalty', loss_info['penalty_term'], batch_size=batch_size)
+        if 'raw_constraint_violation' in loss_info:
+            self.log('feas/total_violation', loss_info['raw_constraint_violation'], batch_size=batch_size)
+        if 'ema_constraint_violation' in loss_info:
+            self.log('feas/total_violation_ema', loss_info['ema_constraint_violation'], batch_size=batch_size)
+        if 'p_balance_rmse' in loss_info:
+            self.log('feas/p_balance_rmse_pu', loss_info['p_balance_rmse'], batch_size=batch_size)
+        if 'q_balance_rmse' in loss_info:
+            self.log('feas/q_balance_rmse_pu', loss_info['q_balance_rmse'], batch_size=batch_size)
+        if 'line_limit_rmse' in loss_info:
+            self.log('feas/line_limit_rmse_pu', loss_info['line_limit_rmse'], batch_size=batch_size)
+        if 'penalty_parameter' in loss_info:
+            self.log('al/mu', loss_info['penalty_parameter'], batch_size=batch_size)
+        if 'last_multiplier_norm' in loss_info:
+            self.log('al/lagrangian_norm', loss_info['last_multiplier_norm'], batch_size=batch_size)
 
         return loss
 
@@ -393,24 +378,17 @@ class OPFLightningModule(pl.LightningModule):
         loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
 
         # Log validation metrics
-        self.log('val/loss/total', loss, prog_bar=True, batch_size=batch_size)
-
+        self.log('val/loss/total', loss, batch_size=batch_size)
         if 'objective' in loss_info:
-            self.log('val/loss/task', loss_info['objective'], prog_bar=True, batch_size=batch_size)
-
-        if self.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
-            if 'raw_constraint_violation' in loss_info:
-                self.log('val/feas/total_violation', loss_info['raw_constraint_violation'],
-                         prog_bar=True, batch_size=batch_size)
-            if 'p_balance_rmse' in loss_info:
-                self.log('val/feas/p_balance_rmse_pu', loss_info['p_balance_rmse'], on_step=False, 
-                         on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
-            if 'q_balance_rmse' in loss_info:
-                self.log('val/feas/q_balance_rmse_pu', loss_info['q_balance_rmse'], on_step=False, 
-                         on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
-            if 'line_limit_rmse' in loss_info:
-                self.log('val/feas/line_limit_rmse_pu', loss_info['line_limit_rmse'], on_step=False, 
-                         on_epoch=True, prog_bar=False, sync_dist=True, batch_size=batch_size)
+            self.log('val/loss/task', loss_info['objective'], batch_size=batch_size)
+        if 'raw_constraint_violation' in loss_info:
+            self.log('val/feas/total_violation', loss_info['raw_constraint_violation'], batch_size=batch_size)
+        if 'p_balance_rmse' in loss_info:
+            self.log('val/feas/p_balance_rmse_pu', loss_info['p_balance_rmse'], batch_size=batch_size)
+        if 'q_balance_rmse' in loss_info:
+            self.log('val/feas/q_balance_rmse_pu', loss_info['q_balance_rmse'], batch_size=batch_size)
+        if 'line_limit_rmse' in loss_info:
+            self.log('val/feas/line_limit_rmse_pu', loss_info['line_limit_rmse'], batch_size=batch_size)
 
         return loss
 
@@ -439,10 +417,6 @@ def main():
             'augmented_lagrangian',
             'violated_lagrangian'],
         help='Loss function type (default: mse)')
-    parser.add_argument('--use_lagrangian', action='store_true', default=False,
-                        help='Use Augmented Lagrangian method (default: True)')
-    parser.add_argument('--no_lagrangian', action='store_false', dest='use_lagrangian',
-                        help='Disable Augmented Lagrangian method')
     parser.add_argument('--minmax_scaling', dest='minmax_scaling', action='store_true',
                         help='Apply min-max scaling to model outputs (default: enabled)')
     parser.add_argument('--no_minmax_scaling', dest='minmax_scaling', action='store_false',
@@ -515,11 +489,7 @@ def main():
     case_name = parse_case_name(args.case)
     print(f"Using case: {case_name}")
 
-    # Handle backward compatibility for --use_lagrangian flag
     loss_type = args.loss_type
-    if args.use_lagrangian and loss_type == 'mse':
-        loss_type = 'augmented_lagrangian'
-        print("Note: --use_lagrangian flag is deprecated. Using --loss_type augmented_lagrangian instead.")
 
     # Initialize Lightning Module
     model = OPFLightningModule(
@@ -550,8 +520,9 @@ def main():
     # Initialize WandB logger
     from lightning.pytorch.loggers import WandbLogger
     wandb_logger = WandbLogger(
+        save_dir=config['logging_dir'],
         project='lumina-training',
-        name=f'{case_name}-{args.model_type}-{loss_type}',
+        name=f'acopf-{args.model_type}-{loss_type}',
         log_model=False
     )
 
@@ -564,12 +535,6 @@ def main():
         monitoring_metric = 'val/loss/total'
         checkpoint_filename = f'best-{case_name}-{{epoch:02d}}-{{val/loss/total:.4f}}'
 
-    checkpoint_callback = ModelCheckpoint(
-        monitor=monitoring_metric,
-        filename=checkpoint_filename,
-        save_top_k=1,
-        mode='min',
-    )
 
     early_stop_callback = EarlyStopping(
         monitor=monitoring_metric,
@@ -578,17 +543,28 @@ def main():
         mode='min'
     )
 
+    callbacks = [early_stop_callback]
+    if trainer_config.get('enable_checkpointing', True):
+        checkpoint_callback = ModelCheckpoint(
+            monitor=monitoring_metric,
+            filename=checkpoint_filename,
+            save_top_k=1,
+            mode='min',
+        )
+        callbacks.insert(0, checkpoint_callback)
+
     trainer = pl.Trainer(
         **trainer_config,
         logger=wandb_logger,
-        callbacks=[checkpoint_callback, early_stop_callback]
+        callbacks=callbacks
     )
 
     # Train
     trainer.fit(model)
 
     print("\n🎉 Training completed!")
-    print(f"💾 Best model saved to: {checkpoint_callback.best_model_path}")
+    if trainer_config.get('enable_checkpointing', True):
+        print(f"💾 Best model saved to: {checkpoint_callback.best_model_path}")
 
 
 if __name__ == "__main__":
