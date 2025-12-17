@@ -557,12 +557,6 @@ def main():
         monitoring_metric = 'val/loss/total'
         checkpoint_filename = f'best-{case_name}-{{epoch:02d}}-{{val/loss/total:.4f}}'
 
-    checkpoint_callback = ModelCheckpoint(
-        monitor=monitoring_metric,
-        filename=checkpoint_filename,
-        save_top_k=1,
-        mode='min',
-    )
 
     early_stop_callback = EarlyStopping(
         monitor=monitoring_metric,
@@ -571,17 +565,28 @@ def main():
         mode='min'
     )
 
+    callbacks = [early_stop_callback]
+    if trainer_config.get('enable_checkpointing', True):
+        checkpoint_callback = ModelCheckpoint(
+            monitor=monitoring_metric,
+            filename=checkpoint_filename,
+            save_top_k=1,
+            mode='min',
+        )
+        callbacks.insert(0, checkpoint_callback)
+
     trainer = pl.Trainer(
         **trainer_config,
         logger=wandb_logger,
-        callbacks=[checkpoint_callback, early_stop_callback]
+        callbacks=callbacks
     )
 
     # Train
     trainer.fit(model)
 
     print("\n🎉 Training completed!")
-    print(f"💾 Best model saved to: {checkpoint_callback.best_model_path}")
+    if trainer_config.get('enable_checkpointing', True):
+        print(f"💾 Best model saved to: {checkpoint_callback.best_model_path}")
 
 
 if __name__ == "__main__":
