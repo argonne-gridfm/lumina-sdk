@@ -1,0 +1,551 @@
+import argparse
+from pathlib import Path
+import os
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+import yaml
+from torch_geometric.loader import DataLoader
+from tqdm import tqdm
+
+# Optional plotting imports
+try:
+    import matplotlib.pyplot as plt
+    PLOTTING_AVAILABLE = True
+except ImportError:
+    PLOTTING_AVAILABLE = False
+
+from lumina.dataset.opf.opf_dataset import OPFDataset
+from lumina.model.opf.losses import OPFLossManager
+from lumina.model.opf.homo_model import get_gnnNets
+from lumina.model.opf.hetero_model import HEAT, HGT, RGAT, OPFHeteroGNN
+from lumina.utils.graph_utils import HomoOPFDataset, convert_opf_to_homo
+
+def initialize_model(model, sample_data, device):
+    if dist.get_rank() == 0:
+        print("Initializing model parameters...")
+    
+    model = model.to(device)
+    sample_data = sample_data.to(device)
+
+    model.eval()
+    with torch.no_grad():
+        try:
+            if isinstance(sample_data, (dict, torch.nn.ParameterDict)) or hasattr(sample_data, 'x_dict'):
+                # Ensure inputs are float32
+                x_dict = {k: v.float() for k, v in sample_data.x_dict.items()}
+                _ = model(x_dict, sample_data.edge_index_dict)
+            else:
+                if hasattr(sample_data, 'x'):
+                    sample_data.x = sample_data.x.float()
+                _ = model(sample_data)
+            if dist.get_rank() == 0:
+                print("Model parameters initialized successfully!")
+        except Exception as e:
+            if dist.get_rank() == 0:
+                print(f"Warning: Model initialization failed: {e}")
+                print("Model may still work during training...")
+
+    return model
+
+
+def get_case_name_mapping():
+    return {
+        'case14': 'pglib_opf_case14_ieee',
+        'case30': 'pglib_opf_case30_ieee',
+        'case57': 'pglib_opf_case57_ieee',
+        'case118': 'pglib_opf_case118_ieee',
+        'case500': 'pglib_opf_case500_goc',
+        'case2000': 'pglib_opf_case2000_goc',
+        'case4661': 'pglib_opf_case4661_sdet',
+        'case6470': 'pglib_opf_case6470_rte',
+        'case10000': 'pglib_opf_case10000_goc',
+        'case13659': 'pglib_opf_case13659_pegase',
+    }
+
+
+def parse_case_name(case_input: str) -> str:
+    case_mapping = get_case_name_mapping()
+
+    if case_input.startswith('pglib_opf_'):
+        return case_input
+
+    if case_input in case_mapping:
+        return case_mapping[case_input]
+
+    if not case_input.startswith('case'):
+        case_input = 'case' + case_input
+        if case_input in case_mapping:
+            return case_mapping[case_input]
+
+    available_short = list(case_mapping.keys())
+    available_full = list(case_mapping.values())
+    raise ValueError(
+        f"Invalid case name '{case_input}'. Available short names: {available_short}, or use full names: {available_full}")
+
+
+class OPFTrainer:
+    def __init__(self, config, case_name, group_id, model_type, loss_type='mse', 
+                 minmax_scaling=True, local_rank=0, global_rank = 0, world_size=1):
+        self.config = config
+        self.case_name = case_name
+        self.group_id = group_id
+        self.model_type = model_type
+        self.loss_type = loss_type
+        self.minmax_scaling = minmax_scaling
+        self.local_rank = local_rank
+        self.global_rank = global_rank
+        self.world_size = world_size
+        self.device = torch.device(f'cuda:{local_rank}')
+
+        training_config = self.config['training']
+        self.max_epochs = training_config["max_epochs"]
+        self.patience = training_config["patience"]
+
+        self.checkpoint_dir = config['checkpoint_dir']
+        
+        # Initialize dataset and model
+        self._load_dataset()
+        self._create_dataloaders()
+        self._create_model()
+        self._initialize_loss_manager()
+        
+        # Setup optimizer
+        optimizer_config = config['optimizer']
+        if 'Adam' in optimizer_config:
+            self.optimizer = optim.Adam(self.model.parameters(), **optimizer_config['Adam'])
+        elif 'AdamW' in optimizer_config:
+            self.optimizer = optim.AdamW(self.model.parameters(), **optimizer_config['AdamW'])
+        
+        # Training state
+        self.current_epoch = 0
+        self.best_val_loss = float('inf')
+        self.patience_counter = 0
+        self.global_step = 0
+        
+    def _load_dataset(self):
+        self.dataset = OPFDataset(
+            root=self.config['root'],
+            case_name=self.case_name,
+            group_id=self.group_id,
+            local_raw_folder=self.config.get('local_raw_folder'),
+            force_reload=False
+        )
+        if self.global_rank == 0:
+            print(f"Dataset loaded: {len(self.dataset)} samples")
+    
+    def _create_dataloaders(self):
+        n_samples = len(self.dataset)
+        n_train = int(n_samples * self.config['train_split'])
+        n_val = int(n_samples * self.config['val_split'])
+        
+        train_dataset = torch.utils.data.Subset(self.dataset, range(n_train))
+        val_dataset = torch.utils.data.Subset(self.dataset, range(n_train, n_train + n_val))
+        test_dataset = torch.utils.data.Subset(self.dataset, range(n_train + n_val, n_samples))
+        
+        if self.model_type not in ['HeteroGNN', 'RGAT', 'HEAT', 'HGT']:
+            train_dataset = HomoOPFDataset(train_dataset)
+            val_dataset = HomoOPFDataset(val_dataset)
+            test_dataset = HomoOPFDataset(test_dataset)
+        
+        loader_config = self.config['loader']
+        
+        # Create distributed samplers
+        self.train_sampler = DistributedSampler(
+            train_dataset,
+            num_replicas=self.world_size,
+            rank=self.global_rank,
+            shuffle=loader_config['shuffle']
+        )
+        
+        self.val_sampler = DistributedSampler(
+            val_dataset,
+            num_replicas=self.world_size,
+            rank=self.global_rank,
+            shuffle=False
+        )
+        
+        # Create dataloaders
+        self.train_loader = DataLoader(
+            train_dataset,
+            batch_size=loader_config['batch_size'],
+            sampler=self.train_sampler,
+            num_workers=loader_config['num_workers'],
+            pin_memory=True
+        )
+        
+        self.val_loader = DataLoader(
+            val_dataset,
+            batch_size=loader_config['batch_size'],
+            sampler=self.val_sampler,
+            num_workers=loader_config['num_workers'],
+            pin_memory=True
+        )
+        
+        self.test_loader = DataLoader(
+            test_dataset,
+            batch_size=loader_config['batch_size'],
+            shuffle=False,
+            num_workers=loader_config['num_workers'],
+            pin_memory=True
+        )
+    
+    def _create_model(self):
+        metadata = self.dataset.metadata()
+        sample_data = self.dataset[0]
+
+        per_node_output_size = sample_data['bus'].y.shape[-1]
+        if self.global_rank == 0:
+            print(f"Per-node output size: {per_node_output_size}")
+
+        if self.model_type in ['HeteroGNN', 'RGAT', 'HEAT', 'HGT']:
+            input_channels = {}
+            node_types = list(metadata['nodes'].keys())
+            edge_types = list(metadata['edges'].keys())
+            metadata_tuple = (node_types, edge_types)
+
+            for node_type in node_types:
+                if node_type in sample_data.x_dict:
+                    input_channels[node_type] = sample_data[node_type].x.shape[1]
+
+            if self.model_type in self.config['models']:
+                model_config = self.config['models'][self.model_type]
+            else:
+                if self.global_rank == 0:
+                    print(f"Warning: Config for {self.model_type} not found, using HeteroGNN config")
+                model_config = self.config['models']['HeteroGNN']
+
+            if self.model_type == 'HeteroGNN':
+                ModelClass = OPFHeteroGNN
+            elif self.model_type == 'RGAT':
+                ModelClass = RGAT
+            elif self.model_type == 'HEAT':
+                ModelClass = HEAT
+            elif self.model_type == 'HGT':
+                ModelClass = HGT
+
+            kwargs = {
+                'metadata': metadata_tuple,
+                'input_channels': input_channels,
+                'hidden_channels': model_config['hidden_channels'],
+                'out_channels': per_node_output_size,
+                'num_layers': model_config['num_layers'],
+                'backend': model_config.get('backend', 'sage')
+            }
+
+            if self.model_type in ['RGAT', 'HGT']:
+                kwargs['num_heads'] = model_config.get('num_heads', 1)
+            if self.model_type == 'HEAT':
+                kwargs['attention_heads'] = model_config.get('attention_heads', 1)
+
+            self.model = ModelClass(**kwargs)
+            initialize_model(self.model, sample_data, self.device)
+            
+            if self.global_rank == 0:
+                print(f"{self.model_type} Model created")
+
+        else:
+            homo_sample = convert_opf_to_homo(sample_data)
+            input_dim = homo_sample.x.shape[1]
+
+            if self.model_type in self.config['models']:
+                model_config = self.config['models'][self.model_type]
+            elif 'HomoGNN' in self.config['models']:
+                model_config = self.config['models']['HomoGNN']
+            else:
+                model_config = {
+                    'hidden_dim': 64,
+                    'num_layers': 3,
+                    'dropout': 0.1,
+                    'readout': 'mean',
+                    'edge_dim': homo_sample.edge_attr.shape[1]
+                }
+
+            model_config['model_name'] = self.model_type
+            if 'edge_dim' not in model_config:
+                model_config['edge_dim'] = homo_sample.edge_attr.shape[1]
+
+            self.model = get_gnnNets(
+                input_dim=input_dim,
+                output_dim=per_node_output_size,
+                model_params=model_config
+            )
+
+            initialize_model(self.model, homo_sample, self.device)
+            if self.global_rank == 0:
+                print(f"{self.model_type} Model created")
+        
+        # Wrap model with DDP
+        self.model = DDP(self.model, 
+                         device_ids=[self.local_rank],
+                         find_unused_parameters=True)
+    
+    def _initialize_loss_manager(self):
+        grid_data = None
+        self.loss_manager = OPFLossManager(
+            loss_type=self.loss_type,
+            grid_data=grid_data,
+            device=self.device,
+        )
+        
+        if self.global_rank == 0:
+            print(f"Loss Manager initialized with loss_type='{self.loss_type}'")
+    
+    def forward(self, batch):
+        if self.model_type in ['HeteroGNN', 'RGAT', 'HEAT', 'HGT']:
+            x_dict = {k: v.float() for k, v in batch.x_dict.items()}
+            return self.model.module(x_dict, batch.edge_index_dict, minmax_scaling=self.minmax_scaling)
+        else:
+            if isinstance(batch, torch.Tensor) or hasattr(batch, 'node_type'):
+                homo_batch = batch
+            else:
+                homo_batch = convert_opf_to_homo(batch)
+                homo_batch = homo_batch.to(self.device)
+
+            if hasattr(homo_batch, 'x'):
+                homo_batch.x = homo_batch.x.float()
+            if hasattr(homo_batch, 'edge_attr') and homo_batch.edge_attr is not None:
+                homo_batch.edge_attr = homo_batch.edge_attr.float()
+
+            homo_output = self.model.module(homo_batch)
+
+            predictions = {}
+            node_types = ['bus', 'generator', 'load', 'shunt']
+            for i, node_type in enumerate(node_types):
+                mask = (homo_batch.node_type == i)
+                if mask.any():
+                    predictions[node_type] = homo_output[mask]
+            return predictions
+    
+    def train_epoch(self, epoch):
+        self.model.train()
+        self.train_sampler.set_epoch(epoch)
+        
+        total_loss = 0
+        total_mse_loss = 0
+        num_batches = 0
+
+        if self.global_rank == 0:
+            pbar = tqdm(self.train_loader, desc=f'Epoch {epoch}')
+        else:
+            pbar = self.train_loader
+        
+        for batch in pbar:
+            batch = batch.to(self.device)
+            
+            self.optimizer.zero_grad()
+            
+            predictions = self.forward(batch)
+            loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
+            
+            loss.backward()
+            self.optimizer.step()
+            
+            total_loss += loss.item()
+            if 'mse_loss' in loss_info:
+                total_mse_loss += loss_info['mse_loss']
+            num_batches += 1
+            
+            if self.global_rank == 0:
+                pbar.set_postfix({'loss': loss.item()})
+        
+        avg_loss = total_loss / num_batches
+        avg_mse_loss = total_mse_loss / num_batches
+        
+        # Reduce losses across all processes
+        loss_tensor = torch.tensor([avg_loss, avg_mse_loss], device=self.device)
+        dist.all_reduce(loss_tensor, op=dist.ReduceOp.AVG)
+        
+        self.loss_manager.step_epoch()
+        
+        return loss_tensor[0].item(), loss_tensor[1].item()
+    
+    def validate(self):
+        self.model.eval()
+        
+        total_loss = 0
+        total_mse_loss = 0
+        num_batches = 0
+        
+        with torch.no_grad():
+            for batch in self.val_loader:
+                batch = batch.to(self.device)
+                
+                predictions = self.forward(batch)
+                loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
+                
+                total_loss += loss.item()
+                if 'mse_loss' in loss_info:
+                    total_mse_loss += loss_info['mse_loss']
+                num_batches += 1
+        
+        # Average losses
+        avg_loss = total_loss / num_batches
+        avg_mse_loss = total_mse_loss / num_batches
+        
+        # Reduce losses across all processes
+        loss_tensor = torch.tensor([avg_loss, avg_mse_loss], device=self.device)
+        dist.all_reduce(loss_tensor, op=dist.ReduceOp.AVG)
+        
+        return loss_tensor[0].item(), loss_tensor[1].item()
+    
+    def save_checkpoint(self, filepath):
+        if self.global_rank == 0:
+            checkpoint = {
+                'epoch': self.current_epoch,
+                'model_state_dict': self.model.module.state_dict(),
+                'optimizer_state_dict': self.optimizer.state_dict(),
+                'best_val_loss': self.best_val_loss,
+            }
+            torch.save(checkpoint, filepath)
+            print(f"Checkpoint saved to {filepath}")
+    
+    def train(self):
+        checkpoint_dir = self.checkpoint_dir
+        if self.global_rank == 0:
+            os.makedirs(checkpoint_dir, exist_ok=True)
+        
+        for epoch in range(self.max_epochs):
+            self.current_epoch = epoch
+            
+            # Training
+            train_loss, train_mse = self.train_epoch(epoch)
+            
+            # Validation
+            val_loss, val_mse = self.validate()
+            
+            if self.global_rank == 0:
+                print(f"\nEpoch {epoch}:")
+                print(f"  Train Loss: {train_loss:.4f}, Train MSE: {train_mse:.4f}")
+                print(f"  Val Loss: {val_loss:.4f}, Val MSE: {val_mse:.4f}")
+            
+            # Early stopping and checkpointing (only on rank 0)
+            if val_loss < self.best_val_loss:
+                self.best_val_loss = val_loss
+                self.patience_counter = 0
+                
+                checkpoint_path = os.path.join(
+                    checkpoint_dir,
+                    f'best-{self.case_name}-epoch{epoch:02d}-val{val_loss:.4f}.pt'
+                )
+                self.save_checkpoint(checkpoint_path)
+            else:
+                self.patience_counter += 1
+                if self.global_rank == 0:
+                    print(f"  No improvement. Patience: {self.patience_counter}/{self.patience}")
+                
+                if self.patience_counter >= self.patience:
+                    if self.global_rank == 0:
+                        print(f"\nEarly stopping triggered after {epoch+1} epochs")
+                    break
+            
+            dist.barrier()
+
+
+def main():
+    parser = argparse.ArgumentParser(description='OPF Training with PyTorch DDP')
+    parser.add_argument('--case', type=str, default='case14',
+                        help='Case name (short form like case14, case2000 or full pglib name)')
+    parser.add_argument('--group_id', type=int, default=0,
+                        help='Group ID for dataset (default: 0)')
+    parser.add_argument('--config', type=str, default='configs/config.yaml',
+                        help='Path to config file')
+    parser.add_argument('--model_type', type=str, default='HeteroGNN',
+                        choices=['HeteroGNN', 'RGAT', 'HGT'],
+                        help='Model type to train (default: HeteroGNN)')
+    parser.add_argument('--loss_type', type=str, default='mse',
+                        choices=['mse', 'rmse', 'mae', 'mape', 'smooth_l1'],
+                        help='Loss function type (default: mse)')
+    parser.add_argument('--minmax_scaling', dest='minmax_scaling', action='store_true',
+                        help='Apply min-max scaling to model outputs (default: enabled)')
+    
+    args = parser.parse_args()
+    
+    local_rank = int(os.environ.get('MPI_LOCALRANKID', 0))
+    os.environ['LOCAL_RANK'] = str(local_rank)
+    world_size = int(os.environ.get('PMI_SIZE', 1))
+    global_rank = int(os.environ.get('PMI_RANK', 0))
+
+        # Initialize process group
+    dist.init_process_group(
+        backend='nccl',
+        init_method='env://',
+        world_size=world_size,
+        rank=global_rank
+    )
+
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+    
+    if global_rank == 0:
+        print(f"ACOPF Training (PyTorch DDP)")
+        print("=" * 60)
+        print(f"World Size: {world_size}")
+    
+    # Load config
+    config_path = args.config
+    if not os.path.exists(config_path):
+        parent_config = os.path.join(Path(__file__).parent.parent, 'config_files', 'single.yaml')
+        if os.path.exists(parent_config):
+            config_path = parent_config
+        else:
+            acopf_config = os.path.join(
+                Path(__file__).parent.parent.parent,
+                'configs',
+                'config.polaris.ddp.yaml')
+            if os.path.exists(acopf_config):
+                config_path = acopf_config
+    
+    if global_rank == 0:
+        print(f"Loading config from: {config_path}")
+    
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+    
+    # Load model config
+    config_dir = Path(config_path).parent
+    model_config_path = config_dir / 'model' / 'heterognn.yaml'
+    if not model_config_path.exists():
+        model_config_path = Path(__file__).parent.parent / 'configs' / 'model' / 'heterognn.yaml'
+    
+    if model_config_path.exists():
+        if global_rank == 0:
+            print(f"Loading additional model config from: {model_config_path}")
+        with open(model_config_path, "r") as f:
+            model_config = yaml.safe_load(f)
+            if 'models' in model_config:
+                if 'models' not in config:
+                    config['models'] = {}
+                config['models'].update(model_config['models'])
+    
+    case_name = parse_case_name(args.case)
+    
+    # Initialize trainer
+    trainer = OPFTrainer(
+        config=config,
+        case_name=case_name,
+        group_id=args.group_id,
+        model_type=args.model_type,
+        loss_type=args.loss_type,
+        minmax_scaling=args.minmax_scaling,
+        local_rank=local_rank,
+        global_rank=global_rank,
+        world_size=world_size
+    )
+
+    # Train
+    trainer.train()
+    
+    if global_rank == 0:
+        print("\nTraining completed!")
+    
+    dist.destroy_process_group()
+
+
+if __name__ == "__main__":
+    main()
