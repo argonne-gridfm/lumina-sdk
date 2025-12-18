@@ -36,6 +36,12 @@ lagrangian:
   multiplier_min_improve: 0.0
   normalize_constraints: true
   verbose: false
+train_split: 0.8
+val_split: 0.1
+loader:
+  batch_size: 32
+  shuffle: true
+  num_workers: 0
 training:
   max_epochs: 10
   patience: 10 

@@ -103,6 +103,10 @@ class OPFTrainer:
         self.world_size = world_size
         self.device = torch.device(f'cuda:{local_rank}')
 
+        training_config = self.config['training']
+        self.max_epochs = training_config["max_epochs"]
+        self.patience = training_config["patience"]
+
         self.checkpoint_dir = config['checkpoint_dir']
         
         # Initialize dataset and model
@@ -401,12 +405,12 @@ class OPFTrainer:
             torch.save(checkpoint, filepath)
             print(f"Checkpoint saved to {filepath}")
     
-    def train(self, max_epochs, patience=10):
+    def train(self):
         checkpoint_dir = self.checkpoint_dir
         if self.global_rank == 0:
             os.makedirs(checkpoint_dir, exist_ok=True)
         
-        for epoch in range(max_epochs):
+        for epoch in range(self.max_epochs):
             self.current_epoch = epoch
             
             # Training
@@ -433,9 +437,9 @@ class OPFTrainer:
             else:
                 self.patience_counter += 1
                 if self.global_rank == 0:
-                    print(f"  No improvement. Patience: {self.patience_counter}/{patience}")
+                    print(f"  No improvement. Patience: {self.patience_counter}/{self.patience}")
                 
-                if self.patience_counter >= patience:
+                if self.patience_counter >= self.patience:
                     if self.global_rank == 0:
                         print(f"\nEarly stopping triggered after {epoch+1} epochs")
                     break
@@ -459,15 +463,6 @@ def main():
                         help='Loss function type (default: mse)')
     parser.add_argument('--minmax_scaling', dest='minmax_scaling', action='store_true',
                         help='Apply min-max scaling to model outputs (default: enabled)')
-    parser.add_argument('--no_minmax_scaling', dest='minmax_scaling', action='store_false',
-                        help='Disable min-max scaling of model outputs')
-    parser.set_defaults(minmax_scaling=True)
-    parser.add_argument('--max_epochs', type=int, default=10,
-                        help='Maximum number of epochs (default: 1)')
-    parser.add_argument('--patience', type=int, default=10,
-                        help='Early stopping patience (default: 10)')
-    parser.add_argument('--checkpoint_dir', type=str, default='checkpoints',
-                        help='Directory to save checkpoints (default: checkpoints)')
     
     args = parser.parse_args()
     
@@ -528,19 +523,6 @@ def main():
                     config['models'] = {}
                 config['models'].update(model_config['models'])
     
-    # Ensure loader and split config exists
-    if 'loader' not in config:
-        config['loader'] = {
-            'batch_size': 32,
-            'shuffle': True,
-            'num_workers': 0
-        }
-    
-    if 'train_split' not in config:
-        config['train_split'] = 0.8
-    if 'val_split' not in config:
-        config['val_split'] = 0.1
-    
     case_name = parse_case_name(args.case)
     
     # Initialize trainer
@@ -555,13 +537,9 @@ def main():
         global_rank=global_rank,
         world_size=world_size
     )
-    
-    # checkpoint_dir from config if exists
+
     # Train
-    trainer.train(
-        max_epochs=args.max_epochs,
-        patience=args.patience,
-    )
+    trainer.train()
     
     if global_rank == 0:
         print("\nTraining completed!")
