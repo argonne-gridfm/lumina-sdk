@@ -1,7 +1,7 @@
 ---
 root: "/eagle/GridFM/datasets/acopf/"
 logging_dir: "/eagle/GridFM/logs/"
-checkpoint_dir: "/eagle/GridFM/checkpoints/"
+checkpoint_dir: "/eagle/GridFM/ddp_checkpoints/"
 optimizer:
   Adam:
     lr: 1.0e-04
@@ -37,7 +37,7 @@ lagrangian:
   normalize_constraints: true
   verbose: false
 training:
-  max_epochs: 100
+  max_epochs: 10
   patience: 10 
   gradient_clip_val: 1.0
   gradient_clip_algorithm: "norm"

@@ -1,7 +1,4 @@
 import argparse
-import json
-import sys
-import time
 from pathlib import Path
 import os
 
@@ -28,28 +25,6 @@ from lumina.model.opf.losses import OPFLossManager
 from lumina.model.opf.homo_model import get_gnnNets
 from lumina.model.opf.hetero_model import HEAT, HGT, RGAT, OPFHeteroGNN
 from lumina.utils.graph_utils import HomoOPFDataset, convert_opf_to_homo
-
-
-def setup_ddp(rank, world_size):
-    os.environ['MASTER_ADDR'] = os.environ.get('MASTER_ADDR', 'localhost')
-    os.environ['MASTER_PORT'] = os.environ.get('MASTER_PORT', '12355')
-    
-    # Initialize process group
-    dist.init_process_group(
-        backend='nccl' if torch.cuda.is_available() else 'gloo',
-        init_method='env://',
-        world_size=world_size,
-        rank=rank
-    )
-    
-    # Set device
-    if torch.cuda.is_available():
-        torch.cuda.set_device(rank)
-
-
-def cleanup_ddp():
-    dist.destroy_process_group()
-
 
 def initialize_model(model, sample_data, device):
     if dist.get_rank() == 0:
@@ -116,16 +91,19 @@ def parse_case_name(case_input: str) -> str:
 
 class OPFTrainer:
     def __init__(self, config, case_name, group_id, model_type, loss_type='mse', 
-                 minmax_scaling=True, rank=0, world_size=1):
+                 minmax_scaling=True, local_rank=0, global_rank = 0, world_size=1):
         self.config = config
         self.case_name = case_name
         self.group_id = group_id
         self.model_type = model_type
         self.loss_type = loss_type
         self.minmax_scaling = minmax_scaling
-        self.rank = rank
+        self.local_rank = local_rank
+        self.global_rank = global_rank
         self.world_size = world_size
-        self.device = torch.device(f'cuda:{rank}' if torch.cuda.is_available() else 'cpu')
+        self.device = torch.device(f'cuda:{local_rank}')
+
+        self.checkpoint_dir = config['checkpoint_dir']
         
         # Initialize dataset and model
         self._load_dataset()
@@ -154,8 +132,8 @@ class OPFTrainer:
             local_raw_folder=self.config.get('local_raw_folder'),
             force_reload=False
         )
-        if self.rank == 0:
-            print(f"✓ Dataset loaded: {len(self.dataset)} samples")
+        if self.global_rank == 0:
+            print(f"Dataset loaded: {len(self.dataset)} samples")
     
     def _create_dataloaders(self):
         n_samples = len(self.dataset)
@@ -177,14 +155,14 @@ class OPFTrainer:
         self.train_sampler = DistributedSampler(
             train_dataset,
             num_replicas=self.world_size,
-            rank=self.rank,
+            rank=self.global_rank,
             shuffle=loader_config['shuffle']
         )
         
         self.val_sampler = DistributedSampler(
             val_dataset,
             num_replicas=self.world_size,
-            rank=self.rank,
+            rank=self.global_rank,
             shuffle=False
         )
         
@@ -218,7 +196,7 @@ class OPFTrainer:
         sample_data = self.dataset[0]
 
         per_node_output_size = sample_data['bus'].y.shape[-1]
-        if self.rank == 0:
+        if self.global_rank == 0:
             print(f"Per-node output size: {per_node_output_size}")
 
         if self.model_type in ['HeteroGNN', 'RGAT', 'HEAT', 'HGT']:
@@ -234,7 +212,7 @@ class OPFTrainer:
             if self.model_type in self.config['models']:
                 model_config = self.config['models'][self.model_type]
             else:
-                if self.rank == 0:
+                if self.global_rank == 0:
                     print(f"Warning: Config for {self.model_type} not found, using HeteroGNN config")
                 model_config = self.config['models']['HeteroGNN']
 
@@ -264,8 +242,8 @@ class OPFTrainer:
             self.model = ModelClass(**kwargs)
             initialize_model(self.model, sample_data, self.device)
             
-            if self.rank == 0:
-                print(f"✓ {self.model_type} Model created")
+            if self.global_rank == 0:
+                print(f"{self.model_type} Model created")
 
         else:
             homo_sample = convert_opf_to_homo(sample_data)
@@ -295,11 +273,12 @@ class OPFTrainer:
             )
 
             initialize_model(self.model, homo_sample, self.device)
-            if self.rank == 0:
-                print(f"✓ {self.model_type} Model created")
+            if self.global_rank == 0:
+                print(f"{self.model_type} Model created")
         
         # Wrap model with DDP
-        self.model = DDP(self.model, device_ids=[self.rank] if torch.cuda.is_available() else None,
+        self.model = DDP(self.model, 
+                         device_ids=[self.local_rank],
                          find_unused_parameters=True)
     
     def _initialize_loss_manager(self):
@@ -310,8 +289,8 @@ class OPFTrainer:
             device=self.device,
         )
         
-        if self.rank == 0:
-            print(f"✓ Loss Manager initialized with loss_type='{self.loss_type}'")
+        if self.global_rank == 0:
+            print(f"Loss Manager initialized with loss_type='{self.loss_type}'")
     
     def forward(self, batch):
         if self.model_type in ['HeteroGNN', 'RGAT', 'HEAT', 'HGT']:
@@ -341,14 +320,13 @@ class OPFTrainer:
     
     def train_epoch(self, epoch):
         self.model.train()
-        self.train_sampler.set_epoch(epoch)  # Important for shuffling
+        self.train_sampler.set_epoch(epoch)
         
         total_loss = 0
         total_mse_loss = 0
         num_batches = 0
-        
-        # Only show progress bar on rank 0
-        if self.rank == 0:
+
+        if self.global_rank == 0:
             pbar = tqdm(self.train_loader, desc=f'Epoch {epoch}')
         else:
             pbar = self.train_loader
@@ -369,7 +347,7 @@ class OPFTrainer:
                 total_mse_loss += loss_info['mse_loss']
             num_batches += 1
             
-            if self.rank == 0:
+            if self.global_rank == 0:
                 pbar.set_postfix({'loss': loss.item()})
         
         avg_loss = total_loss / num_batches
@@ -413,7 +391,7 @@ class OPFTrainer:
         return loss_tensor[0].item(), loss_tensor[1].item()
     
     def save_checkpoint(self, filepath):
-        if self.rank == 0:
+        if self.global_rank == 0:
             checkpoint = {
                 'epoch': self.current_epoch,
                 'model_state_dict': self.model.module.state_dict(),
@@ -421,10 +399,11 @@ class OPFTrainer:
                 'best_val_loss': self.best_val_loss,
             }
             torch.save(checkpoint, filepath)
-            print(f"💾 Checkpoint saved to {filepath}")
+            print(f"Checkpoint saved to {filepath}")
     
-    def train(self, max_epochs, patience=10, checkpoint_dir='checkpoints'):
-        if self.rank == 0:
+    def train(self, max_epochs, patience=10):
+        checkpoint_dir = self.checkpoint_dir
+        if self.global_rank == 0:
             os.makedirs(checkpoint_dir, exist_ok=True)
         
         for epoch in range(max_epochs):
@@ -436,7 +415,7 @@ class OPFTrainer:
             # Validation
             val_loss, val_mse = self.validate()
             
-            if self.rank == 0:
+            if self.global_rank == 0:
                 print(f"\nEpoch {epoch}:")
                 print(f"  Train Loss: {train_loss:.4f}, Train MSE: {train_mse:.4f}")
                 print(f"  Val Loss: {val_loss:.4f}, Val MSE: {val_mse:.4f}")
@@ -453,15 +432,14 @@ class OPFTrainer:
                 self.save_checkpoint(checkpoint_path)
             else:
                 self.patience_counter += 1
-                if self.rank == 0:
+                if self.global_rank == 0:
                     print(f"  No improvement. Patience: {self.patience_counter}/{patience}")
                 
                 if self.patience_counter >= patience:
-                    if self.rank == 0:
-                        print(f"\n⏹️  Early stopping triggered after {epoch+1} epochs")
+                    if self.global_rank == 0:
+                        print(f"\nEarly stopping triggered after {epoch+1} epochs")
                     break
             
-            # Synchronize all processes
             dist.barrier()
 
 
@@ -484,8 +462,8 @@ def main():
     parser.add_argument('--no_minmax_scaling', dest='minmax_scaling', action='store_false',
                         help='Disable min-max scaling of model outputs')
     parser.set_defaults(minmax_scaling=True)
-    parser.add_argument('--max_epochs', type=int, default=100,
-                        help='Maximum number of epochs (default: 100)')
+    parser.add_argument('--max_epochs', type=int, default=10,
+                        help='Maximum number of epochs (default: 1)')
     parser.add_argument('--patience', type=int, default=10,
                         help='Early stopping patience (default: 10)')
     parser.add_argument('--checkpoint_dir', type=str, default='checkpoints',
@@ -493,19 +471,26 @@ def main():
     
     args = parser.parse_args()
     
-    # Get rank and world size from environment variables (set by torchrun)
-    rank = int(os.environ.get('RANK', 0))
-    local_rank = int(os.environ.get('LOCAL_RANK', 0))
-    world_size = int(os.environ.get('WORLD_SIZE', 1))
+    local_rank = int(os.environ.get('MPI_LOCALRANKID', 0))
+    os.environ['LOCAL_RANK'] = str(local_rank)
+    world_size = int(os.environ.get('PMI_SIZE', 1))
+    global_rank = int(os.environ.get('PMI_RANK', 0))
+
+        # Initialize process group
+    dist.init_process_group(
+        backend='nccl',
+        init_method='env://',
+        world_size=world_size,
+        rank=global_rank
+    )
+
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
     
-    # Setup DDP
-    setup_ddp(local_rank, world_size)
-    
-    if rank == 0:
-        print(f"🚀 ACOPF Training (PyTorch DDP)")
+    if global_rank == 0:
+        print(f"ACOPF Training (PyTorch DDP)")
         print("=" * 60)
         print(f"World Size: {world_size}")
-        print(f"Using {'CUDA' if torch.cuda.is_available() else 'CPU'}")
     
     # Load config
     config_path = args.config
@@ -516,13 +501,12 @@ def main():
         else:
             acopf_config = os.path.join(
                 Path(__file__).parent.parent.parent,
-                'lumina-core',
                 'configs',
-                'config.yaml')
+                'config.polaris.ddp.yaml')
             if os.path.exists(acopf_config):
                 config_path = acopf_config
     
-    if rank == 0:
+    if global_rank == 0:
         print(f"Loading config from: {config_path}")
     
     with open(config_path, "r") as f:
@@ -535,7 +519,7 @@ def main():
         model_config_path = Path(__file__).parent.parent / 'configs' / 'model' / 'heterognn.yaml'
     
     if model_config_path.exists():
-        if rank == 0:
+        if global_rank == 0:
             print(f"Loading additional model config from: {model_config_path}")
         with open(model_config_path, "r") as f:
             model_config = yaml.safe_load(f)
@@ -549,7 +533,7 @@ def main():
         config['loader'] = {
             'batch_size': 32,
             'shuffle': True,
-            'num_workers': 4
+            'num_workers': 0
         }
     
     if 'train_split' not in config:
@@ -567,22 +551,22 @@ def main():
         model_type=args.model_type,
         loss_type=args.loss_type,
         minmax_scaling=args.minmax_scaling,
-        rank=local_rank,
+        local_rank=local_rank,
+        global_rank=global_rank,
         world_size=world_size
     )
     
+    # checkpoint_dir from config if exists
     # Train
     trainer.train(
         max_epochs=args.max_epochs,
         patience=args.patience,
-        checkpoint_dir=args.checkpoint_dir
     )
     
-    if rank == 0:
-        print("\n🎉 Training completed!")
+    if global_rank == 0:
+        print("\nTraining completed!")
     
-    # Cleanup
-    cleanup_ddp()
+    dist.destroy_process_group()
 
 
 if __name__ == "__main__":
