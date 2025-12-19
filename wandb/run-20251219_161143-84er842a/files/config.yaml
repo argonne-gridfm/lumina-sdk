@@ -1,0 +1,114 @@
+_wandb:
+    value:
+        cli_version: 0.21.1
+        e:
+            6l3uukhrtha0odbbojy8jwqzjaqai6bp:
+                args:
+                    - --config=configs/config.yaml
+                    - --wandb
+                codePath: example/opf/train_opf.py
+                codePathLocal: example/opf/train_opf.py
+                cpu_count: 128
+                cpu_count_logical: 256
+                cudaVersion: "12.7"
+                disk:
+                    /:
+                        total: "270098108416"
+                        used: "749993984"
+                email: zeeshan.memon@emory.edu
+                executable: /home/zeeshanmemon/FM_Grid/venv/bin/python
+                git:
+                    commit: 67c3a5f387ae3bc0f75f762cbebfe8618666faf9
+                    remote: git@github.com:argonne-gridfm/lumina-core.git
+                gpu: NVIDIA A100 80GB PCIe
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ampere
+                      cudaCores: 6272
+                      memoryTotal: "85899345920"
+                      name: NVIDIA A100 80GB PCIe
+                      uuid: GPU-aeb75d35-f45f-04a9-4cf9-2cb3a4b068ab
+                host: polaris-login-02
+                memory:
+                    total: "540196216832"
+                os: Linux-6.4.0-150600.23.53-default-x86_64-with-glibc2.38
+                program: /home/zeeshanmemon/FM_Grid/LUMA_Grid/lumina-core/example/opf/train_opf.py
+                python: CPython 3.11.5
+                root: .
+                slurm:
+                    mpi_type: cray_shasta
+                startedAt: "2025-12-19T16:11:43.093809Z"
+                writerId: 6l3uukhrtha0odbbojy8jwqzjaqai6bp
+        m:
+            - "1": trainer/global_step
+              "6":
+                - 3
+              "7": []
+            - "2": '*'
+              "5": 1
+              "6":
+                - 1
+              "7": []
+        python_version: 3.11.5
+        t:
+            "1":
+                - 1
+                - 53
+                - 77
+                - 106
+            "2":
+                - 1
+                - 53
+                - 77
+                - 106
+            "3":
+                - 7
+                - 14
+                - 66
+            "4": 3.11.5
+            "5": 0.21.1
+            "12": 0.21.1
+            "13": linux-x86_64
+case:
+    value: case30
+loader.batch_size:
+    value: 32
+loss_type:
+    value: mse
+model_type:
+    value: HeteroGNN
+optimizer.Adam.lr:
+    value: 3.207693111881501e-05
+optimizer.Adam.weight_decay:
+    value: 6.1295830534704455e-06
+run_metadata:
+    value:
+        case_name: pglib_opf_case30_ieee
+        cli_args:
+            accelerator: auto
+            case: case30
+            config: configs/config.yaml
+            devices: 4
+            group_id: 0
+            loss_type: mse
+            model_type: HeteroGNN
+            num_nodes: 1
+            precision: 32-true
+            strategy: ddp_find_unused_parameters_true
+            use_lagrangian: false
+        config_path: configs/config.yaml
+        group_id: 0
+        loss_type: mse
+        model_type: HeteroGNN
+trainer.devices:
+    value: 1
+trainer.max_epochs:
+    value: 100
+trainer.num_nodes:
+    value: 1
+trainer.precision:
+    value: 32-true
+trainer.strategy:
+    value: auto
+wandb_project:
+    value: lumina-opf

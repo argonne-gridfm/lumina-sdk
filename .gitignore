@@ -12,7 +12,9 @@ build/
 develop-eggs/
 dist/
 downloads/
+wandb/
 eggs/
+opf_data/
 .eggs/
 lib/
 lib64/

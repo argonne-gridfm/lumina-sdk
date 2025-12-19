@@ -1,0 +1,26 @@
+wandb_version: 1
+
+case:
+  value: case57
+loader.batch_size:
+  value: 32
+loss_type:
+  value: augmented_lagrangian
+model_type:
+  value: HeteroGNN
+optimizer.Adam.lr:
+  value: 1.413652482360636e-05
+optimizer.Adam.weight_decay:
+  value: 1.971326592144273e-05
+trainer.devices:
+  value: 1
+trainer.max_epochs:
+  value: 100
+trainer.num_nodes:
+  value: 1
+trainer.precision:
+  value: 32-true
+trainer.strategy:
+  value: auto
+wandb_project:
+  value: lumina-opf

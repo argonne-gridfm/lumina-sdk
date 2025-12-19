@@ -5,9 +5,12 @@ Full training script using Augmented Lagrangian method for ACOPF, it uses PyTorc
 """
 
 import argparse
+import copy
 import json
 import sys
 import time
+import subprocess
+import tempfile
 from pathlib import Path
 import os
 
@@ -20,6 +23,11 @@ from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
+
+try:
+    from lightning.pytorch.loggers import WandbLogger
+except ImportError:
+    WandbLogger = None
 
 # Optional plotting imports
 try:
@@ -520,6 +528,106 @@ class OPFLightningModule(pl.LightningModule):
         return loss
 
 
+def submit_slurm_job(args_dict, config_path, project_root):
+    """Submit a SLURM job for training when running under W&B agent."""
+    # Get W&B sweep ID and run ID from environment
+    sweep_id = os.environ.get('WANDB_SWEEP_ID')
+    run_id = os.environ.get('WANDB_RUN_ID', 'unknown')
+    
+    # Build command arguments from args_dict
+    cmd_args = [
+        'python', 'example/opf/train_opf.py',
+        '--config', str(config_path),
+        '--wandb',
+        '--wandb_mode', 'offline',
+    ]
+    
+    # Add arguments that are in args_dict
+    arg_mapping = {
+        'case': '--case',
+        'group_id': '--group_id',
+        'model_type': '--model_type',
+        'loss_type': '--loss_type',
+        'accelerator': '--accelerator',
+        'devices': '--devices',
+        'num_nodes': '--num_nodes',
+        'precision': '--precision',
+        'strategy': '--strategy',
+        'wandb_project': '--wandb_project',
+    }
+    
+    for key, flag in arg_mapping.items():
+        if key in args_dict and args_dict[key] is not None:
+            cmd_args.extend([flag, str(args_dict[key])])
+    
+    # Create SLURM script
+    script_content = f"""#!/bin/bash
+#SBATCH --job-name=opf_train_{run_id[:8]}
+#SBATCH --output=slurm_logs/opf_train_%j.out
+#SBATCH --error=slurm_logs/opf_train_%j.err
+#SBATCH --time=24:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=8
+#SBATCH --gres=gpu:1
+#SBATCH --partition=gpuA100x4
+
+# Load modules (adjust for your system)
+module load python
+module load cuda
+
+# Activate virtual environment
+source {project_root}/venv/bin/activate
+
+# Set W&B to offline mode (compute nodes have no internet)
+export WANDB_MODE=offline
+export WANDB_SWEEP_ID={sweep_id}
+export WANDB_RUN_ID={run_id}
+
+# Change to project directory
+cd {project_root}
+
+# Run training with all arguments
+{' '.join(cmd_args)}
+
+# Note: Offline W&B logs will be synced later by the agent or manually
+"""
+    
+    # Create slurm_logs directory if it doesn't exist
+    slurm_logs_dir = project_root / 'slurm_logs'
+    slurm_logs_dir.mkdir(exist_ok=True)
+    
+    # Write script to temporary file
+    script_name = f"opf_train_{run_id[:8]}.sh"
+    script_path = slurm_logs_dir / script_name
+    
+    with open(script_path, 'w') as f:
+        f.write(script_content)
+    
+    # Make script executable
+    os.chmod(script_path, 0o755)
+    
+    # Submit job
+    try:
+        result = subprocess.run(
+            ['sbatch', str(script_path)],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        job_id = result.stdout.strip().split()[-1]
+        print(f"✅ Submitted SLURM job {job_id} for W&B run {run_id}")
+        print(f"   Job script: {script_path}")
+        print(f"   Logs will be in: slurm_logs/opf_train_{job_id}.out")
+        return job_id
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Failed to submit SLURM job: {e.stderr}")
+        sys.exit(1)
+    except FileNotFoundError:
+        print("❌ 'sbatch' command not found. Are you on a system with SLURM?")
+        sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(description='OPF Training with PyTorch Lightning - Supports Multiple Loss Types')
     parser.add_argument('--case', type=str, default='case14',
@@ -555,11 +663,87 @@ def main():
     parser.add_argument('--precision', type=str, default='32-true', help='Precision (default: 32-true)')
     parser.add_argument('--strategy', type=str, default='ddp_find_unused_parameters_true',
                         help='Strategy (default: ddp_find_unused_parameters_true)')
+    parser.add_argument('--wandb', action='store_true', default=False,
+                        help='Enable Weights & Biases logging')
+    parser.add_argument('--wandb_project', type=str, default='lumina-opf',
+                        help='Weights & Biases project name (default: lumina-opf)')
+    parser.add_argument('--wandb_entity', type=str, default=None,
+                        help='Weights & Biases entity/team name')
+    parser.add_argument('--wandb_run_name', type=str, default=None,
+                        help='Custom name for the Weights & Biases run')
+    parser.add_argument('--wandb_mode', type=str, default=None,
+                        choices=['online', 'offline', 'disabled'],
+                        help='Weights & Biases mode override')
 
     args = parser.parse_args()
 
-    print(f"🚀 ACOPF Training (Lightning) with loss_type = {args.loss_type}")
-    print("=" * 60)
+    if args.wandb_mode:
+        os.environ['WANDB_MODE'] = args.wandb_mode
+
+    # Check if we're running under W&B agent (on login node with internet)
+    # If so, submit a SLURM job instead of training directly
+    if os.environ.get('WANDB_SWEEP_ID') and not os.environ.get('SLURM_JOB_ID'):
+        # We're on login node, need to get W&B config first, then submit SLURM job
+        if not args.wandb:
+            print("⚠️ W&B agent detected but --wandb not set. Adding --wandb flag.")
+            args.wandb = True
+        
+        # Initialize W&B temporarily to get sweep config values
+        try:
+            import wandb
+            # Initialize wandb to read config (this connects to W&B API on login node)
+            wandb.init(
+                project=args.wandb_project or 'lumina-opf',
+                entity=args.wandb_entity,
+                mode='online',  # Login node has internet
+                reinit=True
+            )
+            sweep_config = dict(wandb.config)
+            wandb.finish()
+            
+            # Merge sweep config into args
+            if 'case' in sweep_config:
+                args.case = sweep_config['case']
+            if 'model_type' in sweep_config:
+                args.model_type = sweep_config['model_type']
+            if 'loss_type' in sweep_config:
+                args.loss_type = sweep_config['loss_type']
+            if 'trainer.devices' in sweep_config:
+                args.devices = sweep_config['trainer.devices']
+            if 'trainer.num_nodes' in sweep_config:
+                args.num_nodes = sweep_config['trainer.num_nodes']
+            if 'trainer.precision' in sweep_config:
+                args.precision = sweep_config['trainer.precision']
+            if 'trainer.strategy' in sweep_config:
+                args.strategy = sweep_config['trainer.strategy']
+            if 'wandb_project' in sweep_config:
+                args.wandb_project = sweep_config['wandb_project']
+            
+        except Exception as e:
+            print(f"⚠️ Could not read W&B config: {e}")
+            print("   Proceeding with command-line arguments only.")
+        
+        # Get config path (will be resolved properly below, but we need it now)
+        config_path = args.config
+        
+        # Prepare arguments dict for SLURM job
+        args_dict = {
+            'case': args.case,
+            'group_id': args.group_id,
+            'model_type': args.model_type,
+            'loss_type': args.loss_type,
+            'accelerator': args.accelerator,
+            'devices': args.devices,
+            'num_nodes': args.num_nodes,
+            'precision': args.precision,
+            'strategy': args.strategy,
+            'wandb_project': args.wandb_project or 'lumina-opf',
+        }
+        
+        submit_slurm_job(args_dict, config_path, PROJECT_ROOT)
+        return  # Exit after submitting job
+
+    wandb_logger = None
 
     config_path = args.config
     if not os.path.exists(config_path):
@@ -612,6 +796,54 @@ def main():
     if 'val_split' not in config:
         config['val_split'] = 0.1
 
+    sweep_overrides = {}
+    if args.wandb:
+        if WandbLogger is None:
+            print("⚠️ Weights & Biases is not available. Install wandb or omit --wandb.")
+        else:
+            wandb_kwargs = {}
+            if args.wandb_project:
+                wandb_kwargs['project'] = args.wandb_project
+            if args.wandb_entity:
+                wandb_kwargs['entity'] = args.wandb_entity
+            if args.wandb_run_name:
+                wandb_kwargs['name'] = args.wandb_run_name
+
+            wandb_kwargs.setdefault('log_model', False)
+
+            wandb_logger = WandbLogger(**wandb_kwargs)
+            sweep_overrides = dict(wandb_logger.experiment.config)
+
+    def apply_nested(target_dict, dotted_key, value):
+        if not isinstance(target_dict, dict):
+            return
+        if not isinstance(dotted_key, str):
+            return
+
+        keys = dotted_key.split('.')
+        current = target_dict
+        for key in keys[:-1]:
+            if key not in current or not isinstance(current[key], dict):
+                current[key] = {}
+            current = current[key]
+        current[keys[-1]] = value
+
+    if sweep_overrides:
+        reserved_override_keys = {'wandb_version'}
+        reserved_args = {'wandb', 'wandb_project', 'wandb_entity', 'wandb_run_name', 'wandb_mode'}
+
+        for key, value in sweep_overrides.items():
+            if not isinstance(key, str):
+                continue
+            if key in reserved_override_keys or key.startswith('_'):
+                continue
+            if key in reserved_args:
+                continue
+            if hasattr(args, key):
+                setattr(args, key, value)
+                continue
+            apply_nested(config, key, value)
+
     case_name = parse_case_name(args.case)
 
     # Handle backward compatibility for --use_lagrangian flag
@@ -619,6 +851,9 @@ def main():
     if args.use_lagrangian and loss_type == 'mse':
         loss_type = 'augmented_lagrangian'
         print("Note: --use_lagrangian flag is deprecated. Using --loss_type augmented_lagrangian instead.")
+
+    print(f"🚀 ACOPF Training (Lightning) with loss_type = {loss_type}")
+    print("=" * 60)
 
     # Initialize Lightning Module
     model = OPFLightningModule(
@@ -630,7 +865,7 @@ def main():
     )
 
     # Initialize Trainer
-    trainer_config = config.get('trainer', {})
+    trainer_config = copy.deepcopy(config.get('trainer', {}))
 
     # Override trainer config with args
     trainer_config['accelerator'] = args.accelerator
@@ -660,16 +895,49 @@ def main():
         mode='min'
     )
 
-    trainer = pl.Trainer(
-        **trainer_config,
-        callbacks=[checkpoint_callback, early_stop_callback]
-    )
+    callbacks = list(trainer_config.pop('callbacks', []))
+    callbacks.extend([checkpoint_callback, early_stop_callback])
+
+    trainer_kwargs = {**trainer_config, 'callbacks': callbacks}
+
+    if wandb_logger is not None:
+        run_metadata = {
+            'case_name': case_name,
+            'config_path': str(config_path),
+            'group_id': args.group_id,
+            'loss_type': loss_type,
+            'model_type': args.model_type,
+            'cli_args': {k: v for k, v in vars(args).items()
+                         if k not in {'wandb', 'wandb_project', 'wandb_entity', 'wandb_run_name', 'wandb_mode'}},
+        }
+        try:
+            wandb_logger.experiment.config.update({'run_metadata': run_metadata}, allow_val_change=True)
+        except AttributeError:
+            pass
+
+    if wandb_logger is not None:
+        trainer_kwargs['logger'] = wandb_logger
+
+    trainer = pl.Trainer(**trainer_kwargs)
 
     # Train
     trainer.fit(model)
 
+    if wandb_logger is not None:
+        try:
+            wandb_logger.experiment.summary['best_model_path'] = checkpoint_callback.best_model_path
+        except AttributeError:
+            pass
+
     print("\n🎉 Training completed!")
     print(f"💾 Best model saved to: {checkpoint_callback.best_model_path}")
+
+    if wandb_logger is not None:
+        try:
+            import wandb
+            wandb.finish()
+        except ImportError:
+            pass
 
 
 if __name__ == "__main__":
