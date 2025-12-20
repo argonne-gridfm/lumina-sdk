@@ -514,12 +514,11 @@ def main():
     
     args = parser.parse_args()
     
-    local_rank = int(os.environ.get('MPI_LOCALRANKID', 0))
-    os.environ['LOCAL_RANK'] = str(local_rank)
-    world_size = int(os.environ.get('PMI_SIZE', 1))
-    global_rank = int(os.environ.get('PMI_RANK', 0))
+    local_rank = int(os.environ.get('LOCAL_RANK', 0))
+    world_size = int(os.environ.get('WORLD_SIZE', 1))
+    global_rank = int(os.environ.get('RANK', 0))
 
-        # Initialize process group
+    # Initialize process group
     dist.init_process_group(
         backend='nccl',
         init_method='env://',
