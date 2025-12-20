@@ -47,6 +47,24 @@ export PYTHONPATH="$PBS_O_WORKDIR:$PYTHONPATH"
 
 RDZV_ID=${PBS_JOBID:-$RANDOM}
 
+# mpiexec -n ${NHOSTS} --ppn 1 --depth=64 --cpu-bind depth \
+#     python -m torch.distributed.run \
+#     --nnodes ${NHOSTS} \
+#     --nproc_per_node ${NGPU_PER_HOST} \
+#     --rdzv_backend c10d \
+#     --rdzv_endpoint ${MASTER_ADDR}:${MASTER_PORT} \
+#     --rdzv_id ${RDZV_ID} \
+#     example/opf/train_opf.py \
+#     --case case14 \
+#     --group_id 0 \
+#     --config configs/config.polaris.yaml \
+#     --model_type HeteroGNN \
+#     --loss_type mse \
+#     --minmax_scaling \
+#     --accelerator auto \
+#     --devices ${NGPU_PER_HOST} \
+#     --num_nodes ${NHOSTS}
+
 mpiexec -n ${NHOSTS} --ppn 1 --depth=64 --cpu-bind depth \
     python -m torch.distributed.run \
     --nnodes ${NHOSTS} \
@@ -54,13 +72,5 @@ mpiexec -n ${NHOSTS} --ppn 1 --depth=64 --cpu-bind depth \
     --rdzv_backend c10d \
     --rdzv_endpoint ${MASTER_ADDR}:${MASTER_PORT} \
     --rdzv_id ${RDZV_ID} \
-    example/opf/train_opf.py \
-    --case case14 \
-    --group_id 0 \
-    --config configs/config.polaris.yaml \
-    --model_type HeteroGNN \
-    --loss_type mse \
-    --minmax_scaling \
-    --accelerator auto \
-    --devices ${NGPU_PER_HOST} \
-    --num_nodes ${NHOSTS}
+    example/opf/train_opf_ddp.py \
+    --config=configs/config.polaris.ddp.yaml --loss_type=mse

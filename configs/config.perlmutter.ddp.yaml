@@ -1,7 +1,7 @@
 ---
-root: "/eagle/GridFM/datasets/acopf/"
-logging_dir: "/eagle/GridFM/lumina/logs/"
-checkpoint_dir: "/eagle/GridFM/lumina/ddp_checkpoints/"
+root: "/global/cfs/cdirs/amsc004/datasets/"
+logging_dir: "/global/cfs/cdirs/amsc004/lumina/logs/"
+checkpoint_dir: "/global/cfs/cdirs/amsc004/lumina/ddp_checkpoints/"
 optimizer:
   Adam:
     lr: 1.0e-04

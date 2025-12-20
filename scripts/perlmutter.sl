@@ -3,10 +3,10 @@
 #SBATCH -C gpu
 #SBATCH -q debug
 #SBATCH -t 0:30:00
-#SBATCH -N 8
-#SBATCH --ntasks-per-node=4
+#SBATCH -N 2
+#SBATCH --ntasks-per-node=1
 #SBATCH -c 32
-#SBATCH --gpus-per-task=1
+#SBATCH --gpus-per-task=4
 #SBATCH --gpu-bind=none
 # -------------------------------------------------------------------------------------------------------------------
 # To submit this script on Polaris:
@@ -15,8 +15,19 @@
 # -------------------------------------------------------------------------------------------------------------------
 
 export SLURM_CPU_BIND="cores"
+export MASTER_PORT=29500 # default from torch launcher
+export MASTER_ADDR=$(hostname)
 
 module load conda
 conda activate ${CFS}/amsc004/conda_envs/lumina
 
-srun python example/opf/train_opf.py --num_nodes=8 --devices=4 --loss_type=augmented_lagrangian
+srun --ntasks=$SLURM_JOB_NUM_NODES --ntasks-per-node=1 \
+    python -m torch.distributed.run \
+    --nnodes=$SLURM_JOB_NUM_NODES \
+    --nproc_per_node=$SLURM_GPUS_ON_NODE \
+    --rdzv_backend=c10d \
+    --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
+    example/opf/train_opf_ddp.py \
+    --config=configs/config.perlmutter.ddp.yaml \
+    --group_id=9 \
+    --loss_type=mse
