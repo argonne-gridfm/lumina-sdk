@@ -106,6 +106,11 @@ class OPFTrainer:
         training_config = self.config['training']
         self.max_epochs = training_config["max_epochs"]
         self.patience = training_config["patience"]
+        self.grad_clip_val = training_config.get("gradient_clip_val")
+        self.grad_clip_algo = training_config.get("gradient_clip_algorithm", "norm")
+        self.accumulate_grad_batches = max(1, int(training_config.get("accumulate_grad_batches", 1)))
+        self.log_every_n_steps = training_config.get("log_every_n_steps", 0)
+        self.val_check_interval = max(1, int(training_config.get("val_check_interval", 1)))
 
         self.checkpoint_dir = config['checkpoint_dir']
         
@@ -129,13 +134,21 @@ class OPFTrainer:
         self.global_step = 0
         
     def _load_dataset(self):
-        self.dataset = OPFDataset(
+        dataset_kwargs = dict(
             root=self.config['root'],
             case_name=self.case_name,
             group_id=self.group_id,
             local_raw_folder=self.config.get('local_raw_folder'),
-            force_reload=False
+            force_reload=False,
         )
+        if dist.is_available() and dist.is_initialized() and self.world_size > 1:
+            if self.global_rank == 0:
+                self.dataset = OPFDataset(**dataset_kwargs)
+            dist.barrier()
+            if self.global_rank != 0:
+                self.dataset = OPFDataset(**dataset_kwargs)
+        else:
+            self.dataset = OPFDataset(**dataset_kwargs)
         if self.global_rank == 0:
             print(f"Dataset loaded: {len(self.dataset)} samples")
     
@@ -280,6 +293,9 @@ class OPFTrainer:
             if self.global_rank == 0:
                 print(f"{self.model_type} Model created")
         
+        # TODO: Print model summary here if needed
+        # TODO: Log model summary to wandb if available
+
         # Wrap model with DDP
         self.model = DDP(self.model, 
                          device_ids=[self.local_rank],
@@ -295,6 +311,16 @@ class OPFTrainer:
         
         if self.global_rank == 0:
             print(f"Loss Manager initialized with loss_type='{self.loss_type}'")
+
+    def _clip_gradients(self):
+        if self.grad_clip_val is None or self.grad_clip_val <= 0:
+            return
+
+        parameters = [p for p in self.model.parameters() if p.requires_grad]
+        if self.grad_clip_algo == "value":
+            torch.nn.utils.clip_grad_value_(parameters, self.grad_clip_val)
+        else:
+            torch.nn.utils.clip_grad_norm_(parameters, self.grad_clip_val)
     
     def forward(self, batch):
         if self.model_type in ['HeteroGNN', 'RGAT', 'HEAT', 'HGT']:
@@ -327,38 +353,52 @@ class OPFTrainer:
         self.train_sampler.set_epoch(epoch)
         
         total_loss = 0
-        total_mse_loss = 0
+        total_task_loss = 0
         num_batches = 0
+        total_steps = len(self.train_loader)
 
         if self.global_rank == 0:
             pbar = tqdm(self.train_loader, desc=f'Epoch {epoch}')
         else:
             pbar = self.train_loader
         
-        for batch in pbar:
+        self.optimizer.zero_grad()
+
+        for batch_idx, batch in enumerate(pbar):
             batch = batch.to(self.device)
-            
-            self.optimizer.zero_grad()
             
             predictions = self.forward(batch)
             loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
+
+            loss_value = loss.item()
+            loss = loss / self.accumulate_grad_batches
             
             loss.backward()
-            self.optimizer.step()
+            should_step = ((batch_idx + 1) % self.accumulate_grad_batches == 0) or ((batch_idx + 1) == total_steps)
+
+            if should_step:
+                self._clip_gradients()
+                self.optimizer.step()
+                self.optimizer.zero_grad()
+                self.global_step += 1
             
-            total_loss += loss.item()
-            if 'mse_loss' in loss_info:
-                total_mse_loss += loss_info['mse_loss']
+            total_loss += loss_value
+            if 'objective' in loss_info:
+                total_task_loss += loss_info['objective']
             num_batches += 1
             
             if self.global_rank == 0:
-                pbar.set_postfix({'loss': loss.item()})
+                if self.log_every_n_steps and self.log_every_n_steps > 0:
+                    if self.global_step % self.log_every_n_steps == 0:
+                        pbar.set_postfix({'loss': loss_value})
+                else:
+                    pbar.set_postfix({'loss': loss_value})
         
         avg_loss = total_loss / num_batches
-        avg_mse_loss = total_mse_loss / num_batches
+        avg_task_loss = total_task_loss / num_batches
         
         # Reduce losses across all processes
-        loss_tensor = torch.tensor([avg_loss, avg_mse_loss], device=self.device)
+        loss_tensor = torch.tensor([avg_loss, avg_task_loss], device=self.device)
         dist.all_reduce(loss_tensor, op=dist.ReduceOp.AVG)
         
         self.loss_manager.step_epoch()
@@ -369,7 +409,7 @@ class OPFTrainer:
         self.model.eval()
         
         total_loss = 0
-        total_mse_loss = 0
+        total_task_loss = 0
         num_batches = 0
         
         with torch.no_grad():
@@ -380,16 +420,16 @@ class OPFTrainer:
                 loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
                 
                 total_loss += loss.item()
-                if 'mse_loss' in loss_info:
-                    total_mse_loss += loss_info['mse_loss']
+                if 'objective' in loss_info:
+                    total_task_loss += loss_info['objective']
                 num_batches += 1
         
         # Average losses
         avg_loss = total_loss / num_batches
-        avg_mse_loss = total_mse_loss / num_batches
+        avg_task_loss = total_task_loss / num_batches
         
         # Reduce losses across all processes
-        loss_tensor = torch.tensor([avg_loss, avg_mse_loss], device=self.device)
+        loss_tensor = torch.tensor([avg_loss, avg_task_loss], device=self.device)
         dist.all_reduce(loss_tensor, op=dist.ReduceOp.AVG)
         
         return loss_tensor[0].item(), loss_tensor[1].item()
@@ -414,35 +454,43 @@ class OPFTrainer:
             self.current_epoch = epoch
             
             # Training
-            train_loss, train_mse = self.train_epoch(epoch)
+            train_loss, train_task_loss = self.train_epoch(epoch)
             
             # Validation
-            val_loss, val_mse = self.validate()
+            should_validate = ((epoch + 1) % self.val_check_interval == 0)
+            val_loss = val_task_loss = None
+            if should_validate:
+                val_loss, val_task_loss = self.validate()
             
             if self.global_rank == 0:
+                # TODO: Log to wandb with more metrics used in `train_opf.py`
                 print(f"\nEpoch {epoch}:")
-                print(f"  Train Loss: {train_loss:.4f}, Train MSE: {train_mse:.4f}")
-                print(f"  Val Loss: {val_loss:.4f}, Val MSE: {val_mse:.4f}")
+                print(f"  Train Loss: {train_loss:.4f}, Train Task: {train_task_loss:.4f}")
+                if should_validate:
+                    print(f"  Val Loss: {val_loss:.4f}, Val Task: {val_task_loss:.4f}")
+                else:
+                    print("  Validation skipped this epoch")
             
             # Early stopping and checkpointing (only on rank 0)
-            if val_loss < self.best_val_loss:
-                self.best_val_loss = val_loss
-                self.patience_counter = 0
-                
-                checkpoint_path = os.path.join(
-                    checkpoint_dir,
-                    f'best-{self.case_name}-epoch{epoch:02d}-val{val_loss:.4f}.pt'
-                )
-                self.save_checkpoint(checkpoint_path)
-            else:
-                self.patience_counter += 1
-                if self.global_rank == 0:
-                    print(f"  No improvement. Patience: {self.patience_counter}/{self.patience}")
-                
-                if self.patience_counter >= self.patience:
+            if should_validate:
+                if val_loss < self.best_val_loss:
+                    self.best_val_loss = val_loss
+                    self.patience_counter = 0
+                    
+                    checkpoint_path = os.path.join(
+                        checkpoint_dir,
+                        f'best-{self.case_name}-epoch{epoch:02d}-val{val_loss:.4f}.pt'
+                    )
+                    self.save_checkpoint(checkpoint_path)
+                else:
+                    self.patience_counter += 1
                     if self.global_rank == 0:
-                        print(f"\nEarly stopping triggered after {epoch+1} epochs")
-                    break
+                        print(f"  No improvement. Patience: {self.patience_counter}/{self.patience}")
+                    
+                    if self.patience_counter >= self.patience:
+                        if self.global_rank == 0:
+                            print(f"\nEarly stopping triggered after {epoch+1} epochs")
+                        break
             
             dist.barrier()
 
