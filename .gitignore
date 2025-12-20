@@ -212,3 +212,4 @@ opf_data
 checkpoints
 wandb
 lumina.o*
+slurm-*.out
