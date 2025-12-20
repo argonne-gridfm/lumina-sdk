@@ -20,6 +20,13 @@ try:
 except ImportError:
     PLOTTING_AVAILABLE = False
 
+# Optional W&B logging
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+
 from lumina.dataset.opf.opf_dataset import OPFDataset
 from lumina.model.opf.losses import OPFLossManager
 from lumina.model.opf.homo_model import get_gnnNets
@@ -132,6 +139,62 @@ class OPFTrainer:
         self.best_val_loss = float('inf')
         self.patience_counter = 0
         self.global_step = 0
+
+        self.wandb_run = None
+        self.wandb_enabled = False
+
+        self.train_metric_names = [
+            'loss/total',
+            'loss/task',
+            'loss/lagrangian',
+            'loss/penalty',
+            'feas/total_violation',
+            'feas/total_violation_ema',
+            'feas/p_balance_rmse_pu',
+            'feas/q_balance_rmse_pu',
+            'feas/line_limit_rmse_pu',
+            'al/mu',
+            'al/lagrangian_norm',
+        ]
+        self.val_metric_names = [
+            'val/loss/total',
+            'val/loss/task',
+            'val/feas/total_violation',
+            'val/feas/p_balance_rmse_pu',
+            'val/feas/q_balance_rmse_pu',
+            'val/feas/line_limit_rmse_pu',
+        ]
+        self.train_metric_map = [
+            ('objective', 'loss/task'),
+            ('lagrange_term', 'loss/lagrangian'),
+            ('penalty_term', 'loss/penalty'),
+            ('raw_constraint_violation', 'feas/total_violation'),
+            ('ema_constraint_violation', 'feas/total_violation_ema'),
+            ('p_balance_rmse', 'feas/p_balance_rmse_pu'),
+            ('q_balance_rmse', 'feas/q_balance_rmse_pu'),
+            ('line_limit_rmse', 'feas/line_limit_rmse_pu'),
+            ('penalty_parameter', 'al/mu'),
+            ('last_multiplier_norm', 'al/lagrangian_norm'),
+        ]
+        self.val_metric_map = [
+            ('raw_constraint_violation', 'val/feas/total_violation'),
+            ('p_balance_rmse', 'val/feas/p_balance_rmse_pu'),
+            ('q_balance_rmse', 'val/feas/q_balance_rmse_pu'),
+            ('line_limit_rmse', 'val/feas/line_limit_rmse_pu'),
+        ]
+        self.train_metric_groups = [
+            ['loss/total', 'loss/task', 'loss/lagrangian', 'loss/penalty'],
+            ['feas/total_violation', 'feas/total_violation_ema', 'feas/p_balance_rmse_pu',
+             'feas/q_balance_rmse_pu', 'feas/line_limit_rmse_pu'],
+            ['al/mu', 'al/lagrangian_norm'],
+        ]
+        self.val_metric_groups = [
+            ['val/loss/total', 'val/loss/task'],
+            ['val/feas/total_violation', 'val/feas/p_balance_rmse_pu',
+             'val/feas/q_balance_rmse_pu', 'val/feas/line_limit_rmse_pu'],
+        ]
+
+        self._init_wandb()
         
     def _load_dataset(self):
         dataset_kwargs = dict(
@@ -321,6 +384,105 @@ class OPFTrainer:
             torch.nn.utils.clip_grad_value_(parameters, self.grad_clip_val)
         else:
             torch.nn.utils.clip_grad_norm_(parameters, self.grad_clip_val)
+
+    def _init_wandb(self):
+        if not WANDB_AVAILABLE or self.global_rank != 0:
+            return
+        logging_dir = self.config.get('logging_dir')
+        run_name = f"acopf-ddp-{self.model_type}-{self.loss_type}"
+        try:
+            self.wandb_run = wandb.init(
+                project='lumina-training',
+                name=run_name,
+                dir=logging_dir,
+                config=self.config,
+            )
+            self.wandb_enabled = True
+        except Exception as exc:
+            print(f"Warning: W&B init failed: {exc}")
+            self.wandb_run = None
+            self.wandb_enabled = False
+
+    def _should_log_step(self):
+        if not self.wandb_enabled:
+            return False
+        if self.log_every_n_steps and self.log_every_n_steps > 0:
+            return self.global_step % self.log_every_n_steps == 0
+        return True
+
+    def _log_wandb_step(self, loss_value, loss_info):
+        if not self._should_log_step():
+            return
+        metrics = {'loss/total': self._as_float(loss_value)}
+        for info_key, metric_name in self.train_metric_map:
+            if info_key in loss_info:
+                metric_value = self._as_float(loss_info[info_key])
+                if metric_value is not None:
+                    metrics[metric_name] = metric_value
+        wandb.log(metrics, step=self.global_step)
+
+    def _log_wandb_validation(self, metric_avgs):
+        if not self.wandb_enabled or not metric_avgs:
+            return
+        metrics = dict(metric_avgs)
+        wandb.log(metrics, step=self.global_step)
+
+    def _as_float(self, value):
+        if value is None:
+            return None
+        if torch.is_tensor(value):
+            if value.numel() == 1:
+                return value.detach().item()
+            return value.detach().float().mean().item()
+        if isinstance(value, np.ndarray):
+            return float(value.mean())
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _init_metric_trackers(self, metric_names):
+        metric_sums = {name: 0.0 for name in metric_names}
+        metric_counts = {name: 0.0 for name in metric_names}
+        return metric_sums, metric_counts
+
+    def _add_metric(self, metric_sums, metric_counts, name, value, weight=1.0):
+        numeric_value = self._as_float(value)
+        if numeric_value is None:
+            return
+        metric_sums[name] += numeric_value * weight
+        metric_counts[name] += weight
+
+    def _reduce_metrics(self, metric_sums, metric_counts):
+        if dist.is_available() and dist.is_initialized() and self.world_size > 1:
+            for name in metric_sums:
+                sum_tensor = torch.tensor(metric_sums[name], device=self.device)
+                count_tensor = torch.tensor(metric_counts[name], device=self.device)
+                dist.all_reduce(sum_tensor, op=dist.ReduceOp.SUM)
+                dist.all_reduce(count_tensor, op=dist.ReduceOp.SUM)
+                metric_sums[name] = sum_tensor.item()
+                metric_counts[name] = count_tensor.item()
+        return metric_sums, metric_counts
+
+    def _compute_metric_avgs(self, metric_sums, metric_counts):
+        metric_avgs = {}
+        for name, total in metric_sums.items():
+            count = metric_counts.get(name, 0.0)
+            if count > 0:
+                metric_avgs[name] = total / count
+        return metric_avgs
+
+    def _print_metric_groups(self, title, metric_avgs, groups):
+        if not metric_avgs:
+            return
+        print(title)
+        for names in groups:
+            parts = []
+            for name in names:
+                if name in metric_avgs:
+                    parts.append(f"{name}: {metric_avgs[name]:.4f}")
+            if parts:
+                print("    " + ", ".join(parts))
     
     def forward(self, batch):
         if self.model_type in ['HeteroGNN', 'RGAT', 'HEAT', 'HGT']:
@@ -352,10 +514,11 @@ class OPFTrainer:
         self.model.train()
         self.train_sampler.set_epoch(epoch)
         
-        total_loss = 0
-        total_task_loss = 0
+        total_loss = 0.0
+        total_task_loss = 0.0
         num_batches = 0
         total_steps = len(self.train_loader)
+        metric_sums, metric_counts = self._init_metric_trackers(self.train_metric_names)
 
         if self.global_rank == 0:
             pbar = tqdm(self.train_loader, desc=f'Epoch {epoch}')
@@ -371,6 +534,7 @@ class OPFTrainer:
             loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
 
             loss_value = loss.item()
+            self._add_metric(metric_sums, metric_counts, 'loss/total', loss_value)
             loss = loss / self.accumulate_grad_batches
             
             loss.backward()
@@ -381,10 +545,17 @@ class OPFTrainer:
                 self.optimizer.step()
                 self.optimizer.zero_grad()
                 self.global_step += 1
+                self._log_wandb_step(loss_value, loss_info)
             
             total_loss += loss_value
             if 'objective' in loss_info:
-                total_task_loss += loss_info['objective']
+                objective_value = self._as_float(loss_info['objective'])
+                if objective_value is not None:
+                    total_task_loss += objective_value
+                    self._add_metric(metric_sums, metric_counts, 'loss/task', objective_value)
+            for info_key, metric_name in self.train_metric_map:
+                if info_key in loss_info:
+                    self._add_metric(metric_sums, metric_counts, metric_name, loss_info[info_key])
             num_batches += 1
             
             if self.global_rank == 0:
@@ -400,17 +571,21 @@ class OPFTrainer:
         # Reduce losses across all processes
         loss_tensor = torch.tensor([avg_loss, avg_task_loss], device=self.device)
         dist.all_reduce(loss_tensor, op=dist.ReduceOp.AVG)
+
+        metric_sums, metric_counts = self._reduce_metrics(metric_sums, metric_counts)
+        metric_avgs = self._compute_metric_avgs(metric_sums, metric_counts)
         
         self.loss_manager.step_epoch()
         
-        return loss_tensor[0].item(), loss_tensor[1].item()
+        return loss_tensor[0].item(), loss_tensor[1].item(), metric_avgs
     
     def validate(self):
         self.model.eval()
         
-        total_loss = 0
-        total_task_loss = 0
+        total_loss = 0.0
+        total_task_loss = 0.0
         num_batches = 0
+        metric_sums, metric_counts = self._init_metric_trackers(self.val_metric_names)
         
         with torch.no_grad():
             for batch in self.val_loader:
@@ -419,9 +594,17 @@ class OPFTrainer:
                 predictions = self.forward(batch)
                 loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
                 
-                total_loss += loss.item()
+                loss_value = loss.item()
+                total_loss += loss_value
+                self._add_metric(metric_sums, metric_counts, 'val/loss/total', loss_value)
                 if 'objective' in loss_info:
-                    total_task_loss += loss_info['objective']
+                    objective_value = self._as_float(loss_info['objective'])
+                    if objective_value is not None:
+                        total_task_loss += objective_value
+                        self._add_metric(metric_sums, metric_counts, 'val/loss/task', objective_value)
+                for info_key, metric_name in self.val_metric_map:
+                    if info_key in loss_info:
+                        self._add_metric(metric_sums, metric_counts, metric_name, loss_info[info_key])
                 num_batches += 1
         
         # Average losses
@@ -432,7 +615,10 @@ class OPFTrainer:
         loss_tensor = torch.tensor([avg_loss, avg_task_loss], device=self.device)
         dist.all_reduce(loss_tensor, op=dist.ReduceOp.AVG)
         
-        return loss_tensor[0].item(), loss_tensor[1].item()
+        metric_sums, metric_counts = self._reduce_metrics(metric_sums, metric_counts)
+        metric_avgs = self._compute_metric_avgs(metric_sums, metric_counts)
+        
+        return loss_tensor[0].item(), loss_tensor[1].item(), metric_avgs
     
     def save_checkpoint(self, filepath):
         if self.global_rank == 0:
@@ -454,20 +640,25 @@ class OPFTrainer:
             self.current_epoch = epoch
             
             # Training
-            train_loss, train_task_loss = self.train_epoch(epoch)
+            train_loss, train_task_loss, train_metrics = self.train_epoch(epoch)
             
             # Validation
             should_validate = ((epoch + 1) % self.val_check_interval == 0)
             val_loss = val_task_loss = None
+            val_metrics = None
             if should_validate:
-                val_loss, val_task_loss = self.validate()
+                val_loss, val_task_loss, val_metrics = self.validate()
+                self._log_wandb_validation(val_metrics)
             
             if self.global_rank == 0:
-                # TODO: Log to wandb with more metrics used in `train_opf.py`
+                # W&B step logging is handled during training; add epoch-level logging here if needed.
                 print(f"\nEpoch {epoch}:")
                 print(f"  Train Loss: {train_loss:.4f}, Train Task: {train_task_loss:.4f}")
+                self._print_metric_groups("  Train Metrics:", train_metrics, self.train_metric_groups)
                 if should_validate:
                     print(f"  Val Loss: {val_loss:.4f}, Val Task: {val_task_loss:.4f}")
+                    if val_metrics:
+                        self._print_metric_groups("  Val Metrics:", val_metrics, self.val_metric_groups)
                 else:
                     print("  Validation skipped this epoch")
             
@@ -493,6 +684,9 @@ class OPFTrainer:
                         break
             
             dist.barrier()
+
+        if self.wandb_enabled:
+            wandb.finish()
 
 
 def main():
