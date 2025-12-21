@@ -17,6 +17,8 @@
 export SLURM_CPU_BIND="cores"
 export MASTER_PORT=29500 # default from torch launcher
 export MASTER_ADDR=$(hostname)
+export OMP_NUM_THREADS=32
+# export WANDB_API_KEY=
 
 module load conda
 conda activate ${CFS}/amsc004/conda_envs/lumina
