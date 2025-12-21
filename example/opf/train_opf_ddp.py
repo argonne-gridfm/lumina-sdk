@@ -893,7 +893,8 @@ def main():
         backend='nccl',
         init_method='env://',
         world_size=world_size,
-        rank=global_rank
+        rank=global_rank,
+        device_id=local_rank
     )
 
     if torch.cuda.is_available():
