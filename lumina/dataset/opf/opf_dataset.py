@@ -317,13 +317,13 @@ class OPFDataset(InMemoryDataset):
         # )
 
         return {
-            "nodes": {"bus": self.data['bus'].x.size(1),
-                      "generator": self.data['generator'].x.size(1),
-                      "load": self.data['load'].x.size(1),
-                      "shunt": self.data['shunt'].x.size(1)},
+            "nodes": {"bus": self._data['bus'].x.size(1),
+                      "generator": self._data['generator'].x.size(1),
+                      "load": self._data['load'].x.size(1),
+                      "shunt": self._data['shunt'].x.size(1)},
             "edges": {
-                ('bus', 'ac_line', 'bus'): self.data['bus', 'ac_line', 'bus'].edge_attr.size(1),
-                ('bus', 'transformer', 'bus'): self.data['bus', 'transformer', 'bus'].edge_attr.size(1),
+                ('bus', 'ac_line', 'bus'): self._data['bus', 'ac_line', 'bus'].edge_attr.size(1),
+                ('bus', 'transformer', 'bus'): self._data['bus', 'transformer', 'bus'].edge_attr.size(1),
                 ('generator', 'generator_link', 'bus'): 0,
                 ('bus', 'generator_link', 'generator'): 0,
                 ('load', 'load_link', 'bus'): 0,
