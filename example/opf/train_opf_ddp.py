@@ -1,9 +1,6 @@
 import argparse
-import json
 import os
 from pathlib import Path
-import socket
-import subprocess
 import time
 
 import numpy as np
@@ -36,6 +33,7 @@ from lumina.model.opf.losses import OPFLossManager
 from lumina.model.opf.homo_model import get_gnnNets
 from lumina.model.opf.hetero_model import HEAT, HGT, RGAT, OPFHeteroGNN
 from lumina.utils.graph_utils import HomoOPFDataset, convert_opf_to_homo
+from lumina.utils.throughput import ThroughputTracker
 
 def initialize_model(model, sample_data, device):
     if dist.get_rank() == 0:
@@ -147,18 +145,6 @@ class OPFTrainer:
         self.wandb_run = None
         self.wandb_enabled = False
 
-        self.throughput_enabled = training_config.get("throughput_enabled", True)
-        self.throughput_warmup_steps = max(0, int(training_config.get("throughput_warmup_steps", 100)))
-        self.throughput_measure_steps = max(0, int(training_config.get("throughput_measure_steps", 200)))
-        if self.throughput_measure_steps == 0:
-            self.throughput_enabled = False
-        self.throughput_has_run = False
-        self.throughput_step_index = 0
-        self.throughput_measure_started = False
-        self.throughput_measure_count = 0
-        self.throughput_samples = []
-        self.throughput_metadata_written = False
-
         self.train_metric_names = [
             'loss/total',
             'loss/task',
@@ -211,6 +197,17 @@ class OPFTrainer:
         ]
 
         self._init_wandb()
+        self.throughput_tracker = None
+        if training_config.get("throughput_enabled", True):
+            self.throughput_tracker = ThroughputTracker(
+                config=self.config,
+                world_size=self.world_size,
+                global_rank=self.global_rank,
+                get_global_step=lambda: self.global_step,
+                wandb_enabled=self.wandb_enabled,
+            )
+            if not self.throughput_tracker.enabled:
+                self.throughput_tracker = None
         
     def _load_dataset(self):
         dataset_kwargs = dict(
@@ -416,121 +413,6 @@ class OPFTrainer:
             self.wandb_run = None
             self.wandb_enabled = False
 
-    def _get_git_hash(self):
-        repo_root = Path(__file__).resolve().parents[2]
-        try:
-            output = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"],
-                cwd=repo_root,
-                stderr=subprocess.DEVNULL,
-                text=True,
-            )
-            return output.strip()
-        except Exception:
-            return None
-
-    def _write_throughput_metadata(self):
-        if self.throughput_metadata_written or self.global_rank != 0:
-            return
-        logging_dir = self.config.get('logging_dir', '.')
-        os.makedirs(logging_dir, exist_ok=True)
-        env_keys = [
-            'RANK',
-            'LOCAL_RANK',
-            'WORLD_SIZE',
-            'MASTER_ADDR',
-            'MASTER_PORT',
-            'OMP_NUM_THREADS',
-        ]
-        metadata = {
-            'git_hash': self._get_git_hash(),
-            'config_yaml': yaml.safe_dump(self.config, sort_keys=False),
-            'hostname': socket.gethostname(),
-            'world_size': self.world_size,
-            'env': {key: os.environ.get(key) for key in env_keys if key in os.environ},
-            'torch_version': torch.__version__,
-            'dist_backend': dist.get_backend() if dist.is_initialized() else None,
-        }
-        metadata_path = os.path.join(logging_dir, 'throughput_metadata.json')
-        with open(metadata_path, 'w') as handle:
-            json.dump(metadata, handle, indent=2)
-        self.throughput_metadata_written = True
-        if self.wandb_enabled:
-            wandb.log({'throughput/metadata_path': metadata_path}, step=self.global_step)
-
-    def _maybe_start_throughput_measurement(self):
-        if not self.throughput_enabled or self.throughput_has_run:
-            return False
-        if self.throughput_measure_started:
-            return True
-        if self.throughput_step_index < self.throughput_warmup_steps:
-            return False
-        if dist.is_available() and dist.is_initialized() and self.world_size > 1:
-            dist.barrier()
-        self.throughput_measure_started = True
-        self.throughput_measure_count = 0
-        if self.global_rank == 0:
-            print(
-                f"Starting throughput measurement: warmup={self.throughput_warmup_steps}, "
-                f"measure={self.throughput_measure_steps}"
-            )
-        self._write_throughput_metadata()
-        return True
-
-    def _throughput_measure_active(self):
-        return self.throughput_measure_started and not self.throughput_has_run
-
-    def _accelerator_synchronize(self):
-        if hasattr(torch, 'accelerator') and hasattr(torch.accelerator, 'synchronize'):
-            torch.accelerator.synchronize()
-
-    def _get_batch_samples(self, batch):
-        if hasattr(batch, 'num_graphs'):
-            return int(batch.num_graphs)
-        if torch.is_tensor(batch):
-            return int(batch.size(0))
-        loader_config = self.config.get('loader', {})
-        return int(loader_config.get('batch_size', 1))
-
-    def _record_throughput_step(self, step_metrics):
-        self.throughput_samples.append(step_metrics)
-        if self.wandb_enabled:
-            wandb.log(step_metrics, step=self.global_step)
-
-    def _finalize_throughput(self, partial=False):
-        if self.throughput_has_run:
-            return
-        if dist.is_available() and dist.is_initialized() and self.world_size > 1:
-            dist.barrier()
-        if not self.throughput_samples:
-            if self.global_rank == 0:
-                print("Throughput measurement skipped: no samples collected.")
-            self.throughput_has_run = True
-            return
-
-        samples_per_sec = [sample['throughput/samples_per_sec'] for sample in self.throughput_samples]
-        global_samples_per_sec = samples_per_sec
-        if dist.is_available() and dist.is_initialized() and self.world_size > 1:
-            gathered = [None for _ in range(self.world_size)]
-            dist.all_gather_object(gathered, samples_per_sec)
-            global_samples_per_sec = [value for sublist in gathered for value in sublist]
-
-        sample_array = np.array(global_samples_per_sec)
-        global_mean = float(sample_array.mean())
-
-        summary = {
-            'throughput/summary/mean_samples_per_sec': global_mean,
-            'throughput/summary/partial': float(partial),
-        }
-
-        if self.global_rank == 0:
-            status = "partial" if partial else "complete"
-            print(f"Throughput measurement {status}: mean_samples_per_sec={global_mean:.3f}")
-        if self.wandb_enabled:
-            wandb.log(summary, step=self.global_step)
-
-        self.throughput_has_run = True
-
     def _should_log_step(self):
         if not self.wandb_enabled:
             return False
@@ -650,6 +532,7 @@ class OPFTrainer:
         step_start_time = None
         step_samples = 0
         accum_batches = 0
+        tracker = self.throughput_tracker
 
         # Create progress bar only on rank 0 and if W&B is not enabled
         if self.global_rank == 0 and not self.wandb_enabled:
@@ -663,17 +546,18 @@ class OPFTrainer:
             # Check if we should start throughput measurement
             is_step_start = accum_batches == 0
             if is_step_start:
-                self._maybe_start_throughput_measurement()
-                if self._throughput_measure_active():
-                    self._accelerator_synchronize()
-                    step_start_time = time.perf_counter()
-                    step_samples = 0
+                if tracker:
+                    tracker.maybe_start_measurement()
+                    if tracker.measure_active():
+                        tracker.accelerator_synchronize()
+                        step_start_time = time.perf_counter()
+                        step_samples = 0
 
             batch = batch.to(self.device)
             
             # Accumulate num of samples for throughput measurement
-            if self._throughput_measure_active():
-                step_samples += self._get_batch_samples(batch)
+            if tracker and tracker.measure_active():
+                step_samples += tracker.get_batch_samples(batch)
 
             # Forward pass and compute loss
             predictions = self.forward(batch)
@@ -688,31 +572,26 @@ class OPFTrainer:
             should_step = ((batch_idx + 1) % self.accumulate_grad_batches == 0) or ((batch_idx + 1) == total_steps)
 
             if should_step:
-                if self._throughput_measure_active():
-                    self._accelerator_synchronize()
+                if tracker and tracker.measure_active():
+                    tracker.accelerator_synchronize()
                 self._clip_gradients()
                 self.optimizer.step()
                 self.optimizer.zero_grad()
 
                 self.global_step += 1
                 self._log_wandb_step(loss_value, loss_info)
-                if self.throughput_enabled and not self.throughput_has_run:
-                    self.throughput_step_index += 1
-                    if self._throughput_measure_active():
-                        self._accelerator_synchronize()
+                if tracker:
+                    step_metrics = None
+                    if tracker.measure_active():
+                        tracker.accelerator_synchronize()
                         step_time = time.perf_counter() - step_start_time
                         total_samples = step_samples * self.world_size
                         samples_per_sec = total_samples / step_time if step_time > 0 else 0.0
                         step_metrics = {
                             'throughput/samples_per_sec': samples_per_sec,
                         }
-                        self._record_throughput_step(step_metrics)
-                        self.throughput_measure_count += 1
-                        if self.throughput_measure_count >= self.throughput_measure_steps:
-                            self._finalize_throughput()
-                    accum_batches = 0
-                else:
-                    accum_batches = 0
+                    tracker.on_step_end(step_metrics)
+                accum_batches = 0
             else:
                 accum_batches += 1
             
@@ -727,7 +606,7 @@ class OPFTrainer:
                     self._add_metric(metric_sums, metric_counts, metric_name, loss_info[info_key])
             num_batches += 1
             
-            if self.global_rank == 0:
+            if self.global_rank == 0 and not self.wandb_enabled:
                 if self.log_every_n_steps and self.log_every_n_steps > 0:
                     if self.global_step % self.log_every_n_steps == 0:
                         pbar.set_postfix({'loss': loss_value})
@@ -804,8 +683,8 @@ class OPFTrainer:
         checkpoint_dir = self.checkpoint_dir
         if self.global_rank == 0:
             os.makedirs(checkpoint_dir, exist_ok=True)
-        if self.throughput_enabled:
-            self._write_throughput_metadata()
+        if self.throughput_tracker:
+            self.throughput_tracker.write_metadata()
         
         for epoch in range(self.max_epochs):
             self.current_epoch = epoch
@@ -856,8 +735,8 @@ class OPFTrainer:
             
             dist.barrier()
 
-        if self.throughput_enabled and not self.throughput_has_run and self.throughput_measure_started:
-            self._finalize_throughput(partial=True)
+        if self.throughput_tracker:
+            self.throughput_tracker.finalize(partial=True)
 
         if self.wandb_enabled:
             wandb.finish()
