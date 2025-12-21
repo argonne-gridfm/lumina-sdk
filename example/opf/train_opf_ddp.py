@@ -371,9 +371,6 @@ class OPFTrainer:
             initialize_model(self.model, homo_sample, self.device)
             if self.global_rank == 0:
                 print(f"{self.model_type} Model created")
-        
-        # TODO: Print model summary here if needed
-        # TODO: Log model summary to wandb if available
 
         # Wrap model with DDP
         self.model = DDP(self.model, 
@@ -654,7 +651,8 @@ class OPFTrainer:
         step_samples = 0
         accum_batches = 0
 
-        if self.global_rank == 0:
+        # Create progress bar only on rank 0 and if W&B is not enabled
+        if self.global_rank == 0 and not self.wandb_enabled:
             pbar = tqdm(self.train_loader, desc=f'Epoch {epoch}')
         else:
             pbar = self.train_loader
