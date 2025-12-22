@@ -375,31 +375,11 @@ class OPFTrainer:
                          find_unused_parameters=True)
     
     def _initialize_loss_manager(self):
-        grid_data = None
-        if self.loss_type in ['violated_lagrangian']:
-            root_path = self.config.get('root', 'data')
-            grid_data = os.path.join(root_path, self.case_name, 'raw', f'{self.case_name}.m')
-
-            if not os.path.exists(grid_data):
-                grid_data = os.path.join(root_path, 'raw', self.case_name, f'{self.case_name}.m')
-
-            if not os.path.exists(grid_data):
-                if self.global_rank == 0:
-                    print(f"Warning: Grid data file not found at {grid_data}")
-                    print("Attempting to use first .m file in raw directory...")
-                raw_dir = os.path.join(root_path, self.case_name, 'raw')
-                if os.path.exists(raw_dir):
-                    m_files = [f for f in os.listdir(raw_dir) if f.endswith('.m')]
-                    if m_files:
-                        grid_data = os.path.join(raw_dir, m_files[0])
-                        if self.global_rank == 0:
-                            print(f"Using: {grid_data}")
 
         lagrangian_config = self.config.get('lagrangian', {})
 
         self.loss_manager = OPFLossManager(
             loss_type=self.loss_type,
-            grid_data=grid_data,
             device=self.device,
             lagrangian_config=lagrangian_config,
         )
@@ -428,6 +408,7 @@ class OPFTrainer:
                 name=run_name,
                 dir=logging_dir,
                 config=self.config,
+                group='test',
             )
             self.wandb_enabled = True
         except Exception as exc:

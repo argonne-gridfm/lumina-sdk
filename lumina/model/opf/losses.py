@@ -364,7 +364,6 @@ class OPFLossManager(nn.Module):
             - 'mse', 'rmse', 'mae', 'mape', 'smooth_l1': Standard ML losses
             - 'augmented_lagrangian': Augmented Lagrangian method
             - 'violated_lagrangian': Violation-based Lagrangian method
-        grid_data (str, optional): Path to grid case file (required for violated Lagrangian)
         device (torch.device, optional): Device for computations
         lagrangian_config (dict, optional): Configuration for Lagrangian methods
         **kwargs: Additional arguments passed to the loss function
@@ -373,7 +372,6 @@ class OPFLossManager(nn.Module):
     def __init__(
         self,
         loss_type: str = 'mse',
-        grid_data: Optional[str] = None,
         device: Optional[torch.device] = None,
         lagrangian_config: Optional[Dict] = None,
         **kwargs
@@ -397,16 +395,8 @@ class OPFLossManager(nn.Module):
         elif loss_type == 'violated_lagrangian':
             from .violated_lagrangian import ViolatedLagrangianACOPF
 
-            if grid_data is None:
-                raise ValueError(
-                    f"grid_data must be provided for loss_type='{loss_type}'"
-                )
             lagrangian_kwargs = dict(lag_config)
-            self.lagrangian = ViolatedLagrangianACOPF(
-                grid_data=grid_data,
-                device=self.device,
-                **lagrangian_kwargs
-            )
+            self.lagrangian = ViolatedLagrangianACOPF(**lagrangian_kwargs)
             self.base_loss = ACOPFLossFunction(loss_type='mse', **kwargs)
 
         else:
@@ -447,39 +437,26 @@ class OPFLossManager(nn.Module):
             base_results = self.base_loss(predictions, targets)
             mse_loss = base_results['total_loss']
 
-            # Compute Lagrangian loss
-            if self.loss_type == 'augmented_lagrangian':
-                # Format predictions and data for augmented Lagrangian
-                current_n_bus = batch['bus'].x.size(0)
-                stored_Y = getattr(self.lagrangian, 'Y_real', None)
-                need_init = (
-                    not self._lagrangian_initialized
-                    or stored_Y is None
-                    or stored_Y.size(0) != current_n_bus
-                )
-                if need_init:
-                    self._ensure_network_parameters(batch, predictions['bus'].device)
-                constraint_batch = constraint_data or self._create_constraint_batch(batch, predictions)
-                aug_loss, info = self.lagrangian(mse_loss, predictions, constraint_batch)
+            # Compute Lagrangian loss using shared constraint pipeline
+            current_n_bus = batch['bus'].x.size(0)
+            stored_Y = getattr(self.lagrangian, 'Y_real', None)
+            need_init = (
+                not self._lagrangian_initialized
+                or stored_Y is None
+                or stored_Y.size(0) != current_n_bus
+            )
+            if need_init:
+                self._ensure_network_parameters(batch, predictions['bus'].device)
+            constraint_batch = constraint_data or self._create_constraint_batch(batch, predictions)
+            lag_loss, info = self.lagrangian(mse_loss, predictions, constraint_batch)
 
-                if return_info:
-                    info.update(base_results)
-                    info['mse_loss'] = mse_loss.item()
-                    return aug_loss, info
-                else:
-                    return aug_loss
-
-            else:  # violated_lagrangian
-                # Format inputs for violated Lagrangian
-                inputs = self._extract_inputs(batch)
-                vl_loss, info = self.lagrangian(mse_loss, predictions, inputs)
-
-                if return_info:
-                    info.update(base_results)
-                    info['mse_loss'] = mse_loss.item()
-                    return vl_loss, info
-                else:
-                    return vl_loss
+            if return_info:
+                info.update(base_results)
+                # TODO: should we use task_loss?
+                info['mse_loss'] = mse_loss.item()
+                return lag_loss, info
+            else:
+                return lag_loss
         else:
             # Standard ML loss
             results = self.base_loss(predictions, targets)
@@ -492,8 +469,6 @@ class OPFLossManager(nn.Module):
 
     def update_lagrangian(
         self,
-        model=None,
-        dataloader=None,
         constraint_violation: Optional[float] = None,
         constraints: Optional[torch.Tensor] = None,
         update_penalty: bool = True,
@@ -515,21 +490,15 @@ class OPFLossManager(nn.Module):
         if self.lagrangian is None or not is_training:
             return
 
-        if self.loss_type == 'augmented_lagrangian':
-            # After warmup, always update multipliers using the EMA constraints.
-            constraint_tensor = constraints if constraints is not None else None
-            self.lagrangian.update_lagrange_multipliers(constraint_tensor)
+        # After warmup, always update multipliers using the EMA constraints.
+        constraint_tensor = constraints if constraints is not None else None
+        self.lagrangian.update_multipliers(constraint_tensor)
 
+        if self.loss_type == 'augmented_lagrangian':
             # Penalty updates are handled on epoch boundaries via step_epoch; allow
             # a manual/forced update if explicitly requested.
             if force and update_penalty and constraint_violation is not None:
                 self.lagrangian.update_penalty_parameter(constraint_violation)
-
-        elif self.loss_type == 'violated_lagrangian':
-            # Update multipliers based on training data
-            if model is None or dataloader is None:
-                return
-            self.lagrangian.update_multipliers(model, dataloader)
 
     def step_epoch(self):
         """Call at the end of each epoch for Lagrangian methods."""
