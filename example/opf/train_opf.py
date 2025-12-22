@@ -9,10 +9,15 @@ import copy
 import json
 import sys
 import time
-import subprocess
-import tempfile
 from pathlib import Path
 import os
+
+# Set CUDA_VISIBLE_DEVICES early to prevent PyTorch from detecting CUDA
+# if we're going to run on CPU. This must be done BEFORE importing torch.
+# We'll check actual GPU availability later and re-enable if needed.
+# For now, we'll let the code detect and handle it properly.
+# If you want to force CPU-only, uncomment the next line:
+# os.environ['CUDA_VISIBLE_DEVICES'] = ''
 
 import numpy as np
 import torch
@@ -528,106 +533,6 @@ class OPFLightningModule(pl.LightningModule):
         return loss
 
 
-def submit_slurm_job(args_dict, config_path, project_root):
-    """Submit a SLURM job for training when running under W&B agent."""
-    # Get W&B sweep ID and run ID from environment
-    sweep_id = os.environ.get('WANDB_SWEEP_ID')
-    run_id = os.environ.get('WANDB_RUN_ID', 'unknown')
-    
-    # Build command arguments from args_dict
-    cmd_args = [
-        'python', 'example/opf/train_opf.py',
-        '--config', str(config_path),
-        '--wandb',
-        '--wandb_mode', 'offline',
-    ]
-    
-    # Add arguments that are in args_dict
-    arg_mapping = {
-        'case': '--case',
-        'group_id': '--group_id',
-        'model_type': '--model_type',
-        'loss_type': '--loss_type',
-        'accelerator': '--accelerator',
-        'devices': '--devices',
-        'num_nodes': '--num_nodes',
-        'precision': '--precision',
-        'strategy': '--strategy',
-        'wandb_project': '--wandb_project',
-    }
-    
-    for key, flag in arg_mapping.items():
-        if key in args_dict and args_dict[key] is not None:
-            cmd_args.extend([flag, str(args_dict[key])])
-    
-    # Create SLURM script
-    script_content = f"""#!/bin/bash
-#SBATCH --job-name=opf_train_{run_id[:8]}
-#SBATCH --output=slurm_logs/opf_train_%j.out
-#SBATCH --error=slurm_logs/opf_train_%j.err
-#SBATCH --time=24:00:00
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:1
-#SBATCH --partition=gpuA100x4
-
-# Load modules (adjust for your system)
-module load python
-module load cuda
-
-# Activate virtual environment
-source {project_root}/venv/bin/activate
-
-# Set W&B to offline mode (compute nodes have no internet)
-export WANDB_MODE=offline
-export WANDB_SWEEP_ID={sweep_id}
-export WANDB_RUN_ID={run_id}
-
-# Change to project directory
-cd {project_root}
-
-# Run training with all arguments
-{' '.join(cmd_args)}
-
-# Note: Offline W&B logs will be synced later by the agent or manually
-"""
-    
-    # Create slurm_logs directory if it doesn't exist
-    slurm_logs_dir = project_root / 'slurm_logs'
-    slurm_logs_dir.mkdir(exist_ok=True)
-    
-    # Write script to temporary file
-    script_name = f"opf_train_{run_id[:8]}.sh"
-    script_path = slurm_logs_dir / script_name
-    
-    with open(script_path, 'w') as f:
-        f.write(script_content)
-    
-    # Make script executable
-    os.chmod(script_path, 0o755)
-    
-    # Submit job
-    try:
-        result = subprocess.run(
-            ['sbatch', str(script_path)],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        job_id = result.stdout.strip().split()[-1]
-        print(f"✅ Submitted SLURM job {job_id} for W&B run {run_id}")
-        print(f"   Job script: {script_path}")
-        print(f"   Logs will be in: slurm_logs/opf_train_{job_id}.out")
-        return job_id
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Failed to submit SLURM job: {e.stderr}")
-        sys.exit(1)
-    except FileNotFoundError:
-        print("❌ 'sbatch' command not found. Are you on a system with SLURM?")
-        sys.exit(1)
-
-
 def main():
     parser = argparse.ArgumentParser(description='OPF Training with PyTorch Lightning - Supports Multiple Loss Types')
     parser.add_argument('--case', type=str, default='case14',
@@ -658,7 +563,7 @@ def main():
                         help='Disable Augmented Lagrangian method')
 
     parser.add_argument('--accelerator', type=str, default='auto', help='Accelerator type (default: auto)')
-    parser.add_argument('--devices', type=int, default=4, help='Number of devices (default: 1)')
+    parser.add_argument('--devices', type=int, default=1, help='Number of devices (default: 1)')
     parser.add_argument('--num_nodes', type=int, default=1, help='Number of nodes (default: 1)')
     parser.add_argument('--precision', type=str, default='32-true', help='Precision (default: 32-true)')
     parser.add_argument('--strategy', type=str, default='ddp_find_unused_parameters_true',
@@ -679,69 +584,6 @@ def main():
 
     if args.wandb_mode:
         os.environ['WANDB_MODE'] = args.wandb_mode
-
-    # Check if we're running under W&B agent (on login node with internet)
-    # If so, submit a SLURM job instead of training directly
-    if os.environ.get('WANDB_SWEEP_ID') and not os.environ.get('SLURM_JOB_ID'):
-        # We're on login node, need to get W&B config first, then submit SLURM job
-        if not args.wandb:
-            print("⚠️ W&B agent detected but --wandb not set. Adding --wandb flag.")
-            args.wandb = True
-        
-        # Initialize W&B temporarily to get sweep config values
-        try:
-            import wandb
-            # Initialize wandb to read config (this connects to W&B API on login node)
-            wandb.init(
-                project=args.wandb_project or 'lumina-opf',
-                entity=args.wandb_entity,
-                mode='online',  # Login node has internet
-                reinit=True
-            )
-            sweep_config = dict(wandb.config)
-            wandb.finish()
-            
-            # Merge sweep config into args
-            if 'case' in sweep_config:
-                args.case = sweep_config['case']
-            if 'model_type' in sweep_config:
-                args.model_type = sweep_config['model_type']
-            if 'loss_type' in sweep_config:
-                args.loss_type = sweep_config['loss_type']
-            if 'trainer.devices' in sweep_config:
-                args.devices = sweep_config['trainer.devices']
-            if 'trainer.num_nodes' in sweep_config:
-                args.num_nodes = sweep_config['trainer.num_nodes']
-            if 'trainer.precision' in sweep_config:
-                args.precision = sweep_config['trainer.precision']
-            if 'trainer.strategy' in sweep_config:
-                args.strategy = sweep_config['trainer.strategy']
-            if 'wandb_project' in sweep_config:
-                args.wandb_project = sweep_config['wandb_project']
-            
-        except Exception as e:
-            print(f"⚠️ Could not read W&B config: {e}")
-            print("   Proceeding with command-line arguments only.")
-        
-        # Get config path (will be resolved properly below, but we need it now)
-        config_path = args.config
-        
-        # Prepare arguments dict for SLURM job
-        args_dict = {
-            'case': args.case,
-            'group_id': args.group_id,
-            'model_type': args.model_type,
-            'loss_type': args.loss_type,
-            'accelerator': args.accelerator,
-            'devices': args.devices,
-            'num_nodes': args.num_nodes,
-            'precision': args.precision,
-            'strategy': args.strategy,
-            'wandb_project': args.wandb_project or 'lumina-opf',
-        }
-        
-        submit_slurm_job(args_dict, config_path, PROJECT_ROOT)
-        return  # Exit after submitting job
 
     wandb_logger = None
 
@@ -831,6 +673,15 @@ def main():
     if sweep_overrides:
         reserved_override_keys = {'wandb_version'}
         reserved_args = {'wandb', 'wandb_project', 'wandb_entity', 'wandb_run_name', 'wandb_mode'}
+        
+        # Map trainer.* keys to args.*
+        trainer_to_args_map = {
+            'trainer.devices': 'devices',
+            'trainer.num_nodes': 'num_nodes',
+            'trainer.precision': 'precision',
+            'trainer.strategy': 'strategy',
+            'trainer.max_epochs': None,  # Goes to config, not args
+        }
 
         for key, value in sweep_overrides.items():
             if not isinstance(key, str):
@@ -839,9 +690,20 @@ def main():
                 continue
             if key in reserved_args:
                 continue
+            
+            # Handle trainer.* keys that map to args
+            if key in trainer_to_args_map:
+                mapped_key = trainer_to_args_map[key]
+                if mapped_key and hasattr(args, mapped_key):
+                    setattr(args, mapped_key, value)
+                    continue
+            
+            # Direct args attribute match
             if hasattr(args, key):
                 setattr(args, key, value)
                 continue
+            
+            # Apply to nested config
             apply_nested(config, key, value)
 
     case_name = parse_case_name(args.case)
@@ -867,15 +729,61 @@ def main():
     # Initialize Trainer
     trainer_config = copy.deepcopy(config.get('trainer', {}))
 
-    # Override trainer config with args
-    trainer_config['accelerator'] = args.accelerator
-    trainer_config['devices'] = args.devices
+    # Auto-detect GPU availability and fallback to CPU if needed
+    # The issue: torch.cuda.is_available() can return True even when no GPU is accessible
+    # Solution: Try to actually use CUDA, and if it fails, force CPU mode
+    cuda_available = False
+    gpu_name = None
+    
+    # Check if CUDA is available
+    if torch.cuda.is_available():
+        try:
+            # Try to actually access GPU to verify it's really available
+            gpu_name = torch.cuda.get_device_name(0)
+            cuda_available = True
+        except (RuntimeError, AttributeError) as e:
+            # CUDA libraries installed but no GPU actually available
+            cuda_available = False
+            gpu_name = None
+            # Force CPU mode by hiding CUDA from PyTorch
+            # Note: This won't affect already-imported torch, but will help with Lightning
+            if 'CUDA_VISIBLE_DEVICES' not in os.environ:
+                os.environ['CUDA_VISIBLE_DEVICES'] = ''
+    
+    # Determine accelerator
+    if args.accelerator == 'auto':
+        if cuda_available and gpu_name:
+            trainer_config['accelerator'] = 'gpu'
+            print(f"✓ GPU detected: Using CUDA (device: {gpu_name})")
+        else:
+            trainer_config['accelerator'] = 'cpu'
+            print("⚠️  No GPU detected: Falling back to CPU")
+    else:
+        trainer_config['accelerator'] = args.accelerator
+        if args.accelerator in ['gpu', 'cuda'] and not (cuda_available and gpu_name):
+            print("⚠️  GPU requested but not available: Falling back to CPU")
+            trainer_config['accelerator'] = 'cpu'
+    
+    # Force CPU if no GPU available (override any GPU settings)
+    if not (cuda_available and gpu_name):
+        trainer_config['accelerator'] = 'cpu'
+        # Monkey-patch torch.cuda.is_available to return False for Lightning
+        # This prevents Lightning from trying to access CUDA
+        original_is_available = torch.cuda.is_available
+        torch.cuda.is_available = lambda: False
+    
+    # Set devices - if CPU, use 'auto', if GPU and available, use specified devices
+    if trainer_config['accelerator'] == 'cpu':
+        trainer_config['devices'] = 'auto'  # CPU uses 'auto'
+    else:
+        trainer_config['devices'] = args.devices
+    
     trainer_config['num_nodes'] = args.num_nodes
     trainer_config['precision'] = args.precision
     trainer_config['strategy'] = args.strategy
 
-    # Handle sync_batchnorm logic
-    if args.devices > 1:
+    # Handle sync_batchnorm logic (only for multi-GPU)
+    if trainer_config['accelerator'] != 'cpu' and args.devices > 1:
         trainer_config['sync_batchnorm'] = True
     else:
         trainer_config['sync_batchnorm'] = False
