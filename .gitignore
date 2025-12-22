@@ -9,6 +9,7 @@ __pycache__/
 # Distribution / packaging
 .Python
 wandb/
+optuna_results/
 build/
 develop-eggs/
 dist/
@@ -208,3 +209,5 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+example/opf/run_configuration_matrix.py
