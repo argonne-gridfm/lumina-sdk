@@ -218,3 +218,4 @@ checkpoints
 wandb
 lumina.o*
 slurm-*.out
+training_logs/
