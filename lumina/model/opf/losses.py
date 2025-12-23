@@ -390,14 +390,16 @@ class OPFLossManager(nn.Module):
 
             lagrangian_kwargs = dict(lag_config)
             self.lagrangian = AugmentedLagrangianACOPF(**lagrangian_kwargs)
-            self.base_loss = ACOPFLossFunction(loss_type='mse', **kwargs)
+            base_loss_type = lag_config.get('base_loss_type', 'mse')
+            self.base_loss = ACOPFLossFunction(loss_type=base_loss_type, **kwargs)
 
         elif loss_type == 'violated_lagrangian':
             from .violated_lagrangian import ViolatedLagrangianACOPF
 
             lagrangian_kwargs = dict(lag_config)
             self.lagrangian = ViolatedLagrangianACOPF(**lagrangian_kwargs)
-            self.base_loss = ACOPFLossFunction(loss_type='mse', **kwargs)
+            base_loss_type = lag_config.get('base_loss_type', 'mse')
+            self.base_loss = ACOPFLossFunction(loss_type=base_loss_type, **kwargs)
 
         else:
             # Standard ML loss
@@ -452,8 +454,7 @@ class OPFLossManager(nn.Module):
 
             if return_info:
                 info.update(base_results)
-                # TODO: should we use task_loss?
-                info['mse_loss'] = mse_loss.item()
+                info['objective'] = mse_loss.item()
                 return lag_loss, info
             else:
                 return lag_loss
