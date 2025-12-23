@@ -5,11 +5,19 @@ Full training script using Augmented Lagrangian method for ACOPF, it uses PyTorc
 """
 
 import argparse
+import copy
 import json
 import sys
 import time
 from pathlib import Path
 import os
+
+# Set CUDA_VISIBLE_DEVICES early to prevent PyTorch from detecting CUDA
+# if we're going to run on CPU. This must be done BEFORE importing torch.
+# We'll check actual GPU availability later and re-enable if needed.
+# For now, we'll let the code detect and handle it properly.
+# If you want to force CPU-only, uncomment the next line:
+# os.environ['CUDA_VISIBLE_DEVICES'] = ''
 
 import numpy as np
 import torch
@@ -21,12 +29,22 @@ from tqdm import tqdm
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 
+try:
+    from lightning.pytorch.loggers import WandbLogger
+except ImportError:
+    WandbLogger = None
+
 # Optional plotting imports
 try:
     import matplotlib.pyplot as plt
     PLOTTING_AVAILABLE = True
 except ImportError:
     PLOTTING_AVAILABLE = False
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 
 from lumina.dataset.opf.opf_dataset import OPFDataset
 from lumina.model.opf.augmented_lagrangian import AugmentedLagrangianACOPF
@@ -429,11 +447,24 @@ def main():
     parser.add_argument('--precision', type=str, default='32-true', help='Precision (default: 32-true)')
     parser.add_argument('--strategy', type=str, default='ddp_find_unused_parameters_true',
                         help='Strategy (default: ddp_find_unused_parameters_true)')
+    parser.add_argument('--wandb', action='store_true', default=False,
+                        help='Enable Weights & Biases logging')
+    parser.add_argument('--wandb_project', type=str, default='lumina-opf',
+                        help='Weights & Biases project name (default: lumina-opf)')
+    parser.add_argument('--wandb_entity', type=str, default=None,
+                        help='Weights & Biases entity/team name')
+    parser.add_argument('--wandb_run_name', type=str, default=None,
+                        help='Custom name for the Weights & Biases run')
+    parser.add_argument('--wandb_mode', type=str, default=None,
+                        choices=['online', 'offline', 'disabled'],
+                        help='Weights & Biases mode override')
 
     args = parser.parse_args()
 
-    print(f"🚀 ACOPF Training (Lightning) with loss_type = {args.loss_type}")
-    print("=" * 60)
+    if args.wandb_mode:
+        os.environ['WANDB_MODE'] = args.wandb_mode
+
+    wandb_logger = None
 
     config_path = args.config
     if not os.path.exists(config_path):
@@ -486,10 +517,81 @@ def main():
     if 'val_split' not in config:
         config['val_split'] = 0.1
 
+    sweep_overrides = {}
+    if args.wandb:
+        if WandbLogger is None:
+            print("⚠️ Weights & Biases is not available. Install wandb or omit --wandb.")
+        else:
+            wandb_kwargs = {}
+            if args.wandb_project:
+                wandb_kwargs['project'] = args.wandb_project
+            if args.wandb_entity:
+                wandb_kwargs['entity'] = args.wandb_entity
+            if args.wandb_run_name:
+                wandb_kwargs['name'] = args.wandb_run_name
+
+            wandb_kwargs.setdefault('log_model', False)
+
+            wandb_logger = WandbLogger(**wandb_kwargs)
+            sweep_overrides = dict(wandb_logger.experiment.config)
+
+    def apply_nested(target_dict, dotted_key, value):
+        if not isinstance(target_dict, dict):
+            return
+        if not isinstance(dotted_key, str):
+            return
+
+        keys = dotted_key.split('.')
+        current = target_dict
+        for key in keys[:-1]:
+            if key not in current or not isinstance(current[key], dict):
+                current[key] = {}
+            current = current[key]
+        current[keys[-1]] = value
+
+    if sweep_overrides:
+        reserved_override_keys = {'wandb_version'}
+        reserved_args = {'wandb', 'wandb_project', 'wandb_entity', 'wandb_run_name', 'wandb_mode'}
+        
+        # Map trainer.* keys to args.*
+        trainer_to_args_map = {
+            'trainer.devices': 'devices',
+            'trainer.num_nodes': 'num_nodes',
+            'trainer.precision': 'precision',
+            'trainer.strategy': 'strategy',
+            'trainer.max_epochs': None,  # Goes to config, not args
+        }
+
+        for key, value in sweep_overrides.items():
+            if not isinstance(key, str):
+                continue
+            if key in reserved_override_keys or key.startswith('_'):
+                continue
+            if key in reserved_args:
+                continue
+            
+            # Handle trainer.* keys that map to args
+            if key in trainer_to_args_map:
+                mapped_key = trainer_to_args_map[key]
+                if mapped_key and hasattr(args, mapped_key):
+                    setattr(args, mapped_key, value)
+                    continue
+            
+            # Direct args attribute match
+            if hasattr(args, key):
+                setattr(args, key, value)
+                continue
+            
+            # Apply to nested config
+            apply_nested(config, key, value)
+
     case_name = parse_case_name(args.case)
     print(f"Using case: {case_name}")
 
     loss_type = args.loss_type
+
+    print(f"🚀 ACOPF Training (Lightning) with loss_type = {loss_type}")
+    print("=" * 60)
 
     # Initialize Lightning Module
     model = OPFLightningModule(
@@ -502,17 +604,63 @@ def main():
     )
 
     # Initialize Trainer
-    trainer_config = config.get('trainer', {})
+    trainer_config = copy.deepcopy(config.get('trainer', {}))
 
-    # Override trainer config with args
-    trainer_config['accelerator'] = args.accelerator
-    trainer_config['devices'] = args.devices
+    # Auto-detect GPU availability and fallback to CPU if needed
+    # The issue: torch.cuda.is_available() can return True even when no GPU is accessible
+    # Solution: Try to actually use CUDA, and if it fails, force CPU mode
+    cuda_available = False
+    gpu_name = None
+    
+    # Check if CUDA is available
+    if torch.cuda.is_available():
+        try:
+            # Try to actually access GPU to verify it's really available
+            gpu_name = torch.cuda.get_device_name(0)
+            cuda_available = True
+        except (RuntimeError, AttributeError) as e:
+            # CUDA libraries installed but no GPU actually available
+            cuda_available = False
+            gpu_name = None
+            # Force CPU mode by hiding CUDA from PyTorch
+            # Note: This won't affect already-imported torch, but will help with Lightning
+            if 'CUDA_VISIBLE_DEVICES' not in os.environ:
+                os.environ['CUDA_VISIBLE_DEVICES'] = ''
+    
+    # Determine accelerator
+    if args.accelerator == 'auto':
+        if cuda_available and gpu_name:
+            trainer_config['accelerator'] = 'gpu'
+            print(f"✓ GPU detected: Using CUDA (device: {gpu_name})")
+        else:
+            trainer_config['accelerator'] = 'cpu'
+            print("⚠️  No GPU detected: Falling back to CPU")
+    else:
+        trainer_config['accelerator'] = args.accelerator
+        if args.accelerator in ['gpu', 'cuda'] and not (cuda_available and gpu_name):
+            print("⚠️  GPU requested but not available: Falling back to CPU")
+            trainer_config['accelerator'] = 'cpu'
+    
+    # Force CPU if no GPU available (override any GPU settings)
+    if not (cuda_available and gpu_name):
+        trainer_config['accelerator'] = 'cpu'
+        # Monkey-patch torch.cuda.is_available to return False for Lightning
+        # This prevents Lightning from trying to access CUDA
+        original_is_available = torch.cuda.is_available
+        torch.cuda.is_available = lambda: False
+    
+    # Set devices - if CPU, use 'auto', if GPU and available, use specified devices
+    if trainer_config['accelerator'] == 'cpu':
+        trainer_config['devices'] = 'auto'  # CPU uses 'auto'
+    else:
+        trainer_config['devices'] = args.devices
+    
     trainer_config['num_nodes'] = args.num_nodes
     trainer_config['precision'] = args.precision
     trainer_config['strategy'] = args.strategy
 
-    # Handle sync_batchnorm logic
-    if args.devices > 1:
+    # Handle sync_batchnorm logic (only for multi-GPU)
+    if trainer_config['accelerator'] != 'cpu' and args.devices > 1:
         trainer_config['sync_batchnorm'] = True
     else:
         trainer_config['sync_batchnorm'] = False
@@ -543,7 +691,7 @@ def main():
         mode='min'
     )
 
-    callbacks = [early_stop_callback]
+    callbacks = list(trainer_config.pop('callbacks', []))
     if trainer_config.get('enable_checkpointing', True):
         checkpoint_callback = ModelCheckpoint(
             monitor=monitoring_metric,
@@ -551,20 +699,51 @@ def main():
             save_top_k=1,
             mode='min',
         )
-        callbacks.insert(0, checkpoint_callback)
+        callbacks.extend([checkpoint_callback, early_stop_callback])
+    else:
+        callbacks.extend([early_stop_callback])
 
-    trainer = pl.Trainer(
-        **trainer_config,
-        logger=wandb_logger,
-        callbacks=callbacks
-    )
+    trainer_kwargs = {**trainer_config, 'callbacks': callbacks}
+
+    if wandb_logger is not None:
+        run_metadata = {
+            'case_name': case_name,
+            'config_path': str(config_path),
+            'group_id': args.group_id,
+            'loss_type': loss_type,
+            'model_type': args.model_type,
+            'cli_args': {k: v for k, v in vars(args).items()
+                         if k not in {'wandb', 'wandb_project', 'wandb_entity', 'wandb_run_name', 'wandb_mode'}},
+        }
+        try:
+            wandb_logger.experiment.config.update({'run_metadata': run_metadata}, allow_val_change=True)
+        except AttributeError:
+            pass
+
+    if wandb_logger is not None:
+        trainer_kwargs['logger'] = wandb_logger
+
+    trainer = pl.Trainer(**trainer_kwargs)
 
     # Train
     trainer.fit(model)
 
+    if wandb_logger is not None:
+        try:
+            wandb_logger.experiment.summary['best_model_path'] = checkpoint_callback.best_model_path
+        except AttributeError:
+            pass
+
     print("\n🎉 Training completed!")
     if trainer_config.get('enable_checkpointing', True):
         print(f"💾 Best model saved to: {checkpoint_callback.best_model_path}")
+
+    if wandb_logger is not None:
+        try:
+            import wandb
+            wandb.finish()
+        except ImportError:
+            pass
 
 
 if __name__ == "__main__":
