@@ -99,8 +99,9 @@ def parse_case_name(case_input: str) -> str:
 
 
 class OPFTrainer:
-    def __init__(self, config, case_name, group_id, model_type, loss_type='mse', 
-                 minmax_scaling=True, local_rank=0, global_rank = 0, world_size=1):
+    def __init__(self, config, case_name, group_id, model_type, loss_type='mse',
+                 minmax_scaling=True, local_rank=0, global_rank=0, world_size=1,
+                 wandb_run_name=None, wandb_group_name=None):
         self.config = config
         self.case_name = case_name
         self.group_id = group_id
@@ -111,6 +112,8 @@ class OPFTrainer:
         self.global_rank = global_rank
         self.world_size = world_size
         self.device = torch.device(f'cuda:{local_rank}')
+        self.wandb_run_name = wandb_run_name
+        self.wandb_group_name = wandb_group_name
 
         training_config = self.config['training']
         self.max_epochs = training_config["max_epochs"]
@@ -375,31 +378,11 @@ class OPFTrainer:
                          find_unused_parameters=True)
     
     def _initialize_loss_manager(self):
-        grid_data = None
-        if self.loss_type in ['violated_lagrangian']:
-            root_path = self.config.get('root', 'data')
-            grid_data = os.path.join(root_path, self.case_name, 'raw', f'{self.case_name}.m')
-
-            if not os.path.exists(grid_data):
-                grid_data = os.path.join(root_path, 'raw', self.case_name, f'{self.case_name}.m')
-
-            if not os.path.exists(grid_data):
-                if self.global_rank == 0:
-                    print(f"Warning: Grid data file not found at {grid_data}")
-                    print("Attempting to use first .m file in raw directory...")
-                raw_dir = os.path.join(root_path, self.case_name, 'raw')
-                if os.path.exists(raw_dir):
-                    m_files = [f for f in os.listdir(raw_dir) if f.endswith('.m')]
-                    if m_files:
-                        grid_data = os.path.join(raw_dir, m_files[0])
-                        if self.global_rank == 0:
-                            print(f"Using: {grid_data}")
 
         lagrangian_config = self.config.get('lagrangian', {})
 
         self.loss_manager = OPFLossManager(
             loss_type=self.loss_type,
-            grid_data=grid_data,
             device=self.device,
             lagrangian_config=lagrangian_config,
         )
@@ -421,13 +404,14 @@ class OPFTrainer:
         if not WANDB_AVAILABLE or self.global_rank != 0:
             return
         logging_dir = self.config.get('logging_dir')
-        run_name = f"acopf-ddp-{self.model_type}-{self.loss_type}"
+        run_name = self.wandb_run_name or f"acopf-ddp-{self.model_type}-{self.loss_type}"
         try:
             self.wandb_run = wandb.init(
                 project='lumina-training',
                 name=run_name,
                 dir=logging_dir,
                 config=self.config,
+                group=self.wandb_group_name,
             )
             self.wandb_enabled = True
         except Exception as exc:
@@ -788,6 +772,11 @@ def main():
                         help='Loss function type (default: mse)')
     parser.add_argument('--minmax_scaling', dest='minmax_scaling', action='store_true',
                         help='Apply min-max scaling to model outputs (default: enabled)')
+    parser.add_argument('--wandb_run_name', type=str, default=None,
+                        help='Weights & Biases run name override (default: auto)')
+    parser.add_argument('--wandb_group_name', type=str, default=None,
+                        help='Weights & Biases group name (default: none)')
+    
     
     args = parser.parse_args()
     
@@ -860,7 +849,9 @@ def main():
         minmax_scaling=args.minmax_scaling,
         local_rank=local_rank,
         global_rank=global_rank,
-        world_size=world_size
+        world_size=world_size,
+        wandb_run_name=args.wandb_run_name,
+        wandb_group_name=args.wandb_group_name
     )
 
     # Train

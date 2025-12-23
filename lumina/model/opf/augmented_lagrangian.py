@@ -460,7 +460,7 @@ class AugmentedLagrangianACOPF(nn.Module):
 
         # Initialize Lagrange multipliers to zero
         self.lambda_k = torch.zeros(total_constraints, device=device)
-        self.constraint_ema = torch.zeros_like(self.lambda_k)
+        self.constraint_ema = torch.zeros(total_constraints, device=device)
         self._latest_constraints = None
         self._latest_constraint_signal = None
         self._raw_violation = None
@@ -861,6 +861,22 @@ class AugmentedLagrangianACOPF(nn.Module):
         Returns:
             Constraint vector c(x)
         """
+        eq_constraints, ineq_constraints = self.compute_constraint_components(predictions, data)
+
+        if eq_constraints.numel() > 0 and ineq_constraints.numel() > 0:
+            return torch.cat([eq_constraints, ineq_constraints])
+        if eq_constraints.numel() > 0:
+            return eq_constraints
+        if ineq_constraints.numel() > 0:
+            return ineq_constraints
+        return torch.tensor([], device=predictions['bus'].device, requires_grad=True)
+
+    def compute_constraint_components(
+        self,
+        predictions: Dict[str, torch.Tensor],
+        data: Dict[str, torch.Tensor]
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Compute equality and inequality constraint vectors separately."""
         # Extract predictions (bus order is [va, vm])
         bus_pred = predictions['bus']
         gen_pred = predictions['generator']
@@ -887,17 +903,7 @@ class AugmentedLagrangianACOPF(nn.Module):
             vm, va, line_edge_index
         )
 
-        # Combine all constraints
-        if power_flow_constraints.numel() > 0 and line_flow_constraints.numel() > 0:
-            constraints = torch.cat([power_flow_constraints, line_flow_constraints])
-        elif power_flow_constraints.numel() > 0:
-            constraints = power_flow_constraints
-        elif line_flow_constraints.numel() > 0:
-            constraints = line_flow_constraints
-        else:
-            constraints = torch.tensor([], device=vm.device, requires_grad=True)
-
-        return constraints
+        return power_flow_constraints, line_flow_constraints
 
     def compute_augmented_lagrangian(
         self,
@@ -992,7 +998,7 @@ class AugmentedLagrangianACOPF(nn.Module):
 
         return augmented_lagrangian, components
 
-    def update_lagrange_multipliers(self, constraints: Optional[torch.Tensor] = None):
+    def update_multipliers(self, constraints: Optional[torch.Tensor] = None):
         """
         Update Lagrange multipliers using equation (17.39):
         λ^{k+1} = λ^k - μ_k c_i(x_k)
@@ -1080,22 +1086,21 @@ class AugmentedLagrangianACOPF(nn.Module):
         Returns:
             Tuple of (augmented_lagrangian_loss, info_dict)
         """
-        # Compute constraints
+
         constraints = self.compute_constraints(predictions, data)
+        lag_loss, components = self.compute_augmented_lagrangian(mse_loss, constraints)
+        penalty_param = self.mu_k
+        multipliers_active = self._should_use_multipliers()
 
-        # Compute augmented Lagrangian
-        aug_lag_loss, components = self.compute_augmented_lagrangian(mse_loss, constraints)
-
-        # Return loss and information
         info = {
             **components,
-            'penalty_parameter': self.mu_k,
+            'penalty_parameter': penalty_param,
             'n_constraints': constraints.numel(),
-            'constraints': constraints.detach(),
-            'multipliers_active': self._should_use_multipliers(),
+            'constraints': constraints.detach() if torch.is_tensor(constraints) else constraints,
+            'multipliers_active': multipliers_active,
         }
 
-        return aug_lag_loss, info
+        return lag_loss, info
 
     def step_outer_iteration(self, constraint_violation: float):
         """

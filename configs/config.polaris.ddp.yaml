@@ -18,6 +18,7 @@ optimizer:
     eps: 1.0e-08
     weight_decay: 0.01
 lagrangian:
+  base_loss_type: "mse"
   mu_0: 0.1
   tolerance: 1.0e-06
   constraint_tolerance: 0.01
