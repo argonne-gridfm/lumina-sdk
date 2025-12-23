@@ -1,6 +1,6 @@
 ---
-root: "./opf_data/"
-logging_dir: "./logs/"
+root: "/eagle/GridFM/datasets/acopf/"
+logging_dir: "/eagle/GridFM/logs/"
 optimizer:
   Adam:
     lr: 1.0e-04
@@ -57,8 +57,8 @@ trainer:
   check_val_every_n_epoch: 1
   num_sanity_val_steps: 2
   log_every_n_steps: 50
-  enable_checkpointing: true
-  enable_progress_bar: true
+  enable_checkpointing: false
+  enable_progress_bar: false
   enable_model_summary: true
   accumulate_grad_batches: 1
   gradient_clip_algorithm: "norm"
@@ -71,4 +71,4 @@ trainer:
   barebones: false
   plugins: null
   reload_dataloaders_every_n_epochs: 0
-  default_root_dir: "./lightning/"
+  default_root_dir: "/eagle/GridFM/logs/lightning/"

@@ -18,6 +18,7 @@ import numpy as np
 from .constraints import (
     compute_power_flow_violation,
     compute_power_flow_violation_v2,
+    compute_power_flow_violation_per_constraint,
     compute_line_limit_violation,
     compute_generation_cost
 )
@@ -42,6 +43,7 @@ class ACOPFConstraintEvaluator(nn.Module):
         Y_imag: Optional[torch.Tensor] = None,
         edge_index: Optional[torch.Tensor] = None,
         base_mva: float = 100.0,
+        slack_bus_indices: Optional[List[int]] = None,
         device: Optional[torch.device] = None
     ):
         """
@@ -69,6 +71,8 @@ class ACOPFConstraintEvaluator(nn.Module):
         self.Y_real = Y_real
         self.Y_imag = Y_imag
         self.edge_index = edge_index
+        self.slack_bus_indices = slack_bus_indices or [0]
+        self.total_real_power_demand = 0.0
 
         # Move tensors to device if provided
         self._move_to_device()
@@ -180,12 +184,13 @@ class ACOPFConstraintEvaluator(nn.Module):
         violations = {}
 
         # Extract predictions (concatenated over the batch: [total_nodes, feat])
-        bus_pred = predictions['bus']  # [total_bus_nodes, 2] -> [VM, VA]
+        # Model outputs bus as [VA, VM], generator as [PG, QG]
+        bus_pred = predictions['bus']  # [total_bus_nodes, 2] -> [VA, VM]
         gen_pred = predictions['generator']  # [total_gen_nodes, 2] -> [PG, QG]
 
         # Voltage magnitude and angle violations
         if self.voltage_limits is not None:
-            vm = bus_pred[..., 0]  # Voltage magnitude (concatenated)
+            vm = bus_pred[..., 1]  # Voltage magnitude (concatenated)
 
             if 'vmin' in self.voltage_limits and 'vmax' in self.voltage_limits:
                 vmin = self.voltage_limits['vmin']
@@ -214,8 +219,8 @@ class ACOPFConstraintEvaluator(nn.Module):
                     vmax_cat = vmax.to(self.device)
 
                 # Voltage magnitude violations
-                vm_low_viol = torch.relu(vmin_cat - vm) ** 2
-                vm_high_viol = torch.relu(vm - vmax_cat) ** 2
+                vm_low_viol = torch.relu(vmin_cat - vm)
+                vm_high_viol = torch.relu(vm - vmax_cat)
                 vm_violations = vm_low_viol + vm_high_viol
 
                 violations['voltage_magnitude'] = vm_violations.mean()
@@ -254,8 +259,8 @@ class ACOPFConstraintEvaluator(nn.Module):
                     pmin_cat = pmin.to(self.device)
                     pmax_cat = pmax.to(self.device)
 
-                pg_low_viol = torch.relu(pmin_cat - pg) ** 2
-                pg_high_viol = torch.relu(pg - pmax_cat) ** 2
+                pg_low_viol = torch.relu(pmin_cat - pg)
+                pg_high_viol = torch.relu(pg - pmax_cat)
                 pg_violations = pg_low_viol + pg_high_viol
 
                 violations['active_power_generation'] = pg_violations.mean()
@@ -288,8 +293,8 @@ class ACOPFConstraintEvaluator(nn.Module):
                     qmin_cat = qmin.to(self.device)
                     qmax_cat = qmax.to(self.device)
 
-                qg_low_viol = torch.relu(qmin_cat - qg) ** 2
-                qg_high_viol = torch.relu(qg - qmax_cat) ** 2
+                qg_low_viol = torch.relu(qmin_cat - qg)
+                qg_high_viol = torch.relu(qg - qmax_cat)
                 qg_violations = qg_low_viol + qg_high_viol
 
                 violations['reactive_power_generation'] = qg_violations.mean()
@@ -332,9 +337,9 @@ class ACOPFConstraintEvaluator(nn.Module):
             return violations
 
         try:
-            # Extract concatenated predictions
-            bus_pred = predictions['bus']  # [total_bus_nodes, feat]
-            gen_pred = predictions['generator']  # [total_gen_nodes, feat]
+            # Extract concatenated predictions (bus: [VA, VM], generator: [PG, QG])
+            bus_pred = predictions['bus']
+            gen_pred = predictions['generator']
 
             # Determine batch size and per-case dimensions
             n_bus = self.Y_real.shape[0]  # Number of buses per case
@@ -349,17 +354,24 @@ class ACOPFConstraintEvaluator(nn.Module):
             n_gen = gen_pred.shape[0] // batch_size if gen_pred.shape[0] > 0 else 0
 
             # Process each sample in the batch
-            sample_violations = []
+            sample_p_violations = []
+            sample_q_violations = []
 
             for sample_idx in range(batch_size):
                 try:
+                    sample_total_real_power = self._compute_sample_real_power_demand(
+                        batch_data=batch_data,
+                        sample_idx=sample_idx,
+                        batch_size=batch_size,
+                    )
+
                     # Extract per-sample predictions
                     bus_start = sample_idx * n_bus
                     bus_end = (sample_idx + 1) * n_bus
-                    sample_bus_pred = bus_pred[bus_start:bus_end]  # [n_bus, 2]
+                    sample_bus_pred = bus_pred[bus_start:bus_end]  # [n_bus, 2] -> [VA, VM]
 
-                    vm_sample = sample_bus_pred[:, 0]  # Voltage magnitude
-                    va_sample = sample_bus_pred[:, 1] * 180.0  # Convert to degrees
+                    vm_sample = sample_bus_pred[:, 1]  # Voltage magnitude
+                    va_sample = sample_bus_pred[:, 0]  # Voltage angle (degrees)
 
                     # Extract per-sample generator predictions
                     if n_gen > 0:
@@ -419,31 +431,79 @@ class ACOPFConstraintEvaluator(nn.Module):
                         p_inj_sample = torch.zeros(n_bus, device=self.device)
                         q_inj_sample = torch.zeros(n_bus, device=self.device)
 
+                    # Subtract load demand if available: batch_data.x_dict['load'] stores [pd, qd]
+                    if batch_data is not None and hasattr(batch_data, 'x_dict') and 'load' in batch_data.x_dict:
+                        load_feat = batch_data.x_dict['load']
+                        if ('load', 'load_link', 'bus') in batch_data.edge_index_dict:
+                            load_bus_edges = batch_data[('load', 'load_link', 'bus')].edge_index
+                            # Filter edges for this sample (assuming contiguous batching)
+                            n_load = load_feat.shape[0] // batch_size if batch_size > 0 else 0
+                            for k in range(load_bus_edges.shape[1]):
+                                lidx = int(load_bus_edges[0, k].item())
+                                bidx = int(load_bus_edges[1, k].item())
+                                sample_lidx = lidx - sample_idx * n_load
+                                sample_bidx = bidx - sample_idx * n_bus
+                                if 0 <= sample_lidx < n_load and 0 <= sample_bidx < n_bus:
+                                    # print(f"sample_bidx {sample_bidx}: load_feat {load_feat[sample_lidx, :]}")  # DEBUG
+                                    p_inj_sample[sample_bidx] -= load_feat[sample_lidx, 0]
+                                    q_inj_sample[sample_bidx] -= load_feat[sample_lidx, 1]
+                        else:
+                            # Fallback: if load count matches buses per sample, align directly
+                            n_load = load_feat.shape[0] // batch_size if batch_size > 0 else 0
+                            if n_load == n_bus:
+                                load_start = sample_idx * n_load
+                                load_end = (sample_idx + 1) * n_load
+                                sample_load = load_feat[load_start:load_end]
+                                p_inj_sample -= sample_load[:, 0]
+                                q_inj_sample -= sample_load[:, 1]
+
                     # Compute power flow violation for this sample using single-case admittance
-                    sample_violation = compute_power_flow_violation(
+                    p_per_bus_violation, q_per_bus_violation = compute_power_flow_violation_per_constraint(
                         VM=vm_sample,
                         VA=va_sample,
                         P_inj=p_inj_sample,
                         Q_inj=q_inj_sample,
                         Y_real=self.Y_real,  # Single case admittance matrix
                         Y_imag=self.Y_imag,
-                        normalize=False  # We'll normalize after aggregating
                     )
+                    slack_indices = [i for i in (self.slack_bus_indices or []) if 0 <= i < n_bus]
+                    if slack_indices:
+                        p_per_bus_violation = p_per_bus_violation.clone()
+                        q_per_bus_violation = q_per_bus_violation.clone()
+                        p_per_bus_violation[slack_indices] = 0.0
+                        q_per_bus_violation[slack_indices] = 0.0
 
-                    sample_violations.append(sample_violation)
+                    if normalize:
+                        denom = self._get_normalization_denominator(sample_total_real_power)
+                        p_per_bus_violation = p_per_bus_violation / denom
+                        q_per_bus_violation = q_per_bus_violation / denom
+
+                    sample_p_violation = p_per_bus_violation.max()
+                    sample_q_violation = q_per_bus_violation.max()
+
+                    sample_p_violations.append(sample_p_violation)
+                    sample_q_violations.append(sample_q_violation)
 
                 except Exception as e:
                     print(f"Warning: Error processing sample {sample_idx}: {e}")
-                    sample_violations.append(torch.tensor(0.0, device=self.device))
+                    sample_p_violations.append(torch.tensor(0.0, device=self.device))
+                    sample_q_violations.append(torch.tensor(0.0, device=self.device))
 
             # Aggregate violations across batch
-            if sample_violations:
-                total_violation = torch.stack(sample_violations).sum()
+            if sample_p_violations:
+                total_violation = torch.stack(sample_p_violations).sum()
                 if normalize:
-                    total_violation = total_violation / len(sample_violations)
-                violations['power_flow_violations'] = total_violation
+                    total_violation = total_violation / len(sample_p_violations)
+                violations['real_power_flow_violations'] = total_violation
             else:
-                violations['power_flow_violations'] = torch.tensor(0.0, device=self.device)
+                violations['real_power_flow_violations'] = torch.tensor(0.0, device=self.device)
+            if sample_q_violations:
+                total_violation = torch.stack(sample_q_violations).sum()
+                if normalize:
+                    total_violation = total_violation / len(sample_q_violations)
+                violations['reactive_power_flow_violations'] = total_violation
+            else:
+                violations['reactive_power_flow_violations'] = torch.tensor(0.0, device=self.device)
 
         except Exception as e:
             print(f"Warning: Could not compute power flow violations: {e}")
@@ -475,8 +535,8 @@ class ACOPFConstraintEvaluator(nn.Module):
             return violations
 
         try:
-            # Extract concatenated predictions
-            bus_pred = predictions['bus']  # [total_bus_nodes, feat]
+            # Extract concatenated predictions (bus: [VA, VM])
+            bus_pred = predictions['bus']
 
             # Determine batch size and per-case dimensions
             n_bus = self.Y_real.shape[0]
@@ -492,13 +552,19 @@ class ACOPFConstraintEvaluator(nn.Module):
 
             for sample_idx in range(batch_size):
                 try:
+                    sample_total_real_power = self._compute_sample_real_power_demand(
+                        batch_data=batch_data,
+                        sample_idx=sample_idx,
+                        batch_size=batch_size,
+                    )
+
                     # Extract per-sample bus predictions
                     bus_start = sample_idx * n_bus
                     bus_end = (sample_idx + 1) * n_bus
-                    sample_bus_pred = bus_pred[bus_start:bus_end]  # [n_bus, 2]
+                    sample_bus_pred = bus_pred[bus_start:bus_end]  # [n_bus, 2] -> [VA, VM]
 
-                    vm_sample = sample_bus_pred[:, 0]  # Voltage magnitude
-                    va_sample = sample_bus_pred[:, 1] * 180.0  # Convert to degrees
+                    vm_sample = sample_bus_pred[:, 1]  # Voltage magnitude
+                    va_sample = sample_bus_pred[:, 0]  # Voltage angle (degrees)
 
                     # Compute line flow violation for this sample
                     sample_violation = compute_line_limit_violation(
@@ -510,6 +576,9 @@ class ACOPFConstraintEvaluator(nn.Module):
                         edge_index=self.edge_index,
                         normalize=False  # We'll normalize after aggregating
                     )
+                    if normalize:
+                        denom = self._get_normalization_denominator(sample_total_real_power)
+                        sample_violation = sample_violation / denom
 
                     sample_violations.append(sample_violation)
 
@@ -532,6 +601,40 @@ class ACOPFConstraintEvaluator(nn.Module):
 
         return violations
 
+    def _compute_sample_real_power_demand(self, batch_data, sample_idx: int, batch_size: int):
+        """Compute total real power demand for a specific sample in the batch."""
+        if batch_data is None or not hasattr(batch_data, 'x_dict') or 'load' not in batch_data.x_dict:
+            return None
+
+        load_feat = batch_data.x_dict['load']
+        total_demand = torch.tensor(0.0, device=load_feat.device if torch.is_tensor(load_feat) else self.device)
+
+        if ('load', 'load_link', 'bus') in batch_data.edge_index_dict:
+            load_bus_edges = batch_data[('load', 'load_link', 'bus')].edge_index
+            n_load = load_feat.shape[0] // batch_size if batch_size > 0 else 0
+            for k in range(load_bus_edges.shape[1]):
+                lidx = int(load_bus_edges[0, k].item())
+                sample_lidx = lidx - sample_idx * n_load
+                if 0 <= sample_lidx < n_load:
+                    total_demand += load_feat[sample_lidx, 0].abs()
+            return total_demand
+
+        n_load = load_feat.shape[0] // batch_size if batch_size > 0 else 0
+        if n_load == 0:
+            return None
+
+        load_start = sample_idx * n_load
+        load_end = (sample_idx + 1) * n_load
+        return load_feat[load_start:load_end, 0].abs().sum()
+
+    def _get_normalization_denominator(self, sample_total_real_power):
+        denom = sample_total_real_power if sample_total_real_power is not None else self.total_real_power_demand
+        if denom is None:
+            return torch.tensor(1e-6, device=self.device)
+        if not torch.is_tensor(denom):
+            denom = torch.tensor(float(denom), device=self.device)
+        return denom + 1e-6
+
     def evaluate_all_constraints(
         self,
         predictions: Dict[str, torch.Tensor],
@@ -551,6 +654,18 @@ class ACOPFConstraintEvaluator(nn.Module):
         Returns:
             Dictionary containing all constraint violations
         """
+        self.total_real_power_demand = torch.tensor(0.0, device=self.device)
+
+        if batch_data is not None and hasattr(batch_data, 'x_dict') and 'load' in batch_data.x_dict:
+            load_feat = batch_data.x_dict['load']
+            if ('load', 'load_link', 'bus') in batch_data.edge_index_dict:
+                load_bus_edges = batch_data[('load', 'load_link', 'bus')].edge_index
+                for k in range(load_bus_edges.shape[1]):
+                    lidx = int(load_bus_edges[0, k].item())
+                    self.total_real_power_demand += load_feat[lidx, 0].abs().sum()
+            else:
+                self.total_real_power_demand += load_feat[:, 0].abs().sum()
+
         all_violations = {}
 
         # Evaluate bound constraints
@@ -566,10 +681,10 @@ class ACOPFConstraintEvaluator(nn.Module):
         all_violations.update(line_violations)
 
         # Compute total constraint violation
-        violation_keys = ['bound_total_bound_violations', 'power_flow_violations', 'line_flow_violations']
-        total_violation = sum(all_violations.get(key, torch.tensor(0.0, device=self.device))
-                              for key in violation_keys)
-        all_violations['total_constraint_violations'] = total_violation
+        # violation_keys = ['bound_total_bound_violations', 'real_power_flow_violations', 'reactive_power_flow_violations', 'line_flow_violations']
+        # total_violation = sum(all_violations.get(key, torch.tensor(0.0, device=self.device))
+        #                       for key in violation_keys)
+        # all_violations['total_constraint_violations'] = total_violation
 
         return all_violations
 
@@ -620,6 +735,7 @@ def create_constraint_evaluator(
     Y_imag = case_data.get('Y_imag')
     edge_index = case_data.get('edge_index')
     base_mva = case_data.get('base_mva', 100.0)
+    slack_bus_indices = case_data.get('slack_bus_indices')
 
     return ACOPFConstraintEvaluator(
         voltage_limits=voltage_limits,
@@ -629,7 +745,8 @@ def create_constraint_evaluator(
         Y_imag=Y_imag,
         edge_index=edge_index,
         base_mva=base_mva,
-        device=device
+        device=device,
+        slack_bus_indices=slack_bus_indices,
     )
 
 

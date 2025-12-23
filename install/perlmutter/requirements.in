@@ -1,0 +1,14 @@
+# Perlmutter: inherit torch from frameworks module; do NOT list torch here.
+
+# Core deps mirrored from pyproject
+torch
+torch_geometric
+numpy
+pandas
+scipy
+networkx
+joblib
+pyyaml
+wandb
+lightning
+pandapower
