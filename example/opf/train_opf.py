@@ -184,8 +184,13 @@ class OPFLightningModule(pl.LightningModule):
             print(f"✓ {self.model_type} Model created")
 
         else:
-            homo_sample = convert_opf_to_homo(sample_data)
+            homo_sample = sample_data.to_homogeneous(add_node_type=True, add_edge_type=True)#convert_opf_to_homo(sample_data)
             input_dim = homo_sample.x.shape[1]
+
+            if hasattr(homo_sample, 'edge_attr') and homo_sample.edge_attr is not None:
+                edge_dim = homo_sample.edge_attr.shape[1]
+            else:
+                edge_dim = 1
 
             if self.model_type in self.config['models']:
                 model_config = self.config['models'][self.model_type]
@@ -201,8 +206,7 @@ class OPFLightningModule(pl.LightningModule):
                 }
 
             model_config['model_name'] = self.model_type
-            if 'edge_dim' not in model_config:
-                model_config['edge_dim'] = homo_sample.edge_attr.shape[1]
+            model_config['edge_dim'] = edge_dim
 
             self.model = get_gnnNets(
                 input_dim=input_dim,
@@ -263,10 +267,6 @@ class OPFLightningModule(pl.LightningModule):
         self.val_dataset = torch.utils.data.Subset(self.dataset, range(n_train, n_train + n_val))
         self.test_dataset = torch.utils.data.Subset(self.dataset, range(n_train + n_val, n_samples))
 
-        if self.model_type not in ['HeteroGNN', 'RGAT', 'HEAT', 'HGT']:
-            self.train_dataset = HomoOPFDataset(self.train_dataset)
-            self.val_dataset = HomoOPFDataset(self.val_dataset)
-            self.test_dataset = HomoOPFDataset(self.test_dataset)
 
     def on_fit_start(self):
         # Loss manager will initialize network parameters on first batch
@@ -300,7 +300,7 @@ class OPFLightningModule(pl.LightningModule):
             if isinstance(batch, torch.Tensor) or hasattr(batch, 'node_type'):
                 homo_batch = batch
             else:
-                homo_batch = convert_opf_to_homo(batch)
+                homo_batch = batch.to_homogeneous(add_node_type=True, add_edge_type=True)
                 homo_batch = homo_batch.to(self.device)
 
             # Ensure inputs are float32
@@ -324,7 +324,10 @@ class OPFLightningModule(pl.LightningModule):
         if self.model_type in ['HeteroGNN', 'RGAT', 'HEAT', 'HGT']:
             predictions = self(batch)
         else:
+            # in homogeneous models, retain pre-conversion batch dimensions for loss computation
+            pre_conversion_batch = batch
             predictions = self(batch)
+            batch = pre_conversion_batch
 
         # Use loss manager to compute loss
         loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
@@ -372,7 +375,10 @@ class OPFLightningModule(pl.LightningModule):
         if self.model_type in ['HeteroGNN', 'RGAT', 'HEAT', 'HGT']:
             predictions = self(batch)
         else:
+            # in homogeneous models, retain pre-conversion batch dimensions for loss computation
+            pre_conversion_batch = batch
             predictions = self(batch)
+            batch = pre_conversion_batch
 
         # Use loss manager to compute validation loss
         loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
@@ -525,7 +531,6 @@ def main():
         name=f'acopf-{args.model_type}-{loss_type}',
         log_model=False
     )
-
     # Setup callbacks
     if args.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
         # For Lagrangian methods, monitor constraint violation
