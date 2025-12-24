@@ -261,7 +261,6 @@ class OPFLightningModule(pl.LightningModule):
         # Create loss manager
         self.loss_manager = OPFLossManager(
             loss_type=self.loss_type,
-            grid_data=grid_data,
             device=self.device,
             lagrangian_config=lagrangian_config
         )
@@ -529,7 +528,10 @@ def main():
                 wandb_kwargs['entity'] = args.wandb_entity
             if args.wandb_run_name:
                 wandb_kwargs['name'] = args.wandb_run_name
+            else:
+                wandb_kwargs['name'] = f'acopf-{args.model_type}-{args.loss_type}'
 
+            wandb_kwargs['save_dir'] = config['logging_dir']
             wandb_kwargs.setdefault('log_model', False)
 
             wandb_logger = WandbLogger(**wandb_kwargs)
@@ -665,14 +667,6 @@ def main():
     else:
         trainer_config['sync_batchnorm'] = False
 
-    # Initialize WandB logger
-    from lightning.pytorch.loggers import WandbLogger
-    wandb_logger = WandbLogger(
-        save_dir=config['logging_dir'],
-        project='lumina-training',
-        name=f'acopf-{args.model_type}-{loss_type}',
-        log_model=False
-    )
 
     # Setup callbacks
     if args.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
