@@ -202,7 +202,7 @@ class OPFLightningModule(pl.LightningModule):
                     'num_layers': 3,
                     'dropout': 0.1,
                     'readout': 'mean',
-                    'edge_dim': homo_sample.edge_attr.shape[1]
+                    'edge_dim': edge_dim
                 }
 
             model_config['model_name'] = self.model_type
