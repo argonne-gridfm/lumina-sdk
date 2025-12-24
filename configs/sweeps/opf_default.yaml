@@ -1,7 +1,7 @@
 command:
   - python
   - example/opf/train_opf.py
-  - "--config=configs/config.yaml"
+  - "--config=configs/config.perlmutter.ddp.yaml"
   - "--wandb"
 method: bayes
 metric:
