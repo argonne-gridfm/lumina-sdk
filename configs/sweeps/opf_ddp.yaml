@@ -1,0 +1,38 @@
+command:
+  - bash
+  - -lc
+  - ./scripts/perlmutter.launch.ddp.sh
+method: bayes
+metric:
+  name: val_loss
+  goal: minimize
+parameters:
+  wandb_project:
+    value: lumina-sweep
+  case:
+    values:
+      - case14
+  model_type:
+    values:
+      - HeteroGNN
+  loss_type:
+    values:
+      - mse
+      - augmented_lagrangian
+  optimizer.Adam.lr:
+    distribution: log_uniform_values
+    min: 0.00001
+    max: 0.001
+  optimizer.Adam.weight_decay:
+    distribution: log_uniform_values
+    min: 0.000001
+    max: 0.0001
+  loader.batch_size:
+    values:
+      - 16
+      - 32
+      - 64
+early_terminate:
+  type: hyperband
+  max_iter: 20
+  s: 3

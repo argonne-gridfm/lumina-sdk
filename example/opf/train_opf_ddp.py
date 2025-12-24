@@ -98,10 +98,26 @@ def parse_case_name(case_input: str) -> str:
         f"Invalid case name '{case_input}'. Available short names: {available_short}, or use full names: {available_full}")
 
 
+def apply_nested(target_dict, dotted_key, value):
+    if not isinstance(target_dict, dict):
+        return
+    if not isinstance(dotted_key, str):
+        return
+
+    keys = dotted_key.split('.')
+    current = target_dict
+    for key in keys[:-1]:
+        if key not in current or not isinstance(current[key], dict):
+            current[key] = {}
+        current = current[key]
+    current[keys[-1]] = value
+
+
 class OPFTrainer:
     def __init__(self, config, case_name, group_id, model_type, loss_type='mse',
                  minmax_scaling=True, local_rank=0, global_rank=0, world_size=1,
-                 wandb_run_name=None, wandb_group_name=None):
+                 wandb_run_name=None, wandb_group_name=None, wandb_requested=False,
+                 wandb_project='lumina-training', wandb_entity=None, run_metadata=None):
         self.config = config
         self.case_name = case_name
         self.group_id = group_id
@@ -114,6 +130,10 @@ class OPFTrainer:
         self.device = torch.device(f'cuda:{local_rank}')
         self.wandb_run_name = wandb_run_name
         self.wandb_group_name = wandb_group_name
+        self.wandb_requested = wandb_requested
+        self.wandb_project = wandb_project
+        self.wandb_entity = wandb_entity
+        self.run_metadata = run_metadata
 
         training_config = self.config['training']
         self.max_epochs = training_config["max_epochs"]
@@ -401,19 +421,46 @@ class OPFTrainer:
             torch.nn.utils.clip_grad_norm_(parameters, self.grad_clip_val)
 
     def _init_wandb(self):
-        if not WANDB_AVAILABLE or self.global_rank != 0:
+        if not self.wandb_requested:
+            return
+        if not WANDB_AVAILABLE:
+            if self.global_rank == 0:
+                print("⚠️ Weights & Biases is not available. Install wandb or omit --wandb.")
+            return
+        if self.global_rank != 0:
+            return
+        if wandb.run is not None:
+            self.wandb_run = wandb.run
+            self.wandb_enabled = True
+            try:
+                wandb.config.update(self.config, allow_val_change=True)
+            except Exception:
+                pass
+            if self.run_metadata:
+                try:
+                    wandb.config.update({'run_metadata': self.run_metadata}, allow_val_change=True)
+                except Exception:
+                    pass
             return
         logging_dir = self.config.get('logging_dir')
         run_name = self.wandb_run_name or f"acopf-ddp-{self.model_type}-{self.loss_type}"
         try:
-            self.wandb_run = wandb.init(
-                project='lumina-training',
-                name=run_name,
-                dir=logging_dir,
-                config=self.config,
-                group=self.wandb_group_name,
-            )
+            wandb_kwargs = {
+                'project': self.wandb_project,
+                'name': run_name,
+                'dir': logging_dir,
+                'config': self.config,
+                'group': self.wandb_group_name,
+            }
+            if self.wandb_entity:
+                wandb_kwargs['entity'] = self.wandb_entity
+            self.wandb_run = wandb.init(**wandb_kwargs)
             self.wandb_enabled = True
+            if self.run_metadata:
+                try:
+                    wandb.config.update({'run_metadata': self.run_metadata}, allow_val_change=True)
+                except Exception:
+                    pass
         except Exception as exc:
             print(f"Warning: W&B init failed: {exc}")
             self.wandb_run = None
@@ -691,6 +738,11 @@ class OPFTrainer:
             }
             torch.save(checkpoint, filepath)
             print(f"Checkpoint saved to {filepath}")
+            if self.wandb_enabled and self.wandb_run is not None:
+                try:
+                    self.wandb_run.summary['best_model_path'] = filepath
+                except Exception:
+                    pass
     
     def train(self):
         checkpoint_dir = self.checkpoint_dir
@@ -713,7 +765,7 @@ class OPFTrainer:
                 val_loss, val_task_loss, val_metrics = self.validate()
                 self._log_wandb_validation(val_metrics)
             
-            if self.global_rank == 0:
+            if not self.wandb_enabled and self.global_rank == 0:
                 # W&B step logging is handled during training; add epoch-level logging here if needed.
                 print(f"\nEpoch {epoch}:")
                 print(f"  Train Loss: {train_loss:.4f}, Train Task: {train_task_loss:.4f}")
@@ -772,13 +824,25 @@ def main():
                         help='Loss function type (default: mse)')
     parser.add_argument('--minmax_scaling', dest='minmax_scaling', action='store_true',
                         help='Apply min-max scaling to model outputs (default: enabled)')
+    parser.add_argument('--wandb', action='store_true', default=False,
+                        help='Enable Weights & Biases logging')
+    parser.add_argument('--wandb_project', type=str, default='lumina-training',
+                        help='Weights & Biases project name (default: lumina-training)')
+    parser.add_argument('--wandb_entity', type=str, default=None,
+                        help='Weights & Biases entity/team name')
     parser.add_argument('--wandb_run_name', type=str, default=None,
                         help='Weights & Biases run name override (default: auto)')
     parser.add_argument('--wandb_group_name', type=str, default=None,
                         help='Weights & Biases group name (default: none)')
+    parser.add_argument('--wandb_mode', type=str, default=None,
+                        choices=['online', 'offline', 'disabled'],
+                        help='Weights & Biases mode override')
     
     
     args = parser.parse_args()
+
+    if args.wandb_mode:
+        os.environ['WANDB_MODE'] = args.wandb_mode
     
     local_rank = int(os.environ.get('LOCAL_RANK', 0))
     world_size = int(os.environ.get('WORLD_SIZE', 1))
@@ -836,8 +900,71 @@ def main():
                 if 'models' not in config:
                     config['models'] = {}
                 config['models'].update(model_config['models'])
-    
+
+    sweep_overrides = {}
+    if args.wandb:
+        if not WANDB_AVAILABLE:
+            if global_rank == 0:
+                print("⚠️ Weights & Biases is not available. Install wandb or omit --wandb.")
+        elif global_rank == 0:
+            logging_dir = config.get('logging_dir')
+            wandb_kwargs = {
+                'project': args.wandb_project,
+            }
+            if args.wandb_entity:
+                wandb_kwargs['entity'] = args.wandb_entity
+            if args.wandb_group_name:
+                wandb_kwargs['group'] = args.wandb_group_name
+            if logging_dir:
+                wandb_kwargs['dir'] = logging_dir
+            try:
+                wandb.init(**wandb_kwargs)
+                sweep_overrides = dict(wandb.config)
+            except Exception as exc:
+                print(f"Warning: W&B init failed: {exc}")
+
+    if global_rank == 0 and sweep_overrides:
+        reserved_override_keys = {'wandb_version'}
+        reserved_args = {'wandb', 'wandb_mode'}
+
+        for key, value in sweep_overrides.items():
+            if not isinstance(key, str):
+                continue
+            if key in reserved_override_keys or key.startswith('_'):
+                continue
+            if key in reserved_args:
+                continue
+            if hasattr(args, key):
+                setattr(args, key, value)
+                continue
+            apply_nested(config, key, value)
+
+    if dist.is_available() and dist.is_initialized() and world_size > 1:
+        obj_list = [args, config] if global_rank == 0 else [None, None]
+        dist.broadcast_object_list(obj_list, src=0)
+        args, config = obj_list
+
+    if args.wandb and WANDB_AVAILABLE and global_rank == 0 and wandb.run is not None:
+        run_name = args.wandb_run_name or f"acopf-ddp-{args.model_type}-{args.loss_type}"
+        try:
+            wandb.run.name = run_name
+        except Exception:
+            pass
+
     case_name = parse_case_name(args.case)
+    run_metadata = None
+    if args.wandb:
+        run_metadata = {
+            'case_name': case_name,
+            'config_path': str(config_path),
+            'group_id': args.group_id,
+            'loss_type': args.loss_type,
+            'model_type': args.model_type,
+            'world_size': world_size,
+            'cli_args': {k: v for k, v in vars(args).items()
+                         if k not in {'wandb', 'wandb_project', 'wandb_entity', 'wandb_run_name',
+                                      'wandb_group_name', 'wandb_mode'}},
+        }
     
     # Initialize trainer
     trainer = OPFTrainer(
@@ -851,7 +978,11 @@ def main():
         global_rank=global_rank,
         world_size=world_size,
         wandb_run_name=args.wandb_run_name,
-        wandb_group_name=args.wandb_group_name
+        wandb_group_name=args.wandb_group_name,
+        wandb_requested=args.wandb,
+        wandb_project=args.wandb_project,
+        wandb_entity=args.wandb_entity,
+        run_metadata=run_metadata,
     )
 
     # Train
