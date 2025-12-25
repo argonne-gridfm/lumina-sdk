@@ -17,6 +17,11 @@ lagrangian:
   
   # Maximum outer iterations (for constraint satisfaction)
   max_outer_iterations: 20
+
+  # Sample-based scheduling (set to null to use epoch-based scheduling)
+  warmup_samples: null
+  penalty_check_samples: null
+  multiplier_check_samples: null
   
   # Factor to increase penalty parameter
   mu_increase_factor: 1.0

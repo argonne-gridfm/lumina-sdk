@@ -3,7 +3,7 @@
 #SBATCH -C gpu
 #SBATCH -q debug
 #SBATCH -t 0:30:00
-#SBATCH -N 2
+#SBATCH -N 8
 #SBATCH --ntasks-per-node=1
 #SBATCH -c 32
 #SBATCH --gpus-per-task=4
@@ -23,4 +23,4 @@ export OMP_NUM_THREADS=32
 module load conda
 conda activate ${CFS}/amsc004/conda_envs/lumina
 
-wandb agent kibaek-kim-argonne-national-laboratory/lumina-core/cw6v7253
+wandb agent xxx

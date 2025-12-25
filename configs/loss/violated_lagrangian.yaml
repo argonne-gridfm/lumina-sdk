@@ -14,6 +14,10 @@ lagrangian:
   
   # Number of warmup epochs before starting multiplier updates
   warmup_iter: 10
+
+  # Sample-based scheduling (set to null to use epoch-based scheduling)
+  warmup_samples: null
+  multiplier_check_samples: null
   
   # Update multipliers every N epochs
   update_frequency: 5

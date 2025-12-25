@@ -4,14 +4,11 @@ command:
   - ./scripts/perlmutter.launch.ddp.sh
 method: bayes
 metric:
-  name: val_loss
+  name: val/feas/total_violation
   goal: minimize
 parameters:
   wandb_project:
     value: lumina-sweep
-  case:
-    values:
-      - case14
   model_type:
     values:
       - HeteroGNN
@@ -19,6 +16,7 @@ parameters:
     values:
       - mse
       - augmented_lagrangian
+      - violated_lagrangian
   optimizer.Adam.lr:
     distribution: log_uniform_values
     min: 0.00001
@@ -32,6 +30,33 @@ parameters:
       - 16
       - 32
       - 64
+  training.accumulate_grad_batches:
+    values:
+      - 1
+      - 2
+      - 4
+      - 8
+  lagrangian.warmup_samples:
+    values:
+      - 6000
+      - 12000
+      - 24000
+      - 48000
+      - 96000
+  lagrangian.penalty_check_samples:
+    values:
+      - 1500
+      - 3000
+      - 6000
+      - 12000
+      - 24000
+  lagrangian.multiplier_check_samples:
+    values:
+      - 1500
+      - 3000
+      - 6000
+      - 12000
+      - 24000
 early_terminate:
   type: hyperband
   max_iter: 20

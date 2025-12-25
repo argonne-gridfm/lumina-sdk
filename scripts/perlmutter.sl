@@ -31,5 +31,6 @@ srun --ntasks=$SLURM_JOB_NUM_NODES --ntasks-per-node=1 \
     --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
     example/opf/train_opf_ddp.py \
     --config=configs/config.perlmutter.ddp.yaml \
-    --group_id=9 \
+    --cases case14 \
+    --group_ids 0 \
     --loss_type=mse

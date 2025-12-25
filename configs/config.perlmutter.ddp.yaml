@@ -37,6 +37,9 @@ lagrangian:
   multiplier_min_improve: 0.0
   normalize_constraints: true
   verbose: false
+  warmup_samples: 12000
+  penalty_check_samples: 12000
+  multiplier_check_samples: 12000
 train_split: 0.8
 val_split: 0.1
 loader:
@@ -44,15 +47,17 @@ loader:
   shuffle: true
   num_workers: 0
 training:
-  max_epochs: 20
+  max_epochs: 50
   patience: 10 
+  max_global_samples: 150000
   gradient_clip_val: 1.0
   gradient_clip_algorithm: "norm"
   accumulate_grad_batches: 1
   log_every_n_steps: 50
+  log_every_n_samples: 2048
   val_check_interval: 1
   throughput_enabled: false
 checkpointing:
-  monitor: "val_loss"
+  monitor: "val/feas/total_violation"
   save_last: true
   every_n_epochs: 1
