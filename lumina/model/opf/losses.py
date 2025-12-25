@@ -383,6 +383,7 @@ class OPFLossManager(nn.Module):
         lag_config = lagrangian_config or {}
         self._last_lagrangian_loss = None
         self._iters_since_lagrangian_update = 0
+        self.constraint_monitor = None
 
         # Initialize the appropriate loss function
         if loss_type == 'augmented_lagrangian':
@@ -405,6 +406,11 @@ class OPFLossManager(nn.Module):
             # Standard ML loss
             self.base_loss = ACOPFLossFunction(loss_type=loss_type, **kwargs)
             self.lagrangian = None
+            from .augmented_lagrangian import AugmentedLagrangianACOPF
+
+            monitor_kwargs = dict(lag_config)
+            monitor_kwargs.setdefault("verbose", False)
+            self.constraint_monitor = AugmentedLagrangianACOPF(**monitor_kwargs)
 
         # Track whether Lagrangian network parameters have been initialized
         self._lagrangian_initialized = False
@@ -448,7 +454,7 @@ class OPFLossManager(nn.Module):
                 or stored_Y.size(0) != current_n_bus
             )
             if need_init:
-                self._ensure_network_parameters(batch, predictions['bus'].device)
+                self._ensure_network_parameters(batch, predictions['bus'].device, target=self.lagrangian)
             constraint_batch = constraint_data or self._create_constraint_batch(batch, predictions)
             lag_loss, info = self.lagrangian(mse_loss, predictions, constraint_batch)
 
@@ -464,9 +470,58 @@ class OPFLossManager(nn.Module):
             loss = results['total_loss']
 
             if return_info:
+                results.update(self._collect_constraint_metrics(predictions, batch, constraint_data))
                 return loss, results
             else:
                 return loss
+
+    def _collect_constraint_metrics(self, predictions, batch, constraint_data):
+        monitor = self.constraint_monitor
+        if monitor is None:
+            return {}
+        if 'bus' not in predictions or 'generator' not in predictions:
+            return {}
+
+        try:
+            self._ensure_network_parameters(batch, predictions['bus'].device, target=monitor)
+        except Exception:
+            return {}
+
+        if getattr(monitor, 'Y_real', None) is None or getattr(monitor, 'Y_imag', None) is None:
+            return {}
+
+        try:
+            constraint_batch = constraint_data or self._create_constraint_batch(batch, predictions)
+            constraints = monitor.compute_constraints(predictions, constraint_batch)
+        except Exception:
+            return {}
+
+        if constraints is None or constraints.numel() == 0:
+            raw_violation = 0.0
+            ema_violation = 0.0
+        else:
+            if torch.is_grad_enabled():
+                monitor._constraint_signal_for_loss(constraints)
+                raw_violation = monitor._raw_violation
+                ema_violation = monitor._ema_violation
+                if raw_violation is None:
+                    raw_violation = monitor._compute_violation_norm(constraints)
+                if ema_violation is None:
+                    ema_violation = raw_violation
+            else:
+                raw_violation = monitor._compute_violation_norm(constraints)
+                ema_violation = raw_violation
+
+        constraint_violation = ema_violation if ema_violation is not None else raw_violation
+
+        return {
+            'constraint_violation': constraint_violation,
+            'raw_constraint_violation': raw_violation,
+            'ema_constraint_violation': ema_violation,
+            'p_balance_rmse': monitor._last_p_balance_rms,
+            'q_balance_rmse': monitor._last_q_balance_rms,
+            'line_limit_rmse': monitor._last_line_limit_rms,
+        }
 
     def update_lagrangian(
         self,
@@ -475,6 +530,7 @@ class OPFLossManager(nn.Module):
         update_penalty: bool = True,
         is_training: bool = True,
         force: bool = False,
+        sample_count: Optional[int] = None,
     ):
         """
         Update Lagrangian multipliers or penalty parameters.
@@ -487,9 +543,13 @@ class OPFLossManager(nn.Module):
             update_penalty: Whether to update the penalty parameter μ
             is_training: Whether updates should run (skip during eval)
             force: Bypass loss-based trigger and update immediately
+            sample_count: Number of samples processed since last update (for sample-based scheduling)
         """
         if self.lagrangian is None or not is_training:
             return
+
+        if sample_count is not None and hasattr(self.lagrangian, "step_samples"):
+            self.lagrangian.step_samples(sample_count)
 
         # After warmup, always update multipliers using the EMA constraints.
         constraint_tensor = constraints if constraints is not None else None
@@ -627,15 +687,16 @@ class OPFLossManager(nn.Module):
 
         return Y_real, Y_imag
 
-    def _ensure_network_parameters(self, batch, device):
+    def _ensure_network_parameters(self, batch, device, target=None):
         """Initialize AugLag network parameters from batch data when needed."""
-        if self.lagrangian is None:
+        target = target or self.lagrangian
+        if target is None:
             return
 
         n_bus = batch['bus'].x.size(0)
         need_init = (
-            getattr(self.lagrangian, 'Y_real', None) is None
-            or self.lagrangian.Y_real.size(0) != n_bus
+            getattr(target, 'Y_real', None) is None
+            or target.Y_real.size(0) != n_bus
         )
 
         if not need_init:
@@ -658,7 +719,7 @@ class OPFLossManager(nn.Module):
             base_mva = base_mva.view(-1)[0].item()
         base_mva = float(base_mva) if base_mva is not None else 100.0
 
-        self.lagrangian.set_network_parameters(
+        target.set_network_parameters(
             Y_real=Y_real,
             Y_imag=Y_imag,
             line_limits=line_limits,
@@ -666,8 +727,9 @@ class OPFLossManager(nn.Module):
         )
 
         # Avoid re-initializing network parameters on subsequent calls
-        self._lagrangian_initialized = True
-        self._lagrangian_bus_count = n_bus
+        if target is self.lagrangian:
+            self._lagrangian_initialized = True
+            self._lagrangian_bus_count = n_bus
 
     def _extract_inputs(self, batch):
         """Extract input data dictionary for violated Lagrangian."""

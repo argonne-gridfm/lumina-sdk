@@ -720,9 +720,10 @@ class HGT(torch.nn.Module):
                 raise ValueError(f"input_channels must contain entry for node type '{node_type}'")
             self.lin_dict[node_type] = Linear(input_channels[node_type], hidden_channels)
 
+        metadata_tuple = (self.node_types, self.edge_types) if isinstance(metadata, dict) else metadata
         self.convs = torch.nn.ModuleList()
         for _ in range(num_layers):
-            conv = HGTConv(hidden_channels, hidden_channels, metadata, num_heads)
+            conv = HGTConv(hidden_channels, hidden_channels, metadata_tuple, num_heads)
             self.convs.append(conv)
 
         # Output layers for target node types

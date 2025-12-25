@@ -307,6 +307,104 @@ class AugmentedLagrangian(nn.Module):
         return self.augmented_lagrangian(x)
 
 
+class _LagrangianSchedule:
+    def __init__(
+        self,
+        warmup_epochs: int,
+        warmup_samples: Optional[int],
+        penalty_check_interval: int,
+        penalty_check_samples: Optional[int],
+        multiplier_check_interval: int,
+        multiplier_check_samples: Optional[int],
+    ):
+        self.warmup_epochs = warmup_epochs
+        self.warmup_samples = warmup_samples
+        self.penalty_check_interval = max(1, penalty_check_interval)
+        self.penalty_check_samples = penalty_check_samples
+        self.multiplier_check_interval = max(1, multiplier_check_interval)
+        self.multiplier_check_samples = multiplier_check_samples
+
+        self.current_epoch = 0
+        self.current_samples = 0
+        self.epochs_since_penalty_check = 0
+        self.samples_since_penalty_check = 0
+        self.multiplier_steps_since_update = 0
+        self.samples_since_multiplier_update = 0
+
+    @staticmethod
+    def normalize_sample_value(value: Optional[int]) -> Optional[int]:
+        if value is None:
+            return None
+        try:
+            value_int = int(value)
+        except (TypeError, ValueError):
+            return None
+        return value_int if value_int > 0 else None
+
+    def warmup_complete(self) -> bool:
+        if self.warmup_samples is not None:
+            return self.current_samples >= self.warmup_samples
+        return self.current_epoch >= self.warmup_epochs
+
+    def uses_sample_penalty(self) -> bool:
+        return self.penalty_check_samples is not None
+
+    def uses_sample_multiplier(self) -> bool:
+        return self.multiplier_check_samples is not None
+
+    def advance_epoch(self):
+        self.current_epoch += 1
+
+    def advance_samples(self, sample_count: int):
+        self.current_samples += sample_count
+        if self.penalty_check_samples is not None:
+            self.samples_since_penalty_check += sample_count
+        if self.multiplier_check_samples is not None:
+            self.samples_since_multiplier_update += sample_count
+
+    def penalty_check_due(self) -> bool:
+        if self.penalty_check_samples is not None:
+            if self.samples_since_penalty_check < self.penalty_check_samples:
+                return False
+            self.samples_since_penalty_check = 0
+            return True
+
+        self.epochs_since_penalty_check += 1
+        if self.epochs_since_penalty_check < self.penalty_check_interval:
+            return False
+        self.epochs_since_penalty_check = 0
+        return True
+
+    def force_penalty_check(self):
+        if self.penalty_check_samples is not None:
+            self.samples_since_penalty_check = 0
+        else:
+            self.epochs_since_penalty_check = 0
+
+    def multiplier_interval_ready(self) -> bool:
+        if self.multiplier_check_samples is not None:
+            return self.samples_since_multiplier_update >= self.multiplier_check_samples
+
+        if self.multiplier_steps_since_update < self.multiplier_check_interval - 1:
+            self.multiplier_steps_since_update += 1
+            return False
+        return True
+
+    def reset_multiplier_interval(self):
+        self.multiplier_steps_since_update = 0
+        self.samples_since_multiplier_update = 0
+
+    def reset_penalty_interval(self):
+        self.epochs_since_penalty_check = 0
+        self.samples_since_penalty_check = 0
+
+    def reset(self):
+        self.current_epoch = 0
+        self.current_samples = 0
+        self.reset_penalty_interval()
+        self.reset_multiplier_interval()
+
+
 class AugmentedLagrangianACOPF(nn.Module):
     """
     Augmented Lagrangian method for ACOPF neural network training.
@@ -330,8 +428,10 @@ class AugmentedLagrangianACOPF(nn.Module):
         normalize_constraints: bool = False,
         verbose: bool = False,
         warmup_epochs: int = 0,
+        warmup_samples: Optional[int] = None,
         ema_beta: float = 0.9,
         penalty_check_interval: int = 5,
+        penalty_check_samples: Optional[int] = None,
         penalty_drop_ratio: float = 0.5,
         penalty_increase_factor: Optional[float] = None,
         min_penalty: Optional[float] = None,
@@ -339,6 +439,7 @@ class AugmentedLagrangianACOPF(nn.Module):
         multiplier_clip: float = 1000.0,
         multiplier_improve_ratio: float = 0.0,
         multiplier_check_interval: int = 1,
+        multiplier_check_samples: Optional[int] = None,
         multiplier_min_improve: float = 0.0,
         **_
     ):
@@ -356,8 +457,10 @@ class AugmentedLagrangianACOPF(nn.Module):
             normalize_constraints(bool): Whether to normalize constraint violations
             verbose(bool): If True, print penalty update logging during training
             warmup_epochs(int): Number of epochs to run penalty-only (λ = 0)
+            warmup_samples(Optional[int]): Sample-based warmup before multipliers activate
             ema_beta(float): Exponential moving average factor for constraint violations
             penalty_check_interval(int): Epoch interval for checking penalty increases
+            penalty_check_samples(Optional[int]): Sample interval for penalty updates
             penalty_drop_ratio(float): Required reduction ratio to avoid penalty increase
             penalty_increase_factor(Optional[float]): Factor to scale μ when increasing
             min_penalty(Optional[float]): Lower bound for μ (defaults to mu_0)
@@ -365,6 +468,7 @@ class AugmentedLagrangianACOPF(nn.Module):
             multiplier_clip(float): Clamp range for λ updates
             multiplier_improve_ratio(float): Require violation ≤ ratio * last_violation to update λ (<=0 disables check)
             multiplier_check_interval(int): Minimum steps between multiplier updates
+            multiplier_check_samples(Optional[int]): Sample interval between multiplier updates
             multiplier_min_improve(float): Absolute improvement required to update λ (0 disables)
             **_: Ignore extra keyword arguments for forward compatibility
         """
@@ -382,22 +486,33 @@ class AugmentedLagrangianACOPF(nn.Module):
         self.normalize_constraints = normalize_constraints
         self.verbose = verbose
         self.warmup_epochs = warmup_epochs
+        self.warmup_samples = _LagrangianSchedule.normalize_sample_value(warmup_samples)
         self.ema_beta = ema_beta
         self.penalty_check_interval = max(1, penalty_check_interval)
+        self.penalty_check_samples = _LagrangianSchedule.normalize_sample_value(penalty_check_samples)
         self.penalty_drop_ratio = penalty_drop_ratio
         self.multiplier_clip = multiplier_clip
         self.multiplier_improve_ratio = multiplier_improve_ratio
         self.multiplier_check_interval = max(1, multiplier_check_interval)
+        self.multiplier_check_samples = _LagrangianSchedule.normalize_sample_value(multiplier_check_samples)
         self.multiplier_min_improve = multiplier_min_improve
         self.min_penalty = min_penalty if min_penalty is not None else mu_0
         self.max_penalty = max_penalty if max_penalty is not None else max_mu
         self.max_mu = self.max_penalty
 
+        self._schedule = _LagrangianSchedule(
+            warmup_epochs=self.warmup_epochs,
+            warmup_samples=self.warmup_samples,
+            penalty_check_interval=self.penalty_check_interval,
+            penalty_check_samples=self.penalty_check_samples,
+            multiplier_check_interval=self.multiplier_check_interval,
+            multiplier_check_samples=self.multiplier_check_samples,
+        )
+
         # Current algorithm state
         self.mu_k = float(np.clip(mu_0, self.min_penalty, self.max_penalty))
         self.lambda_k = None  # Lagrange multipliers
         self.outer_iteration = 0
-        self.current_epoch = 0
 
         # Network parameters (to be set)
         self.Y_real = None
@@ -414,16 +529,39 @@ class AugmentedLagrangianACOPF(nn.Module):
         self._latest_constraint_signal: Optional[torch.Tensor] = None
         self._raw_violation: Optional[float] = None
         self._ema_violation: Optional[float] = None
-        self._epochs_since_penalty_check = 0
         self._last_penalty_check_violation: Optional[float] = None
         self._last_multiplier_norm: Optional[float] = None
         self._last_multiplier_violation: Optional[float] = None
-        self._multiplier_steps_since_update: int = 0
         self._last_multiplier_updated: bool = False
         # Last computed RMS values for P and Q balance and line limit (float or None)
         self._last_p_balance_rms: Optional[float] = None
         self._last_q_balance_rms: Optional[float] = None
         self._last_line_limit_rms: Optional[float] = None
+
+    def _warmup_complete(self) -> bool:
+        return self._schedule.warmup_complete()
+
+    @property
+    def current_epoch(self) -> int:
+        return self._schedule.current_epoch
+
+    @current_epoch.setter
+    def current_epoch(self, value: int):
+        try:
+            self._schedule.current_epoch = int(value)
+        except (TypeError, ValueError):
+            self._schedule.current_epoch = 0
+
+    @property
+    def current_samples(self) -> int:
+        return self._schedule.current_samples
+
+    @current_samples.setter
+    def current_samples(self, value: int):
+        try:
+            self._schedule.current_samples = int(value)
+        except (TypeError, ValueError):
+            self._schedule.current_samples = 0
 
     def set_network_parameters(
         self,
@@ -466,12 +604,12 @@ class AugmentedLagrangianACOPF(nn.Module):
         self._raw_violation = None
         self._ema_violation = None
         self._last_penalty_check_violation = None
-        self._epochs_since_penalty_check = 0
+        self._schedule.reset_penalty_interval()
 
 
     def _should_use_multipliers(self) -> bool:
         """Return True when multiplier updates are allowed (post-warmup)."""
-        return self.current_epoch >= self.warmup_epochs
+        return self._warmup_complete()
 
     def _init_constraint_buffers(self, constraints: torch.Tensor):
         """Initialize buffers that depend on the constraint dimension."""
@@ -531,15 +669,15 @@ class AugmentedLagrangianACOPF(nn.Module):
         self.mu_k = float(np.clip(self.mu_k, self.min_penalty, self.max_penalty))
 
         # During warmup, just seed the baseline and skip updates
-        if self.current_epoch < self.warmup_epochs and not force:
+        if not self._warmup_complete() and not force:
             self._last_penalty_check_violation = current_violation
             return
 
         if not force:
-            self._epochs_since_penalty_check += 1
-            if self._epochs_since_penalty_check < self.penalty_check_interval:
+            if not self._schedule.penalty_check_due():
                 return
-            self._epochs_since_penalty_check = 0
+        else:
+            self._schedule.force_penalty_check()
 
         if self._last_penalty_check_violation is None:
             self._last_penalty_check_violation = current_violation
@@ -571,8 +709,7 @@ class AugmentedLagrangianACOPF(nn.Module):
             return True
 
         # Respect minimum interval between updates
-        if self._multiplier_steps_since_update < self.multiplier_check_interval - 1:
-            self._multiplier_steps_since_update += 1
+        if not self._schedule.multiplier_interval_ready():
             return False
 
         ratio_ok = (
@@ -998,6 +1135,16 @@ class AugmentedLagrangianACOPF(nn.Module):
 
         return augmented_lagrangian, components
 
+    def _apply_multiplier_update(self, constraint_signal: torch.Tensor):
+        update = self.mu_k * constraint_signal.detach()
+        self.lambda_k = self.lambda_k - update
+
+        if self.multiplier_clip is not None:
+            self.lambda_k = torch.clamp(self.lambda_k, -self.multiplier_clip, self.multiplier_clip)
+
+    def _post_multiplier_update(self):
+        return
+
     def update_multipliers(self, constraints: Optional[torch.Tensor] = None):
         """
         Update Lagrange multipliers using equation (17.39):
@@ -1024,19 +1171,30 @@ class AugmentedLagrangianACOPF(nn.Module):
             self._last_multiplier_updated = False
             return
 
-        self._multiplier_steps_since_update = 0
-
-        # Update multipliers with clipping to prevent explosive growth
-        update = self.mu_k * constraint_signal.detach()
-        self.lambda_k = self.lambda_k - update
-
-        # Clip multipliers to reasonable range to prevent divergence
-        if self.multiplier_clip is not None:
-            self.lambda_k = torch.clamp(self.lambda_k, -self.multiplier_clip, self.multiplier_clip)
+        self._schedule.reset_multiplier_interval()
+        self._apply_multiplier_update(constraint_signal)
 
         self._last_multiplier_norm = torch.norm(self.lambda_k).item()
         self._last_multiplier_violation = violation_val
         self._last_multiplier_updated = True
+        self._post_multiplier_update()
+
+    def step_samples(self, sample_count: Optional[int]):
+        """Advance sample counters and run sample-based penalty updates."""
+        if sample_count is None:
+            return
+        try:
+            sample_count = int(sample_count)
+        except (TypeError, ValueError):
+            return
+        if sample_count <= 0:
+            return
+
+        self._schedule.advance_samples(sample_count)
+
+        if self._schedule.uses_sample_penalty():
+            current_violation = self._ema_violation if self._ema_violation is not None else self._raw_violation
+            self._maybe_update_penalty(current_violation)
 
         # Store history
         self.lagrange_history.append(self.lambda_k.clone().cpu().numpy())
@@ -1050,7 +1208,6 @@ class AugmentedLagrangianACOPF(nn.Module):
             prev_violation: Previous constraint violation norm
         """
         # Allow manual/legacy updates by forcing an immediate penalty check
-        self._epochs_since_penalty_check = 0
         if prev_violation is not None:
             self._last_penalty_check_violation = prev_violation
         self._maybe_update_penalty(constraint_violation, force=True)
@@ -1120,9 +1277,10 @@ class AugmentedLagrangianACOPF(nn.Module):
 
     def step_epoch(self):
         """Advance epoch counter and run scheduled penalty updates."""
-        current_violation = self._ema_violation if self._ema_violation is not None else self._raw_violation
-        self._maybe_update_penalty(current_violation)
-        self.current_epoch += 1
+        if not self._schedule.uses_sample_penalty():
+            current_violation = self._ema_violation if self._ema_violation is not None else self._raw_violation
+            self._maybe_update_penalty(current_violation)
+        self._schedule.advance_epoch()
 
     def reset_for_new_problem(self):
         """Reset algorithm state for a new optimization problem."""
@@ -1137,9 +1295,7 @@ class AugmentedLagrangianACOPF(nn.Module):
         self._latest_constraint_signal = None
         self._raw_violation = None
         self._ema_violation = None
-        self.current_epoch = 0
-        self._epochs_since_penalty_check = 0
+        self._schedule.reset()
         self._last_penalty_check_violation = None
         self._last_multiplier_violation = None
-        self._multiplier_steps_since_update = 0
         self._last_multiplier_updated = False
