@@ -1,0 +1,26 @@
+command:
+  - bash
+  - -lc
+  - ./scripts/perlmutter/sweep/launch.gat.sh
+method: bayes
+metric:
+  name: val/score
+  goal: minimize
+parameters:
+  wandb_project:
+    value: lumina-sweep-gat-stage1
+  optimizer.AdamW.lr:
+    distribution: log_uniform_values
+    min: 1e-5
+    max: 1e-3
+  optimizer.AdamW.weight_decay:
+    distribution: log_uniform_values
+    min: 1e-8
+    max: 1e-2
+  training.global_batch_size:
+    values: [2048, 4096, 8192]
+early_terminate:
+  type: hyperband
+  min_iter: 8
+  max_iter: 80
+  s: 2
