@@ -92,7 +92,7 @@ def build_homo_model(model_type, model_config, input_dim, output_dim, edge_dim):
 
 def main():
     parser = argparse.ArgumentParser(description="Show model summary from config.")
-    # parser.add_argument("--model_type", type=str, required=True, help="Model type to describe.")
+    parser.add_argument("--model_type", type=str, required=True, help="Model type to describe.")
     parser.add_argument(
         "--hetero_model_config",
         type=str,
@@ -110,28 +110,19 @@ def main():
     parser.add_argument("--edge_dim", type=int, default=32, help="Edge feature dimension.")
     args = parser.parse_args()
 
-    # if model_type in HETERO_MODEL_TYPES:
-    #     model = build_hetero_model(
-    #         model_type,
-    #         model_config,
-    #         input_dim=args.input_dim,
-    #         output_dim=args.output_dim,
-    #         edge_dim=args.edge_dim,
-    #     )
-    # else:
-    #     model = build_homo_model(
-    #         model_type,
-    #         model_config,
-    #         input_dim=args.input_dim,
-    #         output_dim=args.output_dim,
-    #         edge_dim=args.edge_dim,
-    #     )
+    model_type = args.model_type
+    config_path = resolve_config_path(model_type, args.hetero_model_config, args.homo_model_config)
+    model_config = load_model_config(config_path, model_type)
 
-    for model_type in ['GCN', 'GAT', 'GIN', 'Transformer']:
-
-        # model_type = args.model_type
-        config_path = resolve_config_path(model_type, args.hetero_model_config, args.homo_model_config)
-        model_config = load_model_config(config_path, model_type)
+    if model_type in HETERO_MODEL_TYPES:
+        model = build_hetero_model(
+            model_type,
+            model_config,
+            input_dim=args.input_dim,
+            output_dim=args.output_dim,
+            edge_dim=args.edge_dim,
+        )
+    else:
         model = build_homo_model(
             model_type,
             model_config,
@@ -139,8 +130,9 @@ def main():
             output_dim=args.output_dim,
             edge_dim=args.edge_dim,
         )
-        print(f"Loaded model config: {config_path}")
-        describe_model(model, model_type=model_type, model_config=model_config)
+
+    print(f"Loaded model config: {config_path}")
+    describe_model(model, model_type=model_type, model_config=model_config)
 
 
 if __name__ == "__main__":
