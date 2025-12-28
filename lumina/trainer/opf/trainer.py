@@ -17,7 +17,7 @@ except ImportError:
     wandb = None
     WANDB_AVAILABLE = False
 
-from lumina.dataset.opf.opf_dataset import OPFDataset, OPFMultiDataset
+from lumina.dataset.opf.opf_dataset import OPFDataset, OPFHomogeneousDataset, OPFMultiDataset
 from lumina.model.base.utils import describe_model
 from lumina.model.opf.hetero_model import HEAT, HGT, RGAT, OPFHeteroGNN
 from lumina.model.opf.homo_model import get_gnnNets
@@ -143,6 +143,15 @@ class BaseOPFTrainer:
         self.wandb_entity = wandb_entity
         self.run_metadata = run_metadata
         self.model_summary = None
+        data_config = self.config.get("data", {})
+        if "use_precomputed_homo" in data_config:
+            use_precomputed = bool(data_config.get("use_precomputed_homo"))
+        else:
+            use_precomputed = True
+        self.use_precomputed_homo = use_precomputed and self.model_type not in HETERO_MODEL_TYPES
+        self.homo_dataset_kwargs = {}
+        if isinstance(data_config.get("homo_dataset_kwargs"), dict):
+            self.homo_dataset_kwargs.update(data_config["homo_dataset_kwargs"])
 
         training_config = self.config["training"]
         self.max_epochs = training_config["max_epochs"]
@@ -207,6 +216,17 @@ class BaseOPFTrainer:
             )
             if not self.throughput_tracker.enabled:
                 self.throughput_tracker = None
+
+    def _infer_output_dim(self, sample_data):
+        if hasattr(sample_data, "node_types"):
+            y = getattr(sample_data["bus"], "y", None)
+        else:
+            y = getattr(sample_data, "y", None)
+        if y is None:
+            raise ValueError("Unable to infer per-node output size from dataset sample.")
+        if y.ndim <= 1:
+            return 1
+        return int(y.shape[-1])
 
     def _load_data(self):
         raise NotImplementedError
@@ -860,11 +880,18 @@ class OPFTrainer(BaseOPFTrainer):
             local_raw_folder=self.config.get("local_raw_folder"),
             force_reload=False,
         )
+        dataset_cls = OPFHomogeneousDataset if self.use_precomputed_homo else OPFDataset
+        if self.use_precomputed_homo and self.homo_dataset_kwargs:
+            dataset_kwargs.update(self.homo_dataset_kwargs)
 
         def build_dataset():
             if len(self.group_ids) == 1:
-                return OPFDataset(group_id=self.group_ids[0], **dataset_kwargs)
-            return OPFMultiDataset.from_case_groups(group_ids=self.group_ids, **dataset_kwargs)
+                return dataset_cls(group_id=self.group_ids[0], **dataset_kwargs)
+            return OPFMultiDataset.from_case_groups(
+                group_ids=self.group_ids,
+                dataset_cls=dataset_cls,
+                **dataset_kwargs,
+            )
 
         if dist.is_available() and dist.is_initialized() and self.world_size > 1:
             if self.global_rank == 0:
@@ -886,7 +913,7 @@ class OPFTrainer(BaseOPFTrainer):
         val_dataset = torch.utils.data.Subset(self.dataset, range(n_train, n_train + n_val))
         test_dataset = torch.utils.data.Subset(self.dataset, range(n_train + n_val, n_samples))
 
-        if self.model_type not in HETERO_MODEL_TYPES:
+        if self.model_type not in HETERO_MODEL_TYPES and not self.use_precomputed_homo:
             train_dataset = HomoOPFDataset(train_dataset)
             val_dataset = HomoOPFDataset(val_dataset)
             test_dataset = HomoOPFDataset(test_dataset)
@@ -932,9 +959,9 @@ class OPFTrainer(BaseOPFTrainer):
         )
 
     def _create_model(self):
-        metadata = self.dataset.metadata()
         sample_data = self.dataset[0]
-        per_node_output_size = sample_data["bus"].y.shape[-1]
+        metadata = self.dataset.metadata() if self.model_type in HETERO_MODEL_TYPES else None
+        per_node_output_size = self._infer_output_dim(sample_data)
         self.model = self._build_model(sample_data, metadata, per_node_output_size)
 
     def _initialize_loss_managers(self):
@@ -1186,10 +1213,19 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
             local_raw_folder=self.config.get("local_raw_folder"),
             force_reload=False,
         )
+
+        dataset_cls = OPFHomogeneousDataset if self.use_precomputed_homo else OPFDataset
+        if self.use_precomputed_homo and self.homo_dataset_kwargs:
+            dataset_kwargs.update(self.homo_dataset_kwargs)
+
         def build_dataset():
             if len(self.group_ids) == 1:
-                return OPFDataset(group_id=self.group_ids[0], **dataset_kwargs)
-            return OPFMultiDataset.from_case_groups(group_ids=self.group_ids, **dataset_kwargs)
+                return dataset_cls(group_id=self.group_ids[0], **dataset_kwargs)
+            return OPFMultiDataset.from_case_groups(
+                group_ids=self.group_ids,
+                dataset_cls=dataset_cls,
+                **dataset_kwargs,
+            )
         if dist.is_available() and dist.is_initialized() and self.world_size > 1:
             if self.global_rank == 0:
                 dataset = build_dataset()
@@ -1213,19 +1249,28 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
             if self.global_rank == 0:
                 print(f"Dataset loaded for {case_name}: {len(dataset)} samples")
 
-            metadata = dataset.metadata()
             sample = dataset[0]
-            out_dim = sample["bus"].y.shape[-1]
+            out_dim = self._infer_output_dim(sample)
 
-            if reference_metadata is None:
-                reference_metadata = metadata
-                reference_out_dim = out_dim
+            if self.model_type in HETERO_MODEL_TYPES:
+                metadata = dataset.metadata()
+                if reference_metadata is None:
+                    reference_metadata = metadata
+                    reference_out_dim = out_dim
+                else:
+                    if metadata != reference_metadata:
+                        raise ValueError(
+                            f"Dataset metadata mismatch between cases. {case_name} does not share the same schema."
+                        )
+                    if out_dim != reference_out_dim:
+                        raise ValueError(
+                            f"Output dimension mismatch for case {case_name} "
+                            f"(expected {reference_out_dim}, found {out_dim})."
+                        )
             else:
-                if metadata != reference_metadata:
-                    raise ValueError(
-                        f"Dataset metadata mismatch between cases. {case_name} does not share the same schema."
-                    )
-                if out_dim != reference_out_dim:
+                if reference_out_dim is None:
+                    reference_out_dim = out_dim
+                elif out_dim != reference_out_dim:
                     raise ValueError(
                         f"Output dimension mismatch for case {case_name} "
                         f"(expected {reference_out_dim}, found {out_dim})."
@@ -1263,7 +1308,7 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
             subsets = torch.utils.data.random_split(dataset, [train_len, val_len, test_len], generator=generator)
             train_dataset, val_dataset, test_dataset = subsets
 
-            if self.model_type not in HETERO_MODEL_TYPES:
+            if self.model_type not in HETERO_MODEL_TYPES and not self.use_precomputed_homo:
                 train_dataset = HomoOPFDataset(train_dataset)
                 if val_len > 0:
                     val_dataset = HomoOPFDataset(val_dataset)
@@ -1314,7 +1359,8 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
     def _create_model(self):
         sample_data = self.case_datasets[0][0]
         per_node_output_size = self.reference_output_dim
-        self.model = self._build_model(sample_data, self.reference_metadata, per_node_output_size)
+        metadata = self.reference_metadata if self.model_type in HETERO_MODEL_TYPES else None
+        self.model = self._build_model(sample_data, metadata, per_node_output_size)
 
     def _initialize_loss_managers(self):
         lagrangian_config = self.config.get("lagrangian", {})
