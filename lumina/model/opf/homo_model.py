@@ -126,7 +126,7 @@ class GNNBase(nn.Module):
                 data = args[0]
                 x = data.x
                 edge_index = data.edge_index
-                if hasattr(data, "edge_attr"):
+                if hasattr(data, "edge_attr") and data.edge_attr is not None:
                     edge_attr = data.edge_attr
                 else:
                     edge_attr = torch.ones(

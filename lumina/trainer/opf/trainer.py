@@ -45,6 +45,8 @@ class BaseOPFTrainer:
         "train/loss/penalty_term",
         "train/feas/total_violation",
         "train/feas/total_violation_ema",
+        "train/feas/total_violation_norm",
+        "train/feas/total_violation_ema_norm",
         "train/feas/p_balance_rmse_pu",
         "train/feas/q_balance_rmse_pu",
         "train/feas/line_limit_rmse_pu",
@@ -55,6 +57,7 @@ class BaseOPFTrainer:
         "val/loss/total",
         "val/loss/objective",
         "val/feas/total_violation",
+        "val/feas/total_violation_norm",
         "val/feas/p_balance_rmse_pu",
         "val/feas/q_balance_rmse_pu",
         "val/feas/line_limit_rmse_pu",
@@ -65,6 +68,8 @@ class BaseOPFTrainer:
         ("penalty_term", "train/loss/penalty_term"),
         ("raw_constraint_violation", "train/feas/total_violation"),
         ("ema_constraint_violation", "train/feas/total_violation_ema"),
+        ("raw_constraint_violation_norm", "train/feas/total_violation_norm"),
+        ("ema_constraint_violation_norm", "train/feas/total_violation_ema_norm"),
         ("p_balance_rmse", "train/feas/p_balance_rmse_pu"),
         ("q_balance_rmse", "train/feas/q_balance_rmse_pu"),
         ("line_limit_rmse", "train/feas/line_limit_rmse_pu"),
@@ -73,6 +78,7 @@ class BaseOPFTrainer:
     )
     VAL_METRIC_MAP = (
         ("raw_constraint_violation", "val/feas/total_violation"),
+        ("raw_constraint_violation_norm", "val/feas/total_violation_norm"),
         ("p_balance_rmse", "val/feas/p_balance_rmse_pu"),
         ("q_balance_rmse", "val/feas/q_balance_rmse_pu"),
         ("line_limit_rmse", "val/feas/line_limit_rmse_pu"),
@@ -87,6 +93,8 @@ class BaseOPFTrainer:
         (
             "train/feas/total_violation",
             "train/feas/total_violation_ema",
+            "train/feas/total_violation_norm",
+            "train/feas/total_violation_ema_norm",
             "train/feas/p_balance_rmse_pu",
             "train/feas/q_balance_rmse_pu",
             "train/feas/line_limit_rmse_pu",
@@ -94,9 +102,10 @@ class BaseOPFTrainer:
         ("train/lagrangian/penalty_mu", "train/lagrangian/multiplier_norm"),
     )
     VAL_METRIC_GROUPS = (
-        ("val/loss/total", "val/loss/objective"),
+        ("val/loss/total", "val/loss/objective", "val/score"),
         (
             "val/feas/total_violation",
+            "val/feas/total_violation_norm",
             "val/feas/p_balance_rmse_pu",
             "val/feas/q_balance_rmse_pu",
             "val/feas/line_limit_rmse_pu",
@@ -143,13 +152,27 @@ class BaseOPFTrainer:
         self.accumulate_grad_batches = max(1, int(training_config.get("accumulate_grad_batches", 1)))
         self.log_every_n_steps = training_config.get("log_every_n_steps", 0)
         self.log_every_n_samples = int(training_config.get("log_every_n_samples", 512) or 0)
-        self.val_check_interval = max(1, int(training_config.get("val_check_interval", 1)))
+        val_every_n_epochs = training_config.get(
+            "val_every_n_epochs",
+            training_config.get("val_check_interval", 1),
+        )
+        self.val_every_n_epochs = max(1, int(val_every_n_epochs or 1))
+        self.val_every_n_samples = int(training_config.get("val_every_n_samples") or 0)
         self.max_global_samples = int(training_config.get("max_global_samples") or 0)
+        score_alpha = training_config.get("score_alpha", 1.0)
+        self.score_alpha = float(1.0 if score_alpha is None else score_alpha)
+        self.log_normalized_violation = bool(training_config.get("log_normalized_violation", False))
+
+        checkpoint_config = self.config.get("checkpointing", {})
+        self.ckpt_every_n_epochs = int(checkpoint_config.get("every_n_epochs") or 0)
+        self.ckpt_every_n_samples = int(checkpoint_config.get("every_n_samples") or 0)
+        self.save_last_checkpoint = bool(checkpoint_config.get("save_last", False))
 
         self.checkpoint_dir = config["checkpoint_dir"]
 
         self._load_data()
         self._create_dataloaders()
+        self._init_sample_schedules()
         self._create_model()
         self._initialize_loss_managers()
         self._init_optimizer()
@@ -275,7 +298,7 @@ class BaseOPFTrainer:
             else:
                 self.model_summary = None
         else:
-            homo_sample = convert_opf_to_homo(sample_data)
+            homo_sample = self._get_homo_sample(sample_data)
             input_dim = homo_sample.x.shape[1]
 
             if self.model_type in self.config["models"]:
@@ -293,7 +316,12 @@ class BaseOPFTrainer:
 
             model_config["model_name"] = self.model_type
             if "edge_dim" not in model_config:
-                model_config["edge_dim"] = homo_sample.edge_attr.shape[1]
+                edge_attr = getattr(homo_sample, "edge_attr", None)
+                if edge_attr is None:
+                    model_config["edge_dim"] = 1
+                else:
+                    edge_dim = edge_attr.size(-1) if edge_attr.dim() > 1 else 1
+                    model_config["edge_dim"] = int(edge_dim)
 
             model = get_gnnNets(
                 input_dim=input_dim,
@@ -315,6 +343,22 @@ class BaseOPFTrainer:
 
         model = DDP(model, device_ids=[self.local_rank], find_unused_parameters=True)
         return model
+
+    def _get_homo_sample(self, sample_data):
+        if hasattr(self, "train_loader") and self.train_loader is not None:
+            try:
+                return self.train_loader.dataset[0]
+            except Exception:
+                pass
+        if hasattr(self, "train_loaders") and self.train_loaders:
+            for loader in self.train_loaders.values():
+                if loader is None:
+                    continue
+                try:
+                    return loader.dataset[0]
+                except Exception:
+                    continue
+        return convert_opf_to_homo(sample_data)
 
     def _init_optimizer(self):
         optimizer_config = self.config["optimizer"]
@@ -405,7 +449,10 @@ class BaseOPFTrainer:
     def _log_wandb_step(self, loss_value, loss_info):
         if not self._should_log_step():
             return
-        metrics = {"train/loss/total": self._as_float(loss_value)}
+        metrics = {
+            "train/loss/total": self._as_float(loss_value),
+            "train/samples_seen": int(self.global_samples),
+        }
         for info_key, metric_name in self.train_metric_map:
             if info_key in loss_info:
                 metric_value = self._as_float(loss_info[info_key])
@@ -451,6 +498,61 @@ class BaseOPFTrainer:
         loader_config = self.config.get("loader", {})
         return int(loader_config.get("batch_size", 1))
 
+    def _train_samples_per_epoch(self):
+        if hasattr(self, "train_sampler") and self.train_sampler is not None:
+            total_size = getattr(self.train_sampler, "total_size", None)
+            if total_size is not None:
+                return int(total_size)
+            num_samples = getattr(self.train_sampler, "num_samples", None)
+            if num_samples is not None:
+                return int(num_samples) * self.world_size
+
+        total = 0
+        if hasattr(self, "train_samplers") and self.train_samplers:
+            for sampler in self.train_samplers.values():
+                if sampler is None:
+                    continue
+                total_size = getattr(sampler, "total_size", None)
+                if total_size is not None:
+                    total += int(total_size)
+                else:
+                    num_samples = getattr(sampler, "num_samples", None)
+                    if num_samples is not None:
+                        total += int(num_samples) * self.world_size
+            if total > 0:
+                return total
+
+        if hasattr(self, "train_loader"):
+            try:
+                return int(len(self.train_loader.dataset))
+            except Exception:
+                pass
+        if hasattr(self, "train_loaders"):
+            for loader in self.train_loaders.values():
+                try:
+                    total += int(len(loader.dataset))
+                except Exception:
+                    continue
+            if total > 0:
+                return total
+        return 0
+
+    def _init_sample_schedules(self):
+        samples_per_epoch = self._train_samples_per_epoch()
+        if self.val_every_n_samples <= 0 and self.val_every_n_epochs > 0 and samples_per_epoch > 0:
+            self.val_every_n_samples = int(self.val_every_n_epochs * samples_per_epoch)
+        if self.val_every_n_samples > 0:
+            self._next_val_samples = self.val_every_n_samples
+        else:
+            self._next_val_samples = None
+
+        if self.ckpt_every_n_samples <= 0 and self.ckpt_every_n_epochs > 0 and samples_per_epoch > 0:
+            self.ckpt_every_n_samples = int(self.ckpt_every_n_epochs * samples_per_epoch)
+        if self.ckpt_every_n_samples > 0:
+            self._next_ckpt_samples = self.ckpt_every_n_samples
+        else:
+            self._next_ckpt_samples = None
+
     def _update_global_samples(self, batch):
         batch_samples = self._get_batch_samples(batch)
         self.global_samples += batch_samples * self.world_size
@@ -474,6 +576,95 @@ class BaseOPFTrainer:
         sample_tensor = torch.tensor(int(batch_samples), device=self.device)
         dist.all_reduce(sample_tensor, op=dist.ReduceOp.SUM)
         return int(sample_tensor.item())
+
+    def _sync_trigger(self, should_run):
+        if dist.is_available() and dist.is_initialized() and self.world_size > 1:
+            flag = torch.tensor(int(should_run), device=self.device)
+            dist.all_reduce(flag, op=dist.ReduceOp.MAX)
+            return bool(flag.item())
+        return should_run
+
+    def _advance_next_samples(self, next_samples, interval):
+        if interval <= 0:
+            return None
+        if next_samples is None:
+            next_samples = interval
+        while next_samples <= self.global_samples:
+            next_samples += interval
+        return next_samples
+
+    def _maybe_run_validation(self):
+        if self.val_every_n_samples <= 0 or self._next_val_samples is None:
+            return False
+        should_run = self.global_samples >= self._next_val_samples
+        should_run = self._sync_trigger(should_run)
+        if not should_run:
+            return False
+        self._next_val_samples = self._advance_next_samples(
+            self._next_val_samples,
+            self.val_every_n_samples,
+        )
+        self._run_validation()
+        return True
+
+    def _run_validation(self):
+        val_loss, val_task_loss, val_metrics = self.validate()
+        if self.wandb_enabled:
+            self._log_wandb_validation(val_metrics)
+        if val_loss is None:
+            self.model.train()
+            return None, None, None
+
+        if self._should_print_epoch():
+            print(f"\nValidation @ samples {self.global_samples} (epoch {self.current_epoch}):")
+            print(f"  Val Loss: {val_loss:.4f}, Val Task: {val_task_loss:.4f}")
+            if val_metrics:
+                self._print_metric_groups("  Val Metrics:", val_metrics, self.val_metric_groups)
+
+        if val_loss < self.best_val_loss:
+            self.best_val_loss = val_loss
+            self.patience_counter = 0
+            checkpoint_path = os.path.join(
+                self.checkpoint_dir,
+                f"best-{self._checkpoint_tag()}-epoch{self.current_epoch:02d}-val{val_loss:.4f}.pt",
+            )
+            self.save_checkpoint(checkpoint_path)
+        else:
+            self.patience_counter += 1
+            if self.global_rank == 0:
+                print(f"  No improvement. Patience: {self.patience_counter}/{self.patience}")
+            if self.patience_counter >= self.patience:
+                if self.global_rank == 0:
+                    print(f"\nEarly stopping triggered after {self.current_epoch + 1} epochs")
+                self.stop_training = True
+
+        self.model.train()
+        return val_loss, val_task_loss, val_metrics
+
+    def _maybe_save_periodic_checkpoint(self):
+        if self.ckpt_every_n_samples <= 0 or self._next_ckpt_samples is None:
+            return False
+        should_save = self.global_samples >= self._next_ckpt_samples
+        should_save = self._sync_trigger(should_save)
+        if not should_save:
+            return False
+        self._next_ckpt_samples = self._advance_next_samples(
+            self._next_ckpt_samples,
+            self.ckpt_every_n_samples,
+        )
+        self._save_periodic_checkpoint()
+        if dist.is_available() and dist.is_initialized() and self.world_size > 1:
+            dist.barrier()
+        return True
+
+    def _save_periodic_checkpoint(self):
+        if self.global_rank != 0:
+            return
+        checkpoint_path = os.path.join(
+            self.checkpoint_dir,
+            f"checkpoint-{self._checkpoint_tag()}-samples{self.global_samples}.pt",
+        )
+        self.save_checkpoint(checkpoint_path)
 
     def _sync_lagrangian_inputs(self, constraint_violation, constraints, batch_samples=None, total_batch_samples=None):
         if not dist.is_available() or not dist.is_initialized() or self.world_size <= 1:
@@ -533,6 +724,17 @@ class BaseOPFTrainer:
                 metric_avgs[name] = total / count
         return metric_avgs
 
+    def _add_val_score(self, metric_avgs):
+        if not metric_avgs:
+            return
+        objective = metric_avgs.get("val/loss/objective")
+        if objective is None:
+            objective = metric_avgs.get("val/loss/total")
+        violation = metric_avgs.get("val/feas/total_violation")
+        if objective is None or violation is None:
+            return
+        metric_avgs["val/score"] = objective + self.score_alpha * violation
+
     def _print_metric_groups(self, title, metric_avgs, groups):
         if not metric_avgs:
             return
@@ -589,54 +791,19 @@ class BaseOPFTrainer:
 
             train_loss, train_task_loss, train_metrics = self.train_epoch(epoch)
 
-            if self.stop_training:
-                if self.global_rank == 0:
-                    print(
-                        f"\nStopping after reaching max_global_samples={self.max_global_samples} "
-                        f"(global_samples={self.global_samples})"
-                    )
-                break
-
-            should_validate = (epoch + 1) % self.val_check_interval == 0
-            val_loss = val_task_loss = None
-            val_metrics = None
-            if should_validate:
-                val_loss, val_task_loss, val_metrics = self.validate()
-                if val_loss is not None:
-                    self._log_wandb_validation(val_metrics)
-                else:
-                    should_validate = False
-
             if self._should_print_epoch():
                 print(f"\nEpoch {epoch}:")
                 print(f"  Train Loss: {train_loss:.4f}, Train Task: {train_task_loss:.4f}")
                 self._print_metric_groups("  Train Metrics:", train_metrics, self.train_metric_groups)
-                if should_validate:
-                    print(f"  Val Loss: {val_loss:.4f}, Val Task: {val_task_loss:.4f}")
-                    if val_metrics:
-                        self._print_metric_groups("  Val Metrics:", val_metrics, self.val_metric_groups)
-                else:
-                    print("  Validation skipped this epoch")
-
-            if should_validate:
-                if val_loss < self.best_val_loss:
-                    self.best_val_loss = val_loss
-                    self.patience_counter = 0
-
-                    checkpoint_path = os.path.join(
-                        checkpoint_dir,
-                        f"best-{self._checkpoint_tag()}-epoch{epoch:02d}-val{val_loss:.4f}.pt",
-                    )
-                    self.save_checkpoint(checkpoint_path)
-                else:
-                    self.patience_counter += 1
+            if self.stop_training:
+                if self.max_global_samples > 0 and self.global_samples >= self.max_global_samples:
                     if self.global_rank == 0:
-                        print(f"  No improvement. Patience: {self.patience_counter}/{self.patience}")
-
-                    if self.patience_counter >= self.patience:
-                        if self.global_rank == 0:
-                            print(f"\nEarly stopping triggered after {epoch + 1} epochs")
-                        break
+                        print(
+                            f"\nStopping after reaching max_global_samples={self.max_global_samples} "
+                            f"(global_samples={self.global_samples})"
+                        )
+                dist.barrier()
+                break
 
             dist.barrier()
 
@@ -776,6 +943,7 @@ class OPFTrainer(BaseOPFTrainer):
             loss_type=self.loss_type,
             device=self.device,
             lagrangian_config=lagrangian_config,
+            log_normalized_violation=self.log_normalized_violation,
         )
 
         if self.global_rank == 0:
@@ -829,7 +997,13 @@ class OPFTrainer(BaseOPFTrainer):
                 step_samples += tracker.get_batch_samples(batch)
 
             predictions = self.forward(batch)
-            loss, loss_info = self.loss_manager.compute_loss(predictions, batch, return_info=True)
+            collect_constraints = self.loss_manager.lagrangian is not None
+            loss, loss_info = self.loss_manager.compute_loss(
+                predictions,
+                batch,
+                return_info=True,
+                collect_constraints=collect_constraints,
+            )
 
             global_batch_samples = batch_samples
             synced_violation = loss_info.get("constraint_violation")
@@ -905,6 +1079,9 @@ class OPFTrainer(BaseOPFTrainer):
                 else:
                     pbar.set_postfix({"loss": loss_value})
 
+            if self._maybe_run_validation() and self.stop_training:
+                break
+            self._maybe_save_periodic_checkpoint()
             if self._maybe_stop_by_samples():
                 break
 
@@ -957,6 +1134,7 @@ class OPFTrainer(BaseOPFTrainer):
 
         metric_sums, metric_counts = self._reduce_metrics(metric_sums, metric_counts)
         metric_avgs = self._compute_metric_avgs(metric_sums, metric_counts)
+        self._add_val_score(metric_avgs)
 
         return loss_tensor[0].item(), loss_tensor[1].item(), metric_avgs
 
@@ -1147,6 +1325,7 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
                 loss_type=self.loss_type,
                 device=self.device,
                 lagrangian_config=lagrangian_config,
+                log_normalized_violation=self.log_normalized_violation,
             )
 
         if self.global_rank == 0:
@@ -1215,7 +1394,13 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
                     step_samples += tracker.get_batch_samples(batch)
 
                 predictions = self.forward(batch)
-                loss, loss_info = self.loss_managers[case_idx].compute_loss(predictions, batch, return_info=True)
+                collect_constraints = self.loss_managers[case_idx].lagrangian is not None
+                loss, loss_info = self.loss_managers[case_idx].compute_loss(
+                    predictions,
+                    batch,
+                    return_info=True,
+                    collect_constraints=collect_constraints,
+                )
 
                 global_batch_samples = batch_samples
                 synced_violation = loss_info.get("constraint_violation")
@@ -1288,6 +1473,9 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
                     else:
                         pbar.set_postfix({"loss": loss_value})
 
+                if self._maybe_run_validation() and self.stop_training:
+                    break
+                self._maybe_save_periodic_checkpoint()
                 if self._maybe_stop_by_samples():
                     break
 
@@ -1362,5 +1550,6 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
 
         metric_sums, metric_counts = self._reduce_metrics(metric_sums, metric_counts)
         metric_avgs = self._compute_metric_avgs(metric_sums, metric_counts)
+        self._add_val_score(metric_avgs)
 
         return loss_tensor[0].item(), loss_tensor[1].item(), metric_avgs

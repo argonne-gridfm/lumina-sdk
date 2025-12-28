@@ -11,6 +11,7 @@ All rights reserved.
 
 from typing import Dict, List, Optional, Tuple, Union
 
+import math
 import numpy as np
 import torch
 import torch.nn as nn
@@ -194,7 +195,7 @@ class ACOPFLossFunction(nn.Module):
                 - '{node_type}_loss': Loss for each node type
                 - 'loss_components': Individual loss components (if using combined loss)
         """
-        total_loss = 0.0
+        total_loss = None
         node_losses = {}
         loss_components = {}
 
@@ -206,6 +207,19 @@ class ACOPFLossFunction(nn.Module):
             pred = predictions[node_type]
             target = targets[node_type]
 
+            if torch.is_tensor(target):
+                finite_mask = torch.isfinite(target)
+                if finite_mask.ndim > 1:
+                    finite_mask = finite_mask.all(dim=-1)
+                if finite_mask.ndim == 0:
+                    if not bool(finite_mask.item()):
+                        continue
+                else:
+                    if not finite_mask.any():
+                        continue
+                    pred = pred[finite_mask]
+                    target = target[finite_mask]
+
             # Compute loss using PyTorch built-in functions
             node_loss = self._compute_single_loss(pred, target)
 
@@ -213,9 +227,14 @@ class ACOPFLossFunction(nn.Module):
             node_weight = self.node_weights.get(node_type, 1.0)
 
             node_losses[f"{node_type}_loss"] = node_loss
-            total_loss += node_weight * node_loss
+            weighted_loss = node_weight * node_loss
+            total_loss = weighted_loss if total_loss is None else total_loss + weighted_loss
 
         # Prepare results
+        if total_loss is None:
+            device = next(iter(predictions.values())).device
+            total_loss = torch.tensor(0.0, device=device)
+
         results = {
             'total_loss': total_loss,
             **node_losses
@@ -240,13 +259,49 @@ class ACOPFLossFunction(nn.Module):
             dict: Dictionary containing loss values as returned by forward()
         """
         # Extract targets from batch
+        targets = self._extract_targets(predictions, batch)
+        if self._is_homo_batch(batch) and self.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
+            raise ValueError(
+                "Augmented/violated Lagrangian losses require heterogeneous batches. "
+                "Disable HomoOPFDataset or use a hetero model."
+            )
+        masked_predictions = predictions
+        masked_targets = targets
+        if self._is_homo_batch(batch) and hasattr(batch, "y_mask"):
+            masked_predictions, masked_targets = self._apply_homo_target_mask(
+                predictions,
+                targets,
+                batch,
+            )
+
+        # Call the forward method
+        return self.forward(predictions, targets)
+
+    @staticmethod
+    def _is_homo_batch(batch) -> bool:
+        return hasattr(batch, 'node_type') and not hasattr(batch, 'node_types')
+
+    def _extract_targets(self, predictions: Dict[str, torch.Tensor], batch) -> Dict[str, torch.Tensor]:
+        if self._is_homo_batch(batch):
+            targets = {}
+            y = getattr(batch, 'y', None)
+            node_type = getattr(batch, 'node_type', None)
+            if y is None or node_type is None:
+                return targets
+            node_types = ["bus", "generator", "load", "shunt"]
+            for idx, name in enumerate(node_types):
+                if name not in predictions:
+                    continue
+                mask = node_type == idx
+                if mask.any():
+                    targets[name] = y[mask]
+            return targets
+
         targets = {}
         for node_type in predictions.keys():
             if hasattr(batch[node_type], 'y') and batch[node_type].y is not None:
                 targets[node_type] = batch[node_type].y
-
-        # Call the forward method
-        return self.forward(predictions, targets)
+        return targets
 
     def get_loss_info(self) -> Dict:
         """Get information about the configured loss function."""
@@ -374,6 +429,7 @@ class OPFLossManager(nn.Module):
         loss_type: str = 'mse',
         device: Optional[torch.device] = None,
         lagrangian_config: Optional[Dict] = None,
+        log_normalized_violation: bool = False,
         **kwargs
     ):
         super().__init__()
@@ -384,6 +440,7 @@ class OPFLossManager(nn.Module):
         self._last_lagrangian_loss = None
         self._iters_since_lagrangian_update = 0
         self.constraint_monitor = None
+        self.log_normalized_violation = bool(log_normalized_violation)
 
         # Initialize the appropriate loss function
         if loss_type == 'augmented_lagrangian':
@@ -421,6 +478,7 @@ class OPFLossManager(nn.Module):
         batch,
         return_info: bool = True,
         constraint_data: Optional[Dict] = None,
+        collect_constraints: bool = True,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict]]:
         """
         Compute loss based on the configured loss type.
@@ -429,16 +487,28 @@ class OPFLossManager(nn.Module):
             predictions: Model predictions
             batch: Batch data containing targets and inputs
             return_info: Whether to return additional loss information
+            collect_constraints: Whether to compute constraint metrics (standard losses only)
 
         Returns:
             If return_info=False: loss tensor
             If return_info=True: (loss tensor, info dict)
         """
         # Extract targets from batch
-        targets = {}
-        for node_type in predictions.keys():
-            if hasattr(batch[node_type], 'y') and batch[node_type].y is not None:
-                targets[node_type] = batch[node_type].y
+        targets = self._extract_targets(predictions, batch)
+        if self._is_homo_batch(batch) and self.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
+            raise ValueError(
+                "Augmented/violated Lagrangian losses require heterogeneous batches. "
+                "Disable HomoOPFDataset or use a hetero model."
+            )
+
+        masked_predictions = predictions
+        masked_targets = targets
+        if self._is_homo_batch(batch) and hasattr(batch, "y_mask"):
+            masked_predictions, masked_targets = self._apply_homo_target_mask(
+                predictions,
+                targets,
+                batch,
+            )
 
         if self.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
             # Compute base MSE loss
@@ -459,6 +529,8 @@ class OPFLossManager(nn.Module):
             lag_loss, info = self.lagrangian(mse_loss, predictions, constraint_batch)
 
             if return_info:
+                if self.log_normalized_violation:
+                    self._add_normalized_violation_metrics(info)
                 info.update(base_results)
                 info['objective'] = mse_loss.item()
                 return lag_loss, info
@@ -466,11 +538,13 @@ class OPFLossManager(nn.Module):
                 return lag_loss
         else:
             # Standard ML loss
-            results = self.base_loss(predictions, targets)
+            results = self.base_loss(masked_predictions, masked_targets)
             loss = results['total_loss']
+            results.setdefault('objective', loss)
 
             if return_info:
-                results.update(self._collect_constraint_metrics(predictions, batch, constraint_data))
+                if collect_constraints:
+                    results.update(self._collect_constraint_metrics(predictions, batch, constraint_data))
                 return loss, results
             else:
                 return loss
@@ -479,6 +553,8 @@ class OPFLossManager(nn.Module):
         monitor = self.constraint_monitor
         if monitor is None:
             return {}
+        if self._is_homo_batch(batch):
+            return self._collect_constraint_metrics_homo(predictions, batch, constraint_data)
         if 'bus' not in predictions or 'generator' not in predictions:
             return {}
 
@@ -513,8 +589,7 @@ class OPFLossManager(nn.Module):
                 ema_violation = raw_violation
 
         constraint_violation = ema_violation if ema_violation is not None else raw_violation
-
-        return {
+        info = {
             'constraint_violation': constraint_violation,
             'raw_constraint_violation': raw_violation,
             'ema_constraint_violation': ema_violation,
@@ -522,6 +597,150 @@ class OPFLossManager(nn.Module):
             'q_balance_rmse': monitor._last_q_balance_rms,
             'line_limit_rmse': monitor._last_line_limit_rms,
         }
+        if self.log_normalized_violation and constraints is not None:
+            info["n_constraints"] = int(constraints.numel())
+            self._add_normalized_violation_metrics(info)
+        return info
+
+    def _collect_constraint_metrics_homo(self, predictions, batch, constraint_data):
+        monitor = self.constraint_monitor
+        if monitor is None:
+            return {}
+        if 'bus' not in predictions or 'generator' not in predictions:
+            return {}
+
+        try:
+            self._ensure_network_parameters(batch, predictions['bus'].device, target=monitor)
+        except Exception:
+            return {}
+
+        if getattr(monitor, 'Y_real', None) is None or getattr(monitor, 'Y_imag', None) is None:
+            return {}
+
+        try:
+            constraint_batch = constraint_data or self._create_constraint_batch_homo(batch, predictions)
+            if constraint_batch is None:
+                return {}
+            constraints = monitor.compute_constraints(predictions, constraint_batch)
+        except Exception:
+            return {}
+
+        if constraints is None or constraints.numel() == 0:
+            raw_violation = 0.0
+            ema_violation = 0.0
+        else:
+            if torch.is_grad_enabled():
+                monitor._constraint_signal_for_loss(constraints)
+                raw_violation = monitor._raw_violation
+                ema_violation = monitor._ema_violation
+                if raw_violation is None:
+                    raw_violation = monitor._compute_violation_norm(constraints)
+                if ema_violation is None:
+                    ema_violation = raw_violation
+            else:
+                raw_violation = monitor._compute_violation_norm(constraints)
+                ema_violation = raw_violation
+
+        constraint_violation = ema_violation if ema_violation is not None else raw_violation
+        info = {
+            'constraint_violation': constraint_violation,
+            'raw_constraint_violation': raw_violation,
+            'ema_constraint_violation': ema_violation,
+            'p_balance_rmse': monitor._last_p_balance_rms,
+            'q_balance_rmse': monitor._last_q_balance_rms,
+            'line_limit_rmse': monitor._last_line_limit_rms,
+        }
+        if self.log_normalized_violation and constraints is not None:
+            info["n_constraints"] = int(constraints.numel())
+            self._add_normalized_violation_metrics(info)
+        return info
+
+    @staticmethod
+    def _is_homo_batch(batch) -> bool:
+        return hasattr(batch, 'node_type') and not hasattr(batch, 'node_types')
+
+    def _extract_targets(self, predictions: Dict[str, torch.Tensor], batch) -> Dict[str, torch.Tensor]:
+        if self._is_homo_batch(batch):
+            targets = {}
+            y = getattr(batch, 'y', None)
+            node_type = getattr(batch, 'node_type', None)
+            if y is None or node_type is None:
+                return targets
+            node_types = ["bus", "generator", "load", "shunt"]
+            for idx, name in enumerate(node_types):
+                if name not in predictions:
+                    continue
+                mask = node_type == idx
+                if mask.any():
+                    targets[name] = y[mask]
+            return targets
+
+        targets = {}
+        for node_type in predictions.keys():
+            if hasattr(batch[node_type], 'y') and batch[node_type].y is not None:
+                targets[node_type] = batch[node_type].y
+        return targets
+
+    def _add_normalized_violation_metrics(self, info):
+        if not info:
+            return
+        n_constraints = info.get("n_constraints")
+        if n_constraints is None:
+            constraints = info.get("constraints")
+            if torch.is_tensor(constraints):
+                n_constraints = int(constraints.numel())
+        try:
+            n_constraints = int(n_constraints)
+        except (TypeError, ValueError):
+            n_constraints = 0
+        if n_constraints <= 0:
+            return
+        scale = math.sqrt(n_constraints)
+
+        def _norm_value(value):
+            if value is None:
+                return None
+            if torch.is_tensor(value):
+                return value / scale
+            try:
+                return float(value) / scale
+            except (TypeError, ValueError):
+                return None
+
+        raw = info.get("raw_constraint_violation")
+        ema = info.get("ema_constraint_violation")
+        if raw is not None:
+            info["raw_constraint_violation_norm"] = _norm_value(raw)
+        if ema is not None:
+            info["ema_constraint_violation_norm"] = _norm_value(ema)
+
+    def _apply_homo_target_mask(self, predictions, targets, batch):
+        y_mask = getattr(batch, "y_mask", None)
+        node_type = getattr(batch, "node_type", None)
+        if y_mask is None or node_type is None or not torch.is_tensor(y_mask):
+            return predictions, targets
+
+        if y_mask.ndim > 1:
+            y_mask = y_mask.all(dim=-1)
+        if y_mask.numel() != node_type.numel():
+            return predictions, targets
+
+        node_types = ["bus", "generator", "load", "shunt"]
+        masked_predictions = {}
+        masked_targets = {}
+        for idx, name in enumerate(node_types):
+            if name not in predictions or name not in targets:
+                continue
+            type_mask = node_type == idx
+            if not bool(type_mask.any().item()):
+                continue
+            valid_mask = y_mask[type_mask]
+            if not bool(valid_mask.any().item()):
+                continue
+            masked_predictions[name] = predictions[name][valid_mask]
+            masked_targets[name] = targets[name][valid_mask]
+
+        return masked_predictions, masked_targets
 
     def update_lagrangian(
         self,
@@ -649,6 +868,212 @@ class OPFLossManager(nn.Module):
 
         return ConstraintBatch()
 
+    def _get_homo_type_names(self, batch):
+        node_type_names = getattr(batch, "node_type_names", None)
+        edge_type_names = getattr(batch, "edge_type_names", None)
+        if not node_type_names:
+            node_type_names = getattr(batch, "_node_type_names", None)
+        if not edge_type_names:
+            edge_type_names = getattr(batch, "_edge_type_names", None)
+
+        if isinstance(node_type_names, (list, tuple)) and node_type_names:
+            if isinstance(node_type_names[0], (list, tuple)):
+                node_type_names = node_type_names[0]
+        if isinstance(edge_type_names, (list, tuple)) and edge_type_names:
+            if isinstance(edge_type_names[0], (list, tuple)):
+                edge_type_names = edge_type_names[0]
+
+        node_type_names = list(node_type_names) if node_type_names else None
+        edge_type_names = list(edge_type_names) if edge_type_names else None
+        return node_type_names, edge_type_names
+
+    def _homo_type_id(self, node_type_names, name, fallback):
+        if node_type_names and name in node_type_names:
+            return int(node_type_names.index(name))
+        return int(fallback)
+
+    def _edge_type_matches(self, edge_name, src, rel, dst):
+        if isinstance(edge_name, (list, tuple)) and len(edge_name) == 3:
+            return edge_name[0] == src and edge_name[1] == rel and edge_name[2] == dst
+        if isinstance(edge_name, str):
+            parts = edge_name.split("::")
+            if len(parts) == 3:
+                return parts[0] == src and parts[1] == rel and parts[2] == dst
+        return False
+
+    def _homo_edge_type_id(self, edge_type_names, src, rel, dst):
+        if not edge_type_names:
+            return None
+        for idx, edge_name in enumerate(edge_type_names):
+            if self._edge_type_matches(edge_name, src, rel, dst):
+                return int(idx)
+        return None
+
+    def _create_constraint_batch_homo(self, batch, predictions):
+        device = predictions['bus'].device
+        node_type = getattr(batch, 'node_type', None)
+        if node_type is None:
+            return None
+        node_type = node_type.to(device)
+
+        node_type_names, edge_type_names = self._get_homo_type_names(batch)
+        if not node_type_names:
+            node_type_names = ["bus", "generator", "load", "shunt"]
+
+        bus_type_id = self._homo_type_id(node_type_names, "bus", 0)
+        gen_type_id = self._homo_type_id(node_type_names, "generator", 1)
+        load_type_id = self._homo_type_id(node_type_names, "load", 2)
+
+        node_batch = getattr(batch, "batch", None)
+        if node_batch is not None:
+            node_batch = node_batch.to(device)
+            graph0_mask = node_batch == 0
+            num_graphs = int(node_batch.max().item()) + 1
+        else:
+            graph0_mask = None
+            num_graphs = 1
+
+        bus_mask = node_type == bus_type_id
+        gen_mask = node_type == gen_type_id
+        load_mask = node_type == load_type_id
+
+        bus_mask_g0 = bus_mask if graph0_mask is None else bus_mask & graph0_mask
+        gen_mask_g0 = gen_mask if graph0_mask is None else gen_mask & graph0_mask
+        load_mask_g0 = load_mask if graph0_mask is None else load_mask & graph0_mask
+
+        bus_nodes_g0 = bus_mask_g0.nonzero(as_tuple=False).view(-1)
+        gen_nodes_g0 = gen_mask_g0.nonzero(as_tuple=False).view(-1)
+        load_nodes_g0 = load_mask_g0.nonzero(as_tuple=False).view(-1)
+
+        n_bus = int(bus_nodes_g0.numel())
+        if n_bus == 0:
+            return None
+        n_gen = int(gen_nodes_g0.numel())
+        n_load = int(load_nodes_g0.numel())
+
+        num_nodes = batch.x.size(0)
+        bus_index_map = torch.full((num_nodes,), -1, device=device, dtype=torch.long)
+        bus_index_map[bus_nodes_g0] = torch.arange(n_bus, device=device)
+        gen_index_map = torch.full((num_nodes,), -1, device=device, dtype=torch.long)
+        gen_index_map[gen_nodes_g0] = torch.arange(n_gen, device=device)
+        load_index_map = torch.full((num_nodes,), -1, device=device, dtype=torch.long)
+        load_index_map[load_nodes_g0] = torch.arange(n_load, device=device)
+
+        base_mva = getattr(batch, 'baseMVA', None)
+        if base_mva is None and hasattr(batch, 'base_mva'):
+            base_mva = getattr(batch, 'base_mva')
+        if torch.is_tensor(base_mva):
+            base_mva = base_mva.view(-1)[0].item()
+        base_mva = float(base_mva) if base_mva is not None else 100.0
+
+        load_pd = None
+        load_qd = None
+        if load_mask.any():
+            load_x = batch.x[load_mask].to(device)
+            pd_flat = load_x[:, 0] if load_x.size(1) > 0 else torch.zeros(load_x.size(0), device=device)
+            if load_x.size(1) > 1:
+                qd_flat = load_x[:, 1]
+            else:
+                qd_flat = torch.zeros_like(pd_flat)
+
+            if n_load > 0 and pd_flat.numel() == num_graphs * n_load:
+                load_pd = pd_flat.view(num_graphs, n_load)
+                load_qd = qd_flat.view(num_graphs, n_load)
+            elif num_graphs == 1:
+                load_pd = pd_flat.view(1, -1)
+                load_qd = qd_flat.view(1, -1)
+            else:
+                return None
+
+        edge_index = getattr(batch, 'edge_index', None)
+        edge_type = getattr(batch, 'edge_type', None)
+        edge_attr = getattr(batch, 'edge_attr_full', None)
+        if edge_attr is None:
+            edge_attr = getattr(batch, 'edge_attr', None)
+        if edge_index is None:
+            return None
+        edge_index = edge_index.to(device)
+        if edge_type is not None:
+            edge_type = edge_type.to(device)
+        if edge_attr is not None:
+            edge_attr = edge_attr.to(device)
+
+        if node_batch is not None:
+            edge_graph_mask = (node_batch[edge_index[0]] == 0) & (node_batch[edge_index[1]] == 0)
+        else:
+            edge_graph_mask = torch.ones(edge_index.size(1), dtype=torch.bool, device=device)
+        src_type = node_type[edge_index[0]]
+        dst_type = node_type[edge_index[1]]
+
+        gen_bus_indices = torch.zeros(n_gen, device=device, dtype=torch.long)
+        gen_edge_id = self._homo_edge_type_id(edge_type_names, "bus", "generator_link", "generator")
+        if edge_type is not None and gen_edge_id is not None:
+            gen_edge_mask = (edge_type == gen_edge_id) & edge_graph_mask
+        else:
+            gen_edge_mask = (src_type == bus_type_id) & (dst_type == gen_type_id) & edge_graph_mask
+        gen_edges = edge_index[:, gen_edge_mask]
+        if gen_edges.numel() > 0:
+            bus_idx = bus_index_map[gen_edges[0]]
+            gen_idx = gen_index_map[gen_edges[1]]
+            valid = (bus_idx >= 0) & (gen_idx >= 0)
+            gen_bus_indices[gen_idx[valid]] = bus_idx[valid]
+
+        load_bus_indices = None
+        load_edge_id = self._homo_edge_type_id(edge_type_names, "bus", "load_link", "load")
+        if n_load > 0:
+            if edge_type is not None and load_edge_id is not None:
+                load_edge_mask = (edge_type == load_edge_id) & edge_graph_mask
+            else:
+                load_edge_mask = (src_type == bus_type_id) & (dst_type == load_type_id) & edge_graph_mask
+            load_edges = edge_index[:, load_edge_mask]
+            if load_edges.numel() > 0:
+                bus_idx = bus_index_map[load_edges[0]]
+                load_idx = load_index_map[load_edges[1]]
+                valid = (bus_idx >= 0) & (load_idx >= 0)
+                load_bus_indices = torch.zeros(n_load, device=device, dtype=torch.long)
+                load_bus_indices[load_idx[valid]] = bus_idx[valid]
+
+        line_edge_index = None
+        line_limits = None
+        line_edge_id = self._homo_edge_type_id(edge_type_names, "bus", "ac_line", "bus")
+        if edge_type is not None and line_edge_id is not None:
+            line_edge_mask = (edge_type == line_edge_id) & edge_graph_mask
+        else:
+            line_edge_mask = (src_type == bus_type_id) & (dst_type == bus_type_id) & edge_graph_mask
+        line_edges = edge_index[:, line_edge_mask]
+        if line_edges.numel() > 0:
+            bus_i = bus_index_map[line_edges[0]]
+            bus_j = bus_index_map[line_edges[1]]
+            valid = (bus_i >= 0) & (bus_j >= 0)
+            if bool(valid.any().item()):
+                line_edge_index = torch.stack([bus_i[valid], bus_j[valid]], dim=0)
+                if edge_attr is not None:
+                    line_attr = edge_attr[line_edge_mask][valid]
+                    if line_attr.size(1) >= 7:
+                        line_limits = line_attr[:, 6].abs()
+
+        class ConstraintBatch:
+            def __init__(self):
+                self.baseMVA = base_mva
+                self.n_bus = n_bus
+
+            def get(self, key, default=None):
+                if key == 'pd':
+                    return load_pd
+                if key == 'qd':
+                    return load_qd
+                if key == 'gen_bus_indices':
+                    return gen_bus_indices
+                if key == 'load_bus_indices':
+                    return load_bus_indices
+                if key == 'line_edge_index':
+                    return line_edge_index
+                if key == 'line_limits':
+                    return line_limits
+                return default
+
+        return ConstraintBatch()
+
     def _build_admittance_from_batch(self, batch, device):
         """Approximate Y-bus (real/imag) from line r/x; ignores shunts/transformers for now."""
         if ('bus', 'ac_line', 'bus') not in batch.edge_index_dict:
@@ -687,10 +1112,139 @@ class OPFLossManager(nn.Module):
 
         return Y_real, Y_imag
 
+    def _build_admittance_from_homo(self, batch, device):
+        node_type = getattr(batch, 'node_type', None)
+        edge_type = getattr(batch, 'edge_type', None)
+        edge_index = getattr(batch, 'edge_index', None)
+        edge_attr = getattr(batch, 'edge_attr_full', None)
+        if edge_attr is None:
+            edge_attr = getattr(batch, 'edge_attr', None)
+        if node_type is None or edge_index is None or edge_attr is None:
+            return None, None, None
+
+        node_type = node_type.to(device)
+        if edge_type is not None:
+            edge_type = edge_type.to(device)
+        edge_index = edge_index.to(device)
+
+        node_type_names, edge_type_names = self._get_homo_type_names(batch)
+        if not node_type_names:
+            node_type_names = ["bus", "generator", "load", "shunt"]
+
+        bus_type_id = self._homo_type_id(node_type_names, "bus", 0)
+        bus_mask = node_type == bus_type_id
+
+        node_batch = getattr(batch, "batch", None)
+        if node_batch is not None:
+            node_batch = node_batch.to(device)
+            bus_mask = bus_mask & (node_batch == 0)
+
+        bus_nodes = bus_mask.nonzero(as_tuple=False).view(-1)
+        n_bus = int(bus_nodes.numel())
+        if n_bus == 0:
+            return None, None, None
+
+        bus_index_map = torch.full((batch.x.size(0),), -1, device=device, dtype=torch.long)
+        bus_index_map[bus_nodes] = torch.arange(n_bus, device=device)
+
+        line_edge_id = self._homo_edge_type_id(edge_type_names, "bus", "ac_line", "bus")
+
+        if node_batch is not None:
+            edge_graph_mask = (node_batch[edge_index[0]] == 0) & (node_batch[edge_index[1]] == 0)
+        else:
+            edge_graph_mask = torch.ones(edge_index.size(1), dtype=torch.bool, device=device)
+
+        if edge_type is not None and line_edge_id is not None:
+            line_mask = (edge_type == line_edge_id) & edge_graph_mask
+        else:
+            src_type = node_type[edge_index[0]]
+            dst_type = node_type[edge_index[1]]
+            line_mask = (src_type == bus_type_id) & (dst_type == bus_type_id) & edge_graph_mask
+        if not bool(line_mask.any().item()):
+            return None, None, None
+
+        if edge_attr.size(0) != edge_index.size(1) or edge_attr.size(1) < 6:
+            return None, None, None
+
+        edge_attr = edge_attr.to(device)
+        line_attr = edge_attr[line_mask]
+        line_edges = edge_index[:, line_mask]
+
+        bus_i = bus_index_map[line_edges[0]]
+        bus_j = bus_index_map[line_edges[1]]
+        valid = (bus_i >= 0) & (bus_j >= 0)
+        if not bool(valid.any().item()):
+            return None, None, None
+
+        r = line_attr[:, 4]
+        x = line_attr[:, 5]
+        r = torch.nan_to_num(r, nan=0.0, posinf=0.0, neginf=0.0)
+        x = torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+        denom = (r ** 2 + x ** 2).clamp_min(1e-6)
+        y_real = r / denom
+        y_imag = -x / denom
+
+        bus_i = bus_i[valid]
+        bus_j = bus_j[valid]
+        y_real = y_real[valid]
+        y_imag = y_imag[valid]
+
+        Y_real = torch.zeros(n_bus, n_bus, device=device)
+        Y_imag = torch.zeros(n_bus, n_bus, device=device)
+
+        Y_real.index_put_((bus_i, bus_j), -y_real, accumulate=True)
+        Y_real.index_put_((bus_j, bus_i), -y_real, accumulate=True)
+        Y_imag.index_put_((bus_i, bus_j), -y_imag, accumulate=True)
+        Y_imag.index_put_((bus_j, bus_i), -y_imag, accumulate=True)
+
+        Y_real.index_put_((bus_i, bus_i), y_real, accumulate=True)
+        Y_real.index_put_((bus_j, bus_j), y_real, accumulate=True)
+        Y_imag.index_put_((bus_i, bus_i), y_imag, accumulate=True)
+        Y_imag.index_put_((bus_j, bus_j), y_imag, accumulate=True)
+
+        line_limits = None
+        if line_attr.size(1) >= 7:
+            line_limits = line_attr[:, 6].abs()[valid]
+
+        return Y_real, Y_imag, line_limits
+
     def _ensure_network_parameters(self, batch, device, target=None):
         """Initialize AugLag network parameters from batch data when needed."""
         target = target or self.lagrangian
         if target is None:
+            return
+
+        if self._is_homo_batch(batch):
+            Y_real, Y_imag, line_limits = self._build_admittance_from_homo(batch, device)
+            if Y_real is None or Y_imag is None:
+                return
+
+            n_bus = Y_real.size(0)
+            need_init = (
+                getattr(target, 'Y_real', None) is None
+                or target.Y_real.size(0) != n_bus
+            )
+
+            if not need_init:
+                return
+
+            base_mva = getattr(batch, 'baseMVA', None)
+            if base_mva is None and hasattr(batch, 'base_mva'):
+                base_mva = getattr(batch, 'base_mva')
+            if torch.is_tensor(base_mva):
+                base_mva = base_mva.view(-1)[0].item()
+            base_mva = float(base_mva) if base_mva is not None else 100.0
+
+            target.set_network_parameters(
+                Y_real=Y_real,
+                Y_imag=Y_imag,
+                line_limits=line_limits,
+                base_mva=base_mva
+            )
+
+            if target is self.lagrangian:
+                self._lagrangian_initialized = True
+                self._lagrangian_bus_count = n_bus
             return
 
         n_bus = batch['bus'].x.size(0)

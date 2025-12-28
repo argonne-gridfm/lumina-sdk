@@ -12,6 +12,7 @@ All rights reserved.
 """
 
 from typing import Dict, List, Optional, Tuple
+import os
 
 import numpy as np
 import torch
@@ -56,8 +57,72 @@ class OPFHomoWrapper:
             add_edge_type=self.add_edge_type,
             dummy_values=self.dummy_values
         )
+        homo_data.node_type_names = list(getattr(hetero_data, "node_types", []))
+        homo_data.edge_type_names = [
+            f"{src}::{rel}::{dst}" for (src, rel, dst) in getattr(hetero_data, "edge_types", [])
+        ]
+        self._attach_full_edge_attr(homo_data, hetero_data)
 
         return homo_data
+
+    def _attach_full_edge_attr(self, homo_data: Data, hetero_data: HeteroData):
+        edge_attr_list = []
+        max_dim = 0
+        edge_types = list(getattr(hetero_data, "edge_types", []))
+        if not edge_types:
+            return
+
+        for edge_type in edge_types:
+            edge_data = hetero_data[edge_type]
+            edge_index = getattr(edge_data, "edge_index", None)
+            if edge_index is None:
+                continue
+            num_edges = edge_index.size(1)
+            if num_edges == 0:
+                continue
+            edge_attr = getattr(edge_data, "edge_attr", None)
+            if torch.is_tensor(edge_attr):
+                dim = int(edge_attr.size(1)) if edge_attr.dim() > 1 else 1
+                max_dim = max(max_dim, dim)
+            else:
+                max_dim = max(max_dim, 0)
+
+        if max_dim == 0:
+            return
+
+        for edge_type in edge_types:
+            edge_data = hetero_data[edge_type]
+            edge_index = getattr(edge_data, "edge_index", None)
+            if edge_index is None:
+                continue
+            num_edges = edge_index.size(1)
+            if num_edges == 0:
+                continue
+            edge_attr = getattr(edge_data, "edge_attr", None)
+            if torch.is_tensor(edge_attr):
+                if edge_attr.dim() == 1:
+                    edge_attr = edge_attr.view(-1, 1)
+                if edge_attr.size(1) < max_dim:
+                    padding = torch.zeros(
+                        edge_attr.size(0),
+                        max_dim - edge_attr.size(1),
+                        dtype=edge_attr.dtype,
+                        device=edge_attr.device,
+                    )
+                    edge_attr = torch.cat([edge_attr, padding], dim=1)
+                elif edge_attr.size(1) > max_dim:
+                    edge_attr = edge_attr[:, :max_dim]
+            else:
+                edge_attr = torch.zeros(
+                    num_edges,
+                    max_dim,
+                    dtype=torch.float32,
+                    device=edge_index.device,
+                )
+            edge_attr_list.append(edge_attr)
+
+        if edge_attr_list:
+            homo_data.edge_attr_full = torch.cat(edge_attr_list, dim=0)
 
 
 class OPFHeteroWrapper:
@@ -153,25 +218,87 @@ class HomoOPFDataset:
     Dataset wrapper that converts OPF heterogeneous data to homogeneous on-the-fly.
     """
 
-    def __init__(self, opf_dataset, add_node_type: bool = True, add_edge_type: bool = True):
+    def __init__(
+        self,
+        opf_dataset,
+        add_node_type: bool = True,
+        add_edge_type: bool = True,
+        sanitize_targets: bool = True,
+        log_bad_targets: bool = True,
+        max_bad_target_logs: int = 1,
+    ):
         """
         Args:
             opf_dataset: Original OPFDataset instance
             add_node_type: Whether to include node type information
             add_edge_type: Whether to include edge type information
+            sanitize_targets: Replace non-finite targets with zeros and attach y_mask
+            log_bad_targets: Log when non-finite targets are detected
+            max_bad_target_logs: Maximum number of log messages per dataset instance
         """
         self.opf_dataset = opf_dataset
         self.converter = OPFHomoWrapper(
             add_node_type=add_node_type,
             add_edge_type=add_edge_type
         )
+        self.sanitize_targets = sanitize_targets
+        self.log_bad_targets = log_bad_targets
+        self.max_bad_target_logs = max_bad_target_logs
+        self._bad_target_logs = 0
 
     def __len__(self):
         return len(self.opf_dataset)
 
     def __getitem__(self, idx):
         hetero_data = self.opf_dataset[idx]
-        return self.converter.convert(hetero_data)
+        homo_data = self.converter.convert(hetero_data)
+        self._sanitize_targets(homo_data, idx)
+        return homo_data
+
+    def _sanitize_targets(self, homo_data, idx):
+        y = getattr(homo_data, "y", None)
+        if not torch.is_tensor(y):
+            return
+
+        finite_mask = torch.isfinite(y)
+        if finite_mask.ndim > 1:
+            row_mask = finite_mask.all(dim=-1)
+        else:
+            row_mask = finite_mask
+
+        if bool(row_mask.all().item()):
+            return
+
+        if self.sanitize_targets:
+            if y.ndim == 0:
+                y = torch.zeros_like(y)
+            else:
+                y = y.clone()
+                y[~row_mask] = 0
+            homo_data.y = y
+
+        homo_data.y_mask = row_mask.to(dtype=torch.bool)
+
+        if self._should_log_bad_targets():
+            bad_count = int((~row_mask).sum().item())
+            total = int(row_mask.numel())
+            action = "sanitized" if self.sanitize_targets else "left as-is"
+            print(
+                f"[HomoOPFDataset] Non-finite targets in sample {idx}: "
+                f"{bad_count}/{total} rows {action}; stored y_mask."
+            )
+            self._bad_target_logs += 1
+
+    def _should_log_bad_targets(self):
+        if not self.log_bad_targets:
+            return False
+        if self._bad_target_logs >= self.max_bad_target_logs:
+            return False
+        try:
+            rank = int(os.environ.get("RANK", "0"))
+        except ValueError:
+            rank = 0
+        return rank == 0
 
     @property
     def num_node_features(self):
