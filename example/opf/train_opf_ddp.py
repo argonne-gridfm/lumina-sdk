@@ -289,6 +289,36 @@ def main():
         dist.broadcast_object_list(obj_list, src=0)
         args, config = obj_list
 
+    training_config = config.setdefault("training", {})
+    global_batch_size = training_config.get("global_batch_size")
+    if global_batch_size is not None:
+        try:
+            global_batch_size = int(global_batch_size)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("training.global_batch_size must be an integer") from exc
+        if global_batch_size > 0:
+            loader_config = config.get("loader", {})
+            batch_size = int(loader_config.get("batch_size", 1))
+            per_step_global = batch_size * world_size
+            if global_batch_size < per_step_global:
+                raise ValueError(
+                    "training.global_batch_size must be >= loader.batch_size * world_size "
+                    f"({per_step_global})."
+                )
+            if global_batch_size % per_step_global != 0:
+                raise ValueError(
+                    "training.global_batch_size must be divisible by loader.batch_size * world_size "
+                    f"({per_step_global})."
+                )
+            accumulate_grad_batches = global_batch_size // per_step_global
+            training_config["accumulate_grad_batches"] = int(accumulate_grad_batches)
+            if global_rank == 0:
+                print(
+                    "Overriding training.accumulate_grad_batches to "
+                    f"{training_config['accumulate_grad_batches']} "
+                    f"for global_batch_size={global_batch_size}."
+                )
+
     case_names = resolve_cases(args.cases)
     group_ids = resolve_group_ids(args.group_ids)
     if not group_ids:
