@@ -3,13 +3,6 @@ root: "/global/cfs/cdirs/amsc004/datasets/"
 logging_dir: "/global/cfs/cdirs/amsc004/lumina/logs/"
 checkpoint_dir: "/global/cfs/cdirs/amsc004/lumina/ddp_checkpoints/"
 optimizer:
-  Adam:
-    lr: 1.0e-04
-    betas: 
-      - 0.9
-      - 0.999
-    eps: 1.0e-08
-    weight_decay: 0
   AdamW:
     lr: 1.0e-03
     betas: 
@@ -43,21 +36,26 @@ lagrangian:
 train_split: 0.8
 val_split: 0.1
 loader:
-  batch_size: 32
+  batch_size: 16
   shuffle: true
   num_workers: 0
 training:
-  max_epochs: 50
-  patience: 10 
-  max_global_samples: 150000
+  max_epochs: 10
+  patience: 100000
+  max_global_samples: 500000
+  global_batch_size: 8192
+  score_alpha: 1.0
   gradient_clip_val: 1.0
   gradient_clip_algorithm: "norm"
   accumulate_grad_batches: 1
-  log_every_n_steps: 50
-  log_every_n_samples: 2048
-  val_check_interval: 1
+  log_every_n_steps: 0
+  log_every_n_samples: 8192
+  val_every_n_epochs: 0
+  val_every_n_samples: 40960
   throughput_enabled: false
+  log_normalized_violation: false
 checkpointing:
-  monitor: "val/feas/total_violation"
+  monitor: "val/score"
   save_last: true
-  every_n_epochs: 1
+  every_n_epochs: 0
+  every_n_samples: 0
