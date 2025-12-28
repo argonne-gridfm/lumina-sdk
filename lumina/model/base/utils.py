@@ -29,16 +29,19 @@ def describe_model(model, model_type=None, model_config=None, print_fn=print):
     total_params = 0
     trainable_params = 0
     uninitialized_params = 0
+    total_param_bytes = 0
     for param in base_model.parameters():
         if UninitializedParameter is not None and isinstance(param, UninitializedParameter):
             uninitialized_params += 1
             continue
         try:
             param_count = param.numel()
+            param_bytes = param_count * param.element_size()
         except (ValueError, RuntimeError):
             uninitialized_params += 1
             continue
         total_params += param_count
+        total_param_bytes += param_bytes
         if param.requires_grad:
             trainable_params += param_count
 
@@ -59,9 +62,15 @@ def describe_model(model, model_type=None, model_config=None, print_fn=print):
             if key in model_config and model_config[key] is not None:
                 detail_parts.append(f"{key}={model_config[key]}")
 
+    if total_param_bytes >= 1024**3:
+        memory_label = f"{total_param_bytes / 1024**3:.2f} GB"
+    else:
+        memory_label = f"{total_param_bytes / 1024**2:.2f} MB"
+
     lines = [
         f"Model: {model_name}",
         f"Parameters: {total_params:,} (trainable: {trainable_params:,})",
+        f"Parameter memory: {memory_label}",
     ]
     if detail_parts:
         lines.append("Config: " + ", ".join(detail_parts))
