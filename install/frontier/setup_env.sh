@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup_env.sh - Minimal Frontier environment setup for lumina-core
+# setup_env.sh - Frontier environment setup for lumina-core using modules + miniforge
 set -euo pipefail
 
 hr() { printf '%*s\n' "${COLUMNS:-80}" '' | tr ' ' '='; }
@@ -7,7 +7,7 @@ banner() { hr; echo ">>> $1"; hr; }
 
 banner "Starting lumina-core environment setup ($(date))"
 
-# Optional module init (Frontier uses Lmod, but script should degrade gracefully)
+# Module init (Frontier uses Lmod; keep graceful fallbacks)
 if ! command -v module >/dev/null 2>&1; then
   if [[ -f /etc/profile.d/modules.sh ]]; then
     source /etc/profile.d/modules.sh
@@ -19,8 +19,18 @@ if ! command -v module >/dev/null 2>&1; then
 fi
 
 if command -v module >/dev/null 2>&1; then
-  module use /soft/modulefiles || true
-  module load conda || true
+  module reset
+  ml cpe/24.07
+  ml cce/18.0.0
+  ml rocm/6.4.0
+  ml amd-mixed/6.4.0
+  ml craype-accel-amd-gfx90a
+  ml PrgEnv-gnu
+  ml miniforge3/23.11.0-0
+  ml git-lfs
+  module unload darshan-runtime || true
+else
+  echo "[warn] module command not found; proceeding without Frontier stack"
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -35,19 +45,22 @@ echo "Virtual env : ${VENV_PATH}"
 mkdir -p "${INSTALL_ROOT}"
 
 if ! command -v conda >/dev/null 2>&1; then
-  echo "[warn] conda not found; using system python for venv"
+  echo "[error] conda not found (load miniforge3 module)." >&2
+  exit 1
 fi
 
 if [[ -d "${VENV_PATH}" && "${RECREATE_ENV}" -eq 1 ]]; then
   echo "Removing existing env at ${VENV_PATH}"
-  rm -rf "${VENV_PATH}"
+  conda env remove -p "${VENV_PATH}" -y || rm -rf "${VENV_PATH}"
 fi
 
 if [[ ! -d "${VENV_PATH}" ]]; then
-  python -m venv "${VENV_PATH}" --upgrade-deps --prompt lumina
+  echo "Creating conda env at ${VENV_PATH} (Python ${PYTHON_VERSION})"
+  conda create -y -p "${VENV_PATH}" python="${PYTHON_VERSION}"
 fi
 
-source "${VENV_PATH}/bin/activate"
+# shellcheck disable=SC1091
+source activate "${VENV_PATH}"
 python -m pip install --upgrade pip uv
 export UV_LINK_MODE=copy
 
@@ -59,4 +72,4 @@ banner "Install lumina-core (editable, no extra deps)"
 uv pip install -e "${REPO_ROOT}" --no-deps
 
 banner "Done"
-echo "Activate environment with: source ${VENV_PATH}/bin/activate"
+echo "Activate environment with: source activate ${VENV_PATH}"
