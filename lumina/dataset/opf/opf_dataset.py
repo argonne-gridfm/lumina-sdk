@@ -350,6 +350,7 @@ class OPFHomogeneousDataset(OPFDataset):
         *args,
         add_node_type: bool = True,
         add_edge_type: bool = True,
+        attach_full_edge_attr: bool = False,
         sanitize_targets: bool = True,
         log_bad_targets: bool = True,
         max_bad_target_logs: int = 1,
@@ -359,6 +360,7 @@ class OPFHomogeneousDataset(OPFDataset):
         self._homo_wrapper = OPFHomoWrapper(
             add_node_type=add_node_type,
             add_edge_type=add_edge_type,
+            attach_full_edge_attr=attach_full_edge_attr,
         )
         self._sanitize_targets = bool(sanitize_targets)
         self._log_bad_targets = bool(log_bad_targets)

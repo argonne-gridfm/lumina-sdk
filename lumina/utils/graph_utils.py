@@ -31,16 +31,19 @@ class OPFHomoWrapper:
     def __init__(self,
                  add_node_type: bool = True,
                  add_edge_type: bool = True,
-                 dummy_values: bool = True):
+                 dummy_values: bool = True,
+                 attach_full_edge_attr: bool = False):
         """
         Args:
             add_node_type: Whether to add node type information to converted data
             add_edge_type: Whether to add edge type information to converted data
             dummy_values: Whether to fill missing attributes with dummy values
+            attach_full_edge_attr: Whether to store padded edge_attr_full for all edges
         """
         self.add_node_type = add_node_type
         self.add_edge_type = add_edge_type
         self.dummy_values = dummy_values
+        self.attach_full_edge_attr = attach_full_edge_attr
 
     def convert(self, hetero_data: HeteroData) -> Data:
         """
@@ -61,7 +64,8 @@ class OPFHomoWrapper:
         homo_data.edge_type_names = [
             f"{src}::{rel}::{dst}" for (src, rel, dst) in getattr(hetero_data, "edge_types", [])
         ]
-        self._attach_full_edge_attr(homo_data, hetero_data)
+        if self.attach_full_edge_attr:
+            self._attach_full_edge_attr(homo_data, hetero_data)
 
         return homo_data
 

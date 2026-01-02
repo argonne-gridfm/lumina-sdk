@@ -1,6 +1,7 @@
 import os
 
-from lumina.dataset.opf.opf_dataset import OPFDataset
+from lumina.dataset.opf.opf_dataset import OPFDataset, OPFHomogeneousDataset
+from lumina.dataset.opf.opf_on_disk_dataset import OPFOnDiskDataset, OPFOnDiskHomogeneousDataset
 
 
 def get_rank_size():
@@ -22,7 +23,7 @@ def get_rank_size():
     return int(rank), int(size)
 
 if __name__ == "__main__":
-    group_ids = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    group_ids = [0, 1] #[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
     case_mapping = {
         "pglib_opf_case14_ieee": group_ids,
         "pglib_opf_case30_ieee": group_ids,
@@ -35,11 +36,14 @@ if __name__ == "__main__":
         'pglib_opf_case10000_goc': group_ids,
         'pglib_opf_case13659_pegase': group_ids
     }
-    root = '/global/cfs/cdirs/amsc004/datasets/'
+    root = '/pscratch/sd/k/kibaekk/datasets/'
     tasks = [(case_name, group_id)
              for case_name, group_ids in case_mapping.items()
              for group_id in group_ids]
     rank, size = get_rank_size()
     for case_name, group_id in tasks[rank::size]:
         print(f"Processing case [rank: {rank}]: {case_name}, group_id: {group_id}")
-        OPFDataset(root=root, case_name=case_name, group_id=group_id, topological_perturbations=False)
+        # OPFDataset(root=root, case_name=case_name, group_id=group_id, topological_perturbations=False)
+        # OPFHomogeneousDataset(root=root, case_name=case_name, group_id=group_id, topological_perturbations=False)
+        # OPFOnDiskDataset(root=root, case_name=case_name, group_id=group_id, topological_perturbations=False)
+        OPFOnDiskHomogeneousDataset(root=root, case_name=case_name, group_id=group_id, topological_perturbations=False)

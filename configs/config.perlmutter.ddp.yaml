@@ -1,7 +1,27 @@
 ---
-root: "/global/cfs/cdirs/amsc004/datasets/"
+root: "/pscratch/sd/k/kibaekk/datasets/"
 logging_dir: "/global/cfs/cdirs/amsc004/lumina/logs/"
 checkpoint_dir: "/global/cfs/cdirs/amsc004/lumina/ddp_checkpoints/"
+data:
+  backend: "on_disk" # in_memory | on_disk
+  sharded_manifest_name: "manifest.json"
+  on_disk_backend: "sqlite"
+  on_disk_write_batch_size: 128
+  on_disk_sqlite_timeout_sec: 600
+  on_disk_sqlite_journal_mode: "WAL"
+  on_disk_sqlite_synchronous: "NORMAL"
+  on_disk_homo_suffix: "homo"
+  on_disk_homo_prune: true
+  on_disk_homo_storage_dtype: "float16"
+  on_disk_homo_restore_fp32: true
+  on_disk_homo_attach_full_edge_attr: true
+  on_disk_homo_sanitize_targets: true
+  on_disk_homo_log_bad_targets: true
+  on_disk_homo_max_bad_target_logs: 1
+  staging:
+    enabled: true
+    root: "/pscratch/sd/k/kibaekk/datasets/"
+    lock_timeout_sec: 7200
 optimizer:
   AdamW:
     lr: 1.0e-03
@@ -33,27 +53,38 @@ lagrangian:
   warmup_samples: 12000
   penalty_check_samples: 12000
   multiplier_check_samples: 12000
+  constraint_timing: true
 train_split: 0.8
 val_split: 0.1
 loader:
-  batch_size: 16
+  batch_size: 8
   shuffle: true
-  num_workers: 0
+  num_workers: 8
+  persistent_workers: true
+  prefetch_factor: 4
+  pin_memory: true
 training:
   max_epochs: 10
   patience: 100000
   max_global_samples: 500000
-  global_batch_size: 8192
+  global_batch_size: 512
   score_alpha: 1.0
   gradient_clip_val: 1.0
   gradient_clip_algorithm: "norm"
   accumulate_grad_batches: 1
-  log_every_n_steps: 0
-  log_every_n_samples: 8192
+  case_mix_every_n_steps: 1  # 0 = sequential, N = round-robin N steps per case
+  log_every_n_steps: 1
+  log_every_n_samples: 0
   val_every_n_epochs: 0
-  val_every_n_samples: 40960
+  val_every_n_samples: 3584
+  validation_timing: true
+  validation_timing_every_n_batches: 1
+  validation_timing_max_batches: 50
   throughput_enabled: false
-  log_normalized_violation: false
+  log_normalized_violation: true
+  violation_eval_p: 0.1
+  violation_eval_min_batches: 1
+  violation_eval_seed: 0
 checkpointing:
   monitor: "val/score"
   save_last: true

@@ -9,13 +9,41 @@ Copyright (c) 2025, Argonne National Laboratory
 All rights reserved.
 """
 
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Union
 
 import math
 import numpy as np
+import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+
+@dataclass(frozen=True)
+class CaseYCacheEntry:
+    case_id: int
+    n_bus: int
+    y_real_sparse: torch.Tensor
+    y_imag_sparse: torch.Tensor
+    y_diag_real: torch.Tensor
+    y_diag_imag: torch.Tensor
+    line_y_real: Optional[torch.Tensor]
+    line_y_imag: Optional[torch.Tensor]
+    line_limits: Optional[torch.Tensor]
+    base_mva: float
+    device: torch.device
+
+
+class CaseYCache:
+    def __init__(self):
+        self._cache: Dict[int, CaseYCacheEntry] = {}
+
+    def get(self, case_id: int) -> Optional[CaseYCacheEntry]:
+        return self._cache.get(int(case_id))
+
+    def set(self, entry: CaseYCacheEntry) -> None:
+        self._cache[int(entry.case_id)] = entry
 
 
 class RMSELoss(nn.Module):
@@ -436,11 +464,14 @@ class OPFLossManager(nn.Module):
 
         self.loss_type = loss_type
         self.device = device or torch.device('cpu')
+        self.case_y_cache = CaseYCache()
         lag_config = lagrangian_config or {}
         self._last_lagrangian_loss = None
         self._iters_since_lagrangian_update = 0
         self.constraint_monitor = None
         self.log_normalized_violation = bool(log_normalized_violation)
+        self.constraint_timing_enabled = bool(lag_config.get("constraint_timing", False))
+        self.constraint_eval_stats = {"count": 0, "total_ms": 0.0, "last_ms": 0.0}
 
         # Initialize the appropriate loss function
         if loss_type == 'augmented_lagrangian':
@@ -517,11 +548,11 @@ class OPFLossManager(nn.Module):
 
             # Compute Lagrangian loss using shared constraint pipeline
             current_n_bus = batch['bus'].x.size(0)
-            stored_Y = getattr(self.lagrangian, 'Y_real', None)
+            stored_ybus = getattr(self.lagrangian, 'Y_real_sparse', None)
             need_init = (
                 not self._lagrangian_initialized
-                or stored_Y is None
-                or stored_Y.size(0) != current_n_bus
+                or stored_ybus is None
+                or stored_ybus.size(0) != current_n_bus
             )
             if need_init:
                 self._ensure_network_parameters(batch, predictions['bus'].device, target=self.lagrangian)
@@ -558,18 +589,25 @@ class OPFLossManager(nn.Module):
         if 'bus' not in predictions or 'generator' not in predictions:
             return {}
 
+        timing_start = self._start_constraint_timing()
         try:
             self._ensure_network_parameters(batch, predictions['bus'].device, target=monitor)
         except Exception:
+            self._stop_constraint_timing(timing_start)
             return {}
 
-        if getattr(monitor, 'Y_real', None) is None or getattr(monitor, 'Y_imag', None) is None:
+        if (
+            getattr(monitor, 'Y_real_sparse', None) is None
+            or getattr(monitor, 'Y_imag_sparse', None) is None
+        ):
+            self._stop_constraint_timing(timing_start)
             return {}
 
         try:
             constraint_batch = constraint_data or self._create_constraint_batch(batch, predictions)
             constraints = monitor.compute_constraints(predictions, constraint_batch)
         except Exception:
+            self._stop_constraint_timing(timing_start)
             return {}
 
         if constraints is None or constraints.numel() == 0:
@@ -600,6 +638,7 @@ class OPFLossManager(nn.Module):
         if self.log_normalized_violation and constraints is not None:
             info["n_constraints"] = int(constraints.numel())
             self._add_normalized_violation_metrics(info)
+        self._stop_constraint_timing(timing_start, info)
         return info
 
     def _collect_constraint_metrics_homo(self, predictions, batch, constraint_data):
@@ -609,20 +648,28 @@ class OPFLossManager(nn.Module):
         if 'bus' not in predictions or 'generator' not in predictions:
             return {}
 
+        timing_start = self._start_constraint_timing()
         try:
             self._ensure_network_parameters(batch, predictions['bus'].device, target=monitor)
         except Exception:
+            self._stop_constraint_timing(timing_start)
             return {}
 
-        if getattr(monitor, 'Y_real', None) is None or getattr(monitor, 'Y_imag', None) is None:
+        if (
+            getattr(monitor, 'Y_real_sparse', None) is None
+            or getattr(monitor, 'Y_imag_sparse', None) is None
+        ):
+            self._stop_constraint_timing(timing_start)
             return {}
 
         try:
             constraint_batch = constraint_data or self._create_constraint_batch_homo(batch, predictions)
             if constraint_batch is None:
+                self._stop_constraint_timing(timing_start)
                 return {}
             constraints = monitor.compute_constraints(predictions, constraint_batch)
         except Exception:
+            self._stop_constraint_timing(timing_start)
             return {}
 
         if constraints is None or constraints.numel() == 0:
@@ -653,7 +700,25 @@ class OPFLossManager(nn.Module):
         if self.log_normalized_violation and constraints is not None:
             info["n_constraints"] = int(constraints.numel())
             self._add_normalized_violation_metrics(info)
+        self._stop_constraint_timing(timing_start, info)
         return info
+
+    def _start_constraint_timing(self):
+        if not self.constraint_timing_enabled:
+            return None
+        return time.perf_counter()
+
+    def _stop_constraint_timing(self, start_time, info=None):
+        if start_time is None:
+            return
+        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+        stats = self.constraint_eval_stats
+        stats["count"] += 1
+        stats["total_ms"] += elapsed_ms
+        stats["last_ms"] = elapsed_ms
+        if info is not None:
+            info["constraint_eval_ms"] = elapsed_ms
+            info["constraint_eval_avg_ms"] = stats["total_ms"] / stats["count"]
 
     @staticmethod
     def _is_homo_batch(batch) -> bool:
@@ -1077,12 +1142,12 @@ class OPFLossManager(nn.Module):
     def _build_admittance_from_batch(self, batch, device):
         """Approximate Y-bus (real/imag) from line r/x; ignores shunts/transformers for now."""
         if ('bus', 'ac_line', 'bus') not in batch.edge_index_dict:
-            return None, None
+            return None, None, None, None, None, None
 
         edge_index = batch['bus', 'ac_line', 'bus'].edge_index.to(device)
         edge_attr = batch['bus', 'ac_line', 'bus'].edge_attr
         if edge_attr is None or edge_attr.size(0) != edge_index.size(1) or edge_attr.size(1) < 6:
-            return None, None
+            return None, None, None, None, None, None
 
         edge_attr = edge_attr.to(device)
         r = edge_attr[:, 4]
@@ -1090,27 +1155,23 @@ class OPFLossManager(nn.Module):
         denom = (r ** 2 + x ** 2).clamp_min(1e-6)
         y_real = r / denom
         y_imag = -x / denom
+        line_y_real = -y_real
+        line_y_imag = -y_imag
 
         n_bus = batch['bus'].x.size(0)
-        Y_real = torch.zeros(n_bus, n_bus, device=device)
-        Y_imag = torch.zeros(n_bus, n_bus, device=device)
 
         i = edge_index[0].clamp(max=n_bus - 1)
         j = edge_index[1].clamp(max=n_bus - 1)
 
-        # Off-diagonal
-        Y_real.index_put_((i, j), -y_real, accumulate=True)
-        Y_real.index_put_((j, i), -y_real, accumulate=True)
-        Y_imag.index_put_((i, j), -y_imag, accumulate=True)
-        Y_imag.index_put_((j, i), -y_imag, accumulate=True)
+        diag_real = torch.zeros(n_bus, device=device)
+        diag_imag = torch.zeros(n_bus, device=device)
+        diag_real.index_add_(0, i, y_real)
+        diag_real.index_add_(0, j, y_real)
+        diag_imag.index_add_(0, i, y_imag)
+        diag_imag.index_add_(0, j, y_imag)
 
-        # Diagonal
-        Y_real.index_put_((i, i), y_real, accumulate=True)
-        Y_real.index_put_((j, j), y_real, accumulate=True)
-        Y_imag.index_put_((i, i), y_imag, accumulate=True)
-        Y_imag.index_put_((j, j), y_imag, accumulate=True)
-
-        return Y_real, Y_imag
+        Y_real_sparse, Y_imag_sparse = self._build_sparse_ybus(i, j, y_real, y_imag, n_bus, device)
+        return Y_real_sparse, Y_imag_sparse, diag_real, diag_imag, line_y_real, line_y_imag
 
     def _build_admittance_from_homo(self, batch, device):
         node_type = getattr(batch, 'node_type', None)
@@ -1120,7 +1181,7 @@ class OPFLossManager(nn.Module):
         if edge_attr is None:
             edge_attr = getattr(batch, 'edge_attr', None)
         if node_type is None or edge_index is None or edge_attr is None:
-            return None, None, None
+            return None, None, None, None, None, None, None
 
         node_type = node_type.to(device)
         if edge_type is not None:
@@ -1142,7 +1203,7 @@ class OPFLossManager(nn.Module):
         bus_nodes = bus_mask.nonzero(as_tuple=False).view(-1)
         n_bus = int(bus_nodes.numel())
         if n_bus == 0:
-            return None, None, None
+            return None, None, None, None, None, None, None
 
         bus_index_map = torch.full((batch.x.size(0),), -1, device=device, dtype=torch.long)
         bus_index_map[bus_nodes] = torch.arange(n_bus, device=device)
@@ -1161,10 +1222,10 @@ class OPFLossManager(nn.Module):
             dst_type = node_type[edge_index[1]]
             line_mask = (src_type == bus_type_id) & (dst_type == bus_type_id) & edge_graph_mask
         if not bool(line_mask.any().item()):
-            return None, None, None
+            return None, None, None, None, None, None, None
 
         if edge_attr.size(0) != edge_index.size(1) or edge_attr.size(1) < 6:
-            return None, None, None
+            return None, None, None, None, None, None, None
 
         edge_attr = edge_attr.to(device)
         line_attr = edge_attr[line_mask]
@@ -1174,7 +1235,7 @@ class OPFLossManager(nn.Module):
         bus_j = bus_index_map[line_edges[1]]
         valid = (bus_i >= 0) & (bus_j >= 0)
         if not bool(valid.any().item()):
-            return None, None, None
+            return None, None, None, None, None, None, None
 
         r = line_attr[:, 4]
         x = line_attr[:, 5]
@@ -1183,30 +1244,138 @@ class OPFLossManager(nn.Module):
         denom = (r ** 2 + x ** 2).clamp_min(1e-6)
         y_real = r / denom
         y_imag = -x / denom
+        line_y_real = -y_real
+        line_y_imag = -y_imag
 
         bus_i = bus_i[valid]
         bus_j = bus_j[valid]
         y_real = y_real[valid]
         y_imag = y_imag[valid]
+        line_y_real = line_y_real[valid]
+        line_y_imag = line_y_imag[valid]
 
-        Y_real = torch.zeros(n_bus, n_bus, device=device)
-        Y_imag = torch.zeros(n_bus, n_bus, device=device)
-
-        Y_real.index_put_((bus_i, bus_j), -y_real, accumulate=True)
-        Y_real.index_put_((bus_j, bus_i), -y_real, accumulate=True)
-        Y_imag.index_put_((bus_i, bus_j), -y_imag, accumulate=True)
-        Y_imag.index_put_((bus_j, bus_i), -y_imag, accumulate=True)
-
-        Y_real.index_put_((bus_i, bus_i), y_real, accumulate=True)
-        Y_real.index_put_((bus_j, bus_j), y_real, accumulate=True)
-        Y_imag.index_put_((bus_i, bus_i), y_imag, accumulate=True)
-        Y_imag.index_put_((bus_j, bus_j), y_imag, accumulate=True)
+        diag_real = torch.zeros(n_bus, device=device)
+        diag_imag = torch.zeros(n_bus, device=device)
+        diag_real.index_add_(0, bus_i, y_real)
+        diag_real.index_add_(0, bus_j, y_real)
+        diag_imag.index_add_(0, bus_i, y_imag)
+        diag_imag.index_add_(0, bus_j, y_imag)
 
         line_limits = None
         if line_attr.size(1) >= 7:
             line_limits = line_attr[:, 6].abs()[valid]
 
-        return Y_real, Y_imag, line_limits
+        Y_real_sparse, Y_imag_sparse = self._build_sparse_ybus(bus_i, bus_j, y_real, y_imag, n_bus, device)
+        return (
+            Y_real_sparse,
+            Y_imag_sparse,
+            diag_real,
+            diag_imag,
+            line_y_real,
+            line_y_imag,
+            line_limits,
+        )
+
+    def _build_sparse_ybus(self, bus_i, bus_j, y_real, y_imag, n_bus, device):
+        if bus_i is None or bus_j is None or y_real is None or y_imag is None:
+            return None, None
+        if bus_i.numel() == 0 or n_bus <= 0:
+            empty_idx = torch.empty((2, 0), dtype=torch.long, device=device)
+            empty_val = torch.empty((0,), device=device)
+            y_real_sparse = torch.sparse_coo_tensor(empty_idx, empty_val, (n_bus, n_bus))
+            y_imag_sparse = torch.sparse_coo_tensor(empty_idx, empty_val, (n_bus, n_bus))
+            return y_real_sparse, y_imag_sparse
+
+        diag_real = torch.zeros(n_bus, device=device)
+        diag_imag = torch.zeros(n_bus, device=device)
+        diag_real.index_add_(0, bus_i, y_real)
+        diag_real.index_add_(0, bus_j, y_real)
+        diag_imag.index_add_(0, bus_i, y_imag)
+        diag_imag.index_add_(0, bus_j, y_imag)
+
+        diag_idx = torch.arange(n_bus, device=device)
+        row = torch.cat([bus_i, bus_j, diag_idx], dim=0)
+        col = torch.cat([bus_j, bus_i, diag_idx], dim=0)
+        values_real = torch.cat([-y_real, -y_real, diag_real], dim=0)
+        values_imag = torch.cat([-y_imag, -y_imag, diag_imag], dim=0)
+        indices = torch.stack([row, col], dim=0)
+        y_real_sparse = torch.sparse_coo_tensor(indices, values_real, (n_bus, n_bus)).coalesce()
+        y_imag_sparse = torch.sparse_coo_tensor(indices, values_imag, (n_bus, n_bus)).coalesce()
+        return y_real_sparse, y_imag_sparse
+
+    def _resolve_case_id(self, batch):
+        case_id = getattr(batch, "case_id", None)
+        if case_id is None:
+            return None
+        if torch.is_tensor(case_id):
+            if case_id.numel() == 0:
+                return None
+            if case_id.dim() > 0:
+                unique = torch.unique(case_id)
+                if unique.numel() != 1:
+                    return None
+                case_id = unique[0]
+            return int(case_id.item())
+        try:
+            return int(case_id)
+        except (TypeError, ValueError):
+            return None
+
+    def _maybe_apply_cached_y(self, case_id, n_bus, device, target):
+        if case_id is None:
+            return False
+        entry = self.case_y_cache.get(case_id)
+        if entry is None:
+            return False
+        if entry.n_bus != n_bus:
+            return False
+        if entry.device != device:
+            return False
+        target.set_network_parameters(
+            Y_real_sparse=entry.y_real_sparse,
+            Y_imag_sparse=entry.y_imag_sparse,
+            Y_diag_real=entry.y_diag_real,
+            Y_diag_imag=entry.y_diag_imag,
+            line_y_real=entry.line_y_real,
+            line_y_imag=entry.line_y_imag,
+            line_limits=entry.line_limits,
+            base_mva=entry.base_mva,
+        )
+        if target is self.lagrangian:
+            self._lagrangian_initialized = True
+            self._lagrangian_bus_count = n_bus
+        return True
+
+    def _cache_case_y(
+        self,
+        case_id,
+        n_bus,
+        device,
+        y_real_sparse,
+        y_imag_sparse,
+        y_diag_real,
+        y_diag_imag,
+        line_y_real,
+        line_y_imag,
+        line_limits,
+        base_mva,
+    ):
+        if case_id is None:
+            return
+        entry = CaseYCacheEntry(
+            case_id=case_id,
+            n_bus=n_bus,
+            y_real_sparse=y_real_sparse,
+            y_imag_sparse=y_imag_sparse,
+            y_diag_real=y_diag_real,
+            y_diag_imag=y_diag_imag,
+            line_y_real=line_y_real,
+            line_y_imag=line_y_imag,
+            line_limits=line_limits,
+            base_mva=base_mva,
+            device=device,
+        )
+        self.case_y_cache.set(entry)
 
     def _ensure_network_parameters(self, batch, device, target=None):
         """Initialize AugLag network parameters from batch data when needed."""
@@ -1215,17 +1384,40 @@ class OPFLossManager(nn.Module):
             return
 
         if self._is_homo_batch(batch):
-            Y_real, Y_imag, line_limits = self._build_admittance_from_homo(batch, device)
-            if Y_real is None or Y_imag is None:
+            node_type = getattr(batch, 'node_type', None)
+            if node_type is None:
                 return
-
-            n_bus = Y_real.size(0)
-            need_init = (
-                getattr(target, 'Y_real', None) is None
-                or target.Y_real.size(0) != n_bus
-            )
+            node_type_names, _ = self._get_homo_type_names(batch)
+            if not node_type_names:
+                node_type_names = ["bus", "generator", "load", "shunt"]
+            bus_type_id = self._homo_type_id(node_type_names, "bus", 0)
+            bus_mask = node_type == bus_type_id
+            node_batch = getattr(batch, "batch", None)
+            if node_batch is not None:
+                bus_mask = bus_mask & (node_batch == 0)
+            n_bus = int(bus_mask.sum().item())
+            if n_bus <= 0:
+                return
+            case_id = self._resolve_case_id(batch)
+            stored_sparse = getattr(target, 'Y_real_sparse', None)
+            need_init = stored_sparse is None or stored_sparse.size(0) != n_bus
 
             if not need_init:
+                return
+
+            if self._maybe_apply_cached_y(case_id, n_bus, device, target):
+                return
+
+            (
+                Y_real_sparse,
+                Y_imag_sparse,
+                diag_real,
+                diag_imag,
+                line_y_real,
+                line_y_imag,
+                line_limits,
+            ) = self._build_admittance_from_homo(batch, device)
+            if Y_real_sparse is None or Y_imag_sparse is None:
                 return
 
             base_mva = getattr(batch, 'baseMVA', None)
@@ -1236,28 +1428,54 @@ class OPFLossManager(nn.Module):
             base_mva = float(base_mva) if base_mva is not None else 100.0
 
             target.set_network_parameters(
-                Y_real=Y_real,
-                Y_imag=Y_imag,
+                Y_real_sparse=Y_real_sparse,
+                Y_imag_sparse=Y_imag_sparse,
+                Y_diag_real=diag_real,
+                Y_diag_imag=diag_imag,
+                line_y_real=line_y_real,
+                line_y_imag=line_y_imag,
                 line_limits=line_limits,
-                base_mva=base_mva
+                base_mva=base_mva,
             )
 
             if target is self.lagrangian:
                 self._lagrangian_initialized = True
                 self._lagrangian_bus_count = n_bus
+            self._cache_case_y(
+                case_id,
+                n_bus,
+                device,
+                Y_real_sparse,
+                Y_imag_sparse,
+                diag_real,
+                diag_imag,
+                line_y_real,
+                line_y_imag,
+                line_limits,
+                base_mva,
+            )
             return
 
         n_bus = batch['bus'].x.size(0)
-        need_init = (
-            getattr(target, 'Y_real', None) is None
-            or target.Y_real.size(0) != n_bus
-        )
+        case_id = self._resolve_case_id(batch)
+        stored_sparse = getattr(target, 'Y_real_sparse', None)
+        need_init = stored_sparse is None or stored_sparse.size(0) != n_bus
 
         if not need_init:
             return
 
-        Y_real, Y_imag = self._build_admittance_from_batch(batch, device)
-        if Y_real is None or Y_imag is None:
+        if self._maybe_apply_cached_y(case_id, n_bus, device, target):
+            return
+
+        (
+            Y_real_sparse,
+            Y_imag_sparse,
+            diag_real,
+            diag_imag,
+            line_y_real,
+            line_y_imag,
+        ) = self._build_admittance_from_batch(batch, device)
+        if Y_real_sparse is None or Y_imag_sparse is None:
             return
 
         line_limits = None
@@ -1274,16 +1492,33 @@ class OPFLossManager(nn.Module):
         base_mva = float(base_mva) if base_mva is not None else 100.0
 
         target.set_network_parameters(
-            Y_real=Y_real,
-            Y_imag=Y_imag,
+            Y_real_sparse=Y_real_sparse,
+            Y_imag_sparse=Y_imag_sparse,
+            Y_diag_real=diag_real,
+            Y_diag_imag=diag_imag,
+            line_y_real=line_y_real,
+            line_y_imag=line_y_imag,
             line_limits=line_limits,
-            base_mva=base_mva
+            base_mva=base_mva,
         )
 
         # Avoid re-initializing network parameters on subsequent calls
         if target is self.lagrangian:
             self._lagrangian_initialized = True
             self._lagrangian_bus_count = n_bus
+        self._cache_case_y(
+            case_id,
+            n_bus,
+            device,
+            Y_real_sparse,
+            Y_imag_sparse,
+            diag_real,
+            diag_imag,
+            line_y_real,
+            line_y_imag,
+            line_limits,
+            base_mva,
+        )
 
     def _extract_inputs(self, batch):
         """Extract input data dictionary for violated Lagrangian."""

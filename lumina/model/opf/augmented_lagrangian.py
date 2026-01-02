@@ -517,6 +517,15 @@ class AugmentedLagrangianACOPF(nn.Module):
         # Network parameters (to be set)
         self.Y_real = None
         self.Y_imag = None
+        self.Y_real_sparse = None
+        self.Y_imag_sparse = None
+        self.Y_diag_real = None
+        self.Y_diag_imag = None
+        self.line_y_real = None
+        self.line_y_imag = None
+        self._Y_real_sparse_cpu = None
+        self._Y_imag_sparse_cpu = None
+        self._sparse_mm_supported = None
         self.line_limits = None
         self.base_mva = 100.0
 
@@ -565,27 +574,52 @@ class AugmentedLagrangianACOPF(nn.Module):
 
     def set_network_parameters(
         self,
-        Y_real: torch.Tensor,
-        Y_imag: torch.Tensor,
+        Y_real_sparse: Optional[torch.Tensor] = None,
+        Y_imag_sparse: Optional[torch.Tensor] = None,
+        Y_diag_real: Optional[torch.Tensor] = None,
+        Y_diag_imag: Optional[torch.Tensor] = None,
+        line_y_real: Optional[torch.Tensor] = None,
+        line_y_imag: Optional[torch.Tensor] = None,
         line_limits: Optional[torch.Tensor] = None,
-        base_mva: float = 100.0
+        base_mva: float = 100.0,
     ):
         """Set network parameters for constraint computation.
 
         Args:
-            Y_real(torch.Tensor): Real part of admittance matrix(n_bus x n_bus)
-            Y_imag(torch.Tensor): Imaginary part of admittance matrix(n_bus x n_bus)
+            Y_real_sparse(Optional[torch.Tensor]): Sparse real admittance matrix
+            Y_imag_sparse(Optional[torch.Tensor]): Sparse imaginary admittance matrix
+            Y_diag_real(Optional[torch.Tensor]): Real diagonal of Y-bus (size n_bus)
+            Y_diag_imag(Optional[torch.Tensor]): Imag diagonal of Y-bus (size n_bus)
+            line_y_real(Optional[torch.Tensor]): Off-diagonal real admittance per line (Y_ij)
+            line_y_imag(Optional[torch.Tensor]): Off-diagonal imag admittance per line (Y_ij)
             line_limits(Optional[torch.Tensor]): Line flow limits(n_lines x 2)
             base_mva(float): Base MVA for power system
         """
-        self.Y_real = Y_real
-        self.Y_imag = Y_imag
+        self.Y_real = None
+        self.Y_imag = None
         self.line_limits = line_limits
         self.base_mva = base_mva
+        self.Y_real_sparse = Y_real_sparse.coalesce() if Y_real_sparse is not None else None
+        self.Y_imag_sparse = Y_imag_sparse.coalesce() if Y_imag_sparse is not None else None
+        self.Y_diag_real = Y_diag_real
+        self.Y_diag_imag = Y_diag_imag
+        self.line_y_real = line_y_real
+        self.line_y_imag = line_y_imag
+        self._Y_real_sparse_cpu = None
+        self._Y_imag_sparse_cpu = None
+        self._sparse_mm_supported = None
 
         # Initialize Lagrange multipliers
-        n_bus = Y_real.size(0)
-        device = Y_real.device
+        n_bus = None
+        device = None
+        if self.Y_real_sparse is not None:
+            n_bus = int(self.Y_real_sparse.size(0))
+            device = self.Y_real_sparse.device
+        elif self.Y_diag_real is not None:
+            n_bus = int(self.Y_diag_real.numel())
+            device = self.Y_diag_real.device
+        if n_bus is None or device is None:
+            return
 
         # Power flow equality constraints: 2 * n_bus (P and Q balance at each bus)
         n_equality = 2 * n_bus
@@ -759,13 +793,13 @@ class AugmentedLagrangianACOPF(nn.Module):
             Constraint violations [c_1(x), c_2(x), ..., c_n(x)]
             where c_i(x) = 0 represents power balance at bus i
         """
-        if self.Y_real is None or self.Y_imag is None:
+        if self.Y_real_sparse is None or self.Y_imag_sparse is None:
             return torch.tensor([], device=vm_pred.device, requires_grad=True)
 
         # Detect actual batch size and number of buses
         if vm_pred.dim() == 1:
             # If 1D, it could be a single sample or flattened batch
-            n_bus = self.Y_real.shape[0]
+            n_bus = self.Y_real_sparse.shape[0]
             if vm_pred.numel() % n_bus == 0:
                 batch_size = vm_pred.numel() // n_bus
                 vm_pred = vm_pred.view(batch_size, n_bus)
@@ -838,8 +872,6 @@ class AugmentedLagrangianACOPF(nn.Module):
 
         # Compute power flows using admittance matrix
         device = v_real.device
-        y_real_batch = self.Y_real.to(device).unsqueeze(0).expand(batch_size, -1, -1)
-        y_imag_batch = self.Y_imag.to(device).unsqueeze(0).expand(batch_size, -1, -1)
 
         # Simplified power flow calculation using linearized approximation for stability
         # This avoids the extremely large values from the full AC power flow equations
@@ -849,10 +881,61 @@ class AugmentedLagrangianACOPF(nn.Module):
         v_cos = vm_pred * torch.cos(va_rad)  # V * cos(theta)
         v_sin = vm_pred * torch.sin(va_rad)  # V * sin(theta)
 
-        # Using matrix-vector multiplication for efficiency
-        # Shape: [batch_size, n_bus]
-        p_calc = torch.einsum('bij,bj->bi', y_real_batch, v_cos) + torch.einsum('bij,bj->bi', y_imag_batch, v_sin)
-        q_calc = torch.einsum('bij,bj->bi', y_real_batch, v_sin) - torch.einsum('bij,bj->bi', y_imag_batch, v_cos)
+        def _sparse_mm_cpu(v_cos_local, v_sin_local):
+            if self._Y_real_sparse_cpu is None or self._Y_imag_sparse_cpu is None:
+                y_real_cpu = self.Y_real_sparse.coalesce().cpu()
+                y_imag_cpu = self.Y_imag_sparse.coalesce().cpu()
+                if y_real_cpu.dtype in (torch.float16, torch.bfloat16):
+                    y_real_cpu = y_real_cpu.float()
+                    y_imag_cpu = y_imag_cpu.float()
+                self._Y_real_sparse_cpu = y_real_cpu
+                self._Y_imag_sparse_cpu = y_imag_cpu
+            v_cos_cpu = v_cos_local if v_cos_local.device.type == "cpu" else v_cos_local.to("cpu")
+            v_sin_cpu = v_sin_local if v_sin_local.device.type == "cpu" else v_sin_local.to("cpu")
+            target_dtype = self._Y_real_sparse_cpu.dtype
+            if v_cos_cpu.dtype != target_dtype:
+                v_cos_cpu = v_cos_cpu.to(target_dtype)
+                v_sin_cpu = v_sin_cpu.to(target_dtype)
+            v_cos_t_cpu = v_cos_cpu.transpose(0, 1)
+            v_sin_t_cpu = v_sin_cpu.transpose(0, 1)
+            p_calc_t_cpu = torch.sparse.mm(self._Y_real_sparse_cpu, v_cos_t_cpu) + torch.sparse.mm(
+                self._Y_imag_sparse_cpu,
+                v_sin_t_cpu,
+            )
+            q_calc_t_cpu = torch.sparse.mm(self._Y_real_sparse_cpu, v_sin_t_cpu) - torch.sparse.mm(
+                self._Y_imag_sparse_cpu,
+                v_cos_t_cpu,
+            )
+            return p_calc_t_cpu, q_calc_t_cpu
+
+        if device.type != "cuda" or self._sparse_mm_supported is False:
+            p_calc_t, q_calc_t = _sparse_mm_cpu(v_cos, v_sin)
+        else:
+            try:
+                y_real_sparse = self.Y_real_sparse
+                y_imag_sparse = self.Y_imag_sparse
+                if y_real_sparse.device != device:
+                    y_real_sparse = y_real_sparse.to(device)
+                if y_imag_sparse.device != device:
+                    y_imag_sparse = y_imag_sparse.to(device)
+                if y_real_sparse.layout == torch.sparse_coo:
+                    y_real_sparse = y_real_sparse.coalesce()
+                if y_imag_sparse.layout == torch.sparse_coo:
+                    y_imag_sparse = y_imag_sparse.coalesce()
+                v_cos_t = v_cos.transpose(0, 1)
+                v_sin_t = v_sin.transpose(0, 1)
+                p_calc_t = torch.sparse.mm(y_real_sparse, v_cos_t) + torch.sparse.mm(y_imag_sparse, v_sin_t)
+                q_calc_t = torch.sparse.mm(y_real_sparse, v_sin_t) - torch.sparse.mm(y_imag_sparse, v_cos_t)
+                if self._sparse_mm_supported is None:
+                    self._sparse_mm_supported = True
+            except RuntimeError as exc:
+                if self._sparse_mm_supported is not False:
+                    warnings.warn(f"Sparse mm failed on device {device}; falling back to CPU. {exc}")
+                self._sparse_mm_supported = False
+                p_calc_t, q_calc_t = _sparse_mm_cpu(v_cos, v_sin)
+
+        p_calc = p_calc_t.transpose(0, 1).to(device)
+        q_calc = q_calc_t.transpose(0, 1).to(device)
 
         # Power balance constraints: injection - calculated_flow = 0
         p_balance = p_inj - p_calc
@@ -916,16 +999,54 @@ class AugmentedLagrangianACOPF(nn.Module):
         Returns:
             Line flow constraint violations
         """
-        if line_edge_index is None or self.line_limits is None or self.line_limits.numel() == 0:
+        if (
+            line_edge_index is None
+            or self.line_limits is None
+            or self.line_limits.numel() == 0
+            or self.line_y_real is None
+            or self.line_y_imag is None
+            or self.Y_diag_real is None
+            or self.Y_diag_imag is None
+        ):
             return torch.tensor([], device=vm.device, requires_grad=True)
 
-        batch_size = vm.size(0) if vm.dim() > 1 else 1
         device = vm.device
+        if line_edge_index.device != device:
+            line_edge_index = line_edge_index.to(device)
+        line_limits = self.line_limits
+        if line_limits.device != device:
+            line_limits = line_limits.to(device)
+        line_y_real = self.line_y_real
+        line_y_imag = self.line_y_imag
+        if line_y_real.device != device:
+            line_y_real = line_y_real.to(device)
+        if line_y_imag.device != device:
+            line_y_imag = line_y_imag.to(device)
+        y_diag_real = self.Y_diag_real
+        y_diag_imag = self.Y_diag_imag
+        if y_diag_real.device != device:
+            y_diag_real = y_diag_real.to(device)
+        if y_diag_imag.device != device:
+            y_diag_imag = y_diag_imag.to(device)
 
         # Handle single sample case
         if vm.dim() == 1:
             vm = vm.unsqueeze(0)
             va = va.unsqueeze(0)
+
+        # Limit to available line limits
+        n_lines = min(
+            line_edge_index.size(1),
+            line_limits.numel(),
+            line_y_real.numel(),
+            line_y_imag.numel(),
+        )
+        if n_lines <= 0:
+            return torch.tensor([], device=device, requires_grad=True)
+        line_edge_index = line_edge_index[:, :n_lines]
+        line_limits = line_limits[:n_lines]
+        line_y_real = line_y_real[:n_lines]
+        line_y_imag = line_y_imag[:n_lines]
 
         # Convert angles to radians
         va_rad = torch.deg2rad(va)
@@ -933,48 +1054,24 @@ class AugmentedLagrangianACOPF(nn.Module):
         # Compute voltage phasors
         v_real = vm * torch.cos(va_rad)
         v_imag = vm * torch.sin(va_rad)
+        v_complex = torch.complex(v_real, v_imag)
 
-        line_constraints = []
-        device = vm.device
+        i = line_edge_index[0]
+        j = line_edge_index[1]
 
-        # For each transmission line
-        for k, (i, j) in enumerate(line_edge_index.t()):
-            if k >= len(self.line_limits):
-                break
+        v_i = v_complex[:, i]
+        v_j = v_complex[:, j]
 
-            line_violations = []
+        y_ii = torch.complex(y_diag_real[i], y_diag_imag[i])
+        y_ij = torch.complex(line_y_real, line_y_imag)
 
-            for b in range(batch_size):
-                # Voltage phasors at both ends
-                v_i = v_real[b, i] + 1j * v_imag[b, i]
-                v_j = v_real[b, j] + 1j * v_imag[b, j]
+        i_ij = y_ii.unsqueeze(0) * v_i - y_ij.unsqueeze(0) * v_j
+        s_ij = v_i * torch.conj(i_ij)
+        s_magnitude_squared = torch.real(s_ij * torch.conj(s_ij))
 
-                # Line admittance elements (simplified - use diagonal elements)
-                y_ii = self.Y_real[i, i].to(device) + 1j * self.Y_imag[i, i].to(device)
-                y_ij = self.Y_real[i, j].to(device) + 1j * self.Y_imag[i, j].to(device)
-
-                # Current flow from i to j (simplified)
-                i_ij = y_ii * v_i - y_ij * v_j
-
-                # Apparent power flow from i to j
-                s_ij = v_i * torch.conj(i_ij)
-                s_magnitude_squared = torch.real(s_ij * torch.conj(s_ij))
-
-                # Line constraint: |S|² - S_max² ≤ 0
-                # Convert to equality with slack: |S|² - S_max² + slack² = 0
-                # For now, we'll use the constraint violation directly
-                line_limit_val = float(self.line_limits[k])
-                violation_squared = s_magnitude_squared - line_limit_val**2
-                # Only consider positive violations; scale to keep magnitudes stable
-                line_violations.append(torch.sqrt(torch.relu(violation_squared)))
-
-            line_constraint = torch.stack(line_violations).mean()
-            line_constraints.append(line_constraint)
-
-        if line_constraints:
-            constraints = torch.stack(line_constraints)
-        else:
-            constraints = torch.tensor([], device=device, requires_grad=True)
+        violation_squared = s_magnitude_squared - line_limits.unsqueeze(0) ** 2
+        line_violations = torch.sqrt(torch.relu(violation_squared))
+        constraints = line_violations.mean(dim=0)
 
         if constraints.numel() > 0:
             self._last_line_limit_rms = float(torch.sqrt(torch.mean(constraints**2)).detach().item())
