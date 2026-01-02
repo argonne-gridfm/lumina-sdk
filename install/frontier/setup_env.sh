@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# setup_env.sh - Frontier environment setup for lumina-core using modules + miniforge
+# setup_env.sh - Frontier environment setup for lumina-core with ROCm-aware installs
 set -euo pipefail
 
 hr() { printf '%*s\n' "${COLUMNS:-80}" '' | tr ' ' '='; }
 banner() { hr; echo ">>> $1"; hr; }
+subbanner() { echo "-- $1"; }
 
 banner "Starting lumina-core environment setup ($(date))"
 
@@ -61,15 +62,69 @@ fi
 
 # shellcheck disable=SC1091
 source activate "${VENV_PATH}"
-python -m pip install --upgrade pip uv
-export UV_LINK_MODE=copy
+python -m pip install --upgrade pip setuptools wheel
 
-banner "Install lumina-core dependencies"
-uv pip install -r "${REPO_ROOT}/install/frontier/requirements.in" \
-  -c "${REPO_ROOT}/install/frontier/constraints.txt"
+# pip with retries
+PIP_FLAGS=(--upgrade-strategy only-if-needed)
+pip_retry() {
+  local tries=3 delay=3
+  for ((i=1; i<=tries; i++)); do
+    if pip install "${PIP_FLAGS[@]}" "$@"; then
+      return 0
+    fi
+    echo "pip install failed (attempt $i/$tries). Retrying in ${delay}s..."
+    sleep "$delay"; delay=$((delay*2))
+  done
+  return 1
+}
+
+# ROCm detection and torch install
+detect_rocm_mm() {
+  local v=""
+  if command -v module >/dev/null 2>&1; then
+    local mlist
+    mlist="$(module -t list 2>&1 || true)"
+    v="$(grep -Eo 'rocm/[0-9]+\.[0-9]+' <<<"$mlist" | head -n1 | sed 's#rocm/##')"
+  fi
+  if [[ -z "$v" ]] && command -v hipcc >/dev/null 2>&1; then
+    v="$(hipcc --version 2>&1 | grep -Eo 'HIP version:\s*[0-9]+\.[0-9]+' | grep -Eo '[0-9]+\.[0-9]+' | head -n1 || true)"
+  fi
+  echo "$v"
+}
+
+EXPECTED_ROCM_MM="6.4"
+ROCM_MM="${ROCM_MM:-$(detect_rocm_mm)}"
+if [[ -z "$ROCM_MM" ]]; then
+  echo "❌ Could not detect ROCm version. Ensure the rocm module is loaded."
+  exit 1
+fi
+echo "Detected ROCm: $ROCM_MM"
+if [[ "$ROCM_MM" != "$EXPECTED_ROCM_MM" ]]; then
+  echo "❌ ROCm version mismatch. Detected $ROCM_MM but expecting rocm${EXPECTED_ROCM_MM}."
+  exit 1
+fi
+
+PYTORCH_ROCM_INDEX_URL="https://download.pytorch.org/whl/rocm${EXPECTED_ROCM_MM}"
+subbanner "Install ROCm torch==2.8.0 from ${PYTORCH_ROCM_INDEX_URL}"
+pip_retry --index-url "${PYTORCH_ROCM_INDEX_URL}" "torch==2.8.0" "torchvision"
+
+python - <<PY
+import torch
+print("torch.__version__ =", torch.__version__)
+print("torch.version.hip =", torch.version.hip)
+PY
+
+# PyTorch Geometric: ROCm wheels matching torch
+PYG_ROCM_URL="https://data.pyg.org/whl/torch-2.8.0+rocm${EXPECTED_ROCM_MM}.html"
+subbanner "Install torch-geometric from ${PYG_ROCM_URL}"
+pip_retry torch-geometric -f "${PYG_ROCM_URL}"
+
+banner "Install core lumina-core Python packages"
+pip_retry numpy pandas scipy networkx joblib pyyaml
+pip_retry pandapower wandb optuna lightning
 
 banner "Install lumina-core (editable, no extra deps)"
-uv pip install -e "${REPO_ROOT}" --no-deps
+pip_retry -e "${REPO_ROOT}" --no-deps
 
 banner "Done"
 echo "Activate environment with: source activate ${VENV_PATH}"
