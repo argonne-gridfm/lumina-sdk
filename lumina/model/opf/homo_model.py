@@ -128,6 +128,12 @@ class GNNBase(nn.Module):
                 edge_index = data.edge_index
                 if hasattr(data, "edge_attr") and data.edge_attr is not None:
                     edge_attr = data.edge_attr
+                    if edge_attr is None:
+                        edge_attr = torch.ones(
+                            (edge_index.shape[1], self.edge_dim),
+                            dtype=torch.float32,
+                            device=x.device,
+                        )
                 else:
                     edge_attr = torch.ones(
                         (edge_index.shape[1], self.edge_dim),
@@ -174,7 +180,7 @@ class GNNBase(nn.Module):
                 edge_weight = kwargs.get("edge_weight")
                 if "edge_index" not in kwargs:
                     assert (
-                        adj is not None
+                            adj is not None
                     ), "forward's args is empty and required adj is not in kwargs"
                     if torch.is_tensor(adj):
                         edge_index, edge_weight = from_adj_to_edge_index_torch(adj)
@@ -182,10 +188,10 @@ class GNNBase(nn.Module):
                         edge_index, edge_weight = from_adj_to_edge_index_torch(torch.from_numpy(adj))
                 if "adj" not in kwargs:
                     assert (
-                        edge_index is not None
+                            edge_index is not None
                     ), "forward's args is empty and required edge_index is not in kwargs"
                 assert (
-                    x is not None
+                        x is not None
                 ), "forward's args is empty and required node features x is not in kwargs"
                 edge_attr = kwargs.get("edge_attr")
                 if "edge_attr" not in kwargs:
@@ -379,10 +385,10 @@ class GCN(GNN_basic):
 
 class GIN(GNN_basic):
     def __init__(
-        self,
-        input_dim,
-        output_dim,
-        model_params,
+            self,
+            input_dim,
+            output_dim,
+            model_params,
     ):
         super().__init__(
             input_dim,
@@ -417,10 +423,10 @@ class GIN(GNN_basic):
 
 class TRANSFORMER(GNN_basic):  # uppercase
     def __init__(
-        self,
-        input_dim,
-        output_dim,
-        model_params,
+            self,
+            input_dim,
+            output_dim,
+            model_params,
     ):
         super().__init__(
             input_dim,
