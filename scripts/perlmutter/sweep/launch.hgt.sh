@@ -20,11 +20,11 @@ srun --ntasks=$SLURM_JOB_NUM_NODES --ntasks-per-node=1 \
     --rdzv_backend=c10d \
     --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
     example/opf/train_opf_ddp.py \
-    --cases case14 case30 case57 case118 case500 \
+    --cases case30 case57 case118 case500 case2000 case4661 \
     --config configs/sweeps/stage1/config.yaml \
     --group_ids 0 1 \
     --model_type=HGT \
-    --homo_model_config configs/sweeps/stage1/model.yaml \
+    --hetero_model_config configs/sweeps/stage1/model.yaml \
     --loss_type mse \
     --wandb \
     "$@"

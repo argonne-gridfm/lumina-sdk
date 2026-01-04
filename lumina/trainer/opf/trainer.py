@@ -6,6 +6,7 @@ import torch
 import torch.distributed as dist
 import torch.optim as optim
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import IterableDataset, Subset
 from torch.utils.data.distributed import DistributedSampler
 from torch_geometric.loader import DataLoader
 from tqdm import tqdm
@@ -27,7 +28,7 @@ from lumina.dataset.opf.opf_sharded_dataset import (
     resolve_split_shards,
     split_shards_by_ratio,
 )
-from lumina.dataset.opf.case_id import CaseTaggedDataset, CaseTaggedIterableDataset
+from lumina.dataset.opf.case_id import CaseTaggedDataset, CaseTaggedIterableDataset, LimitedIterableDataset
 from lumina.dataset.opf.staging import (
     get_on_disk_db_path,
     get_on_disk_lock_path,
@@ -249,6 +250,7 @@ class BaseOPFTrainer:
         )
         self.val_every_n_epochs = max(1, int(val_every_n_epochs or 1))
         self.val_every_n_samples = int(training_config.get("val_every_n_samples") or 0)
+        self.val_subset_samples = max(0, int(training_config.get("val_subset_samples") or 0))
         self.max_global_samples = int(training_config.get("max_global_samples") or 0)
         score_alpha = training_config.get("score_alpha", 1.0)
         self.score_alpha = float(1.0 if score_alpha is None else score_alpha)
@@ -593,6 +595,37 @@ class BaseOPFTrainer:
         splits.setdefault("val", [])
         splits.setdefault("test", [])
         return splits
+
+    def _val_subset_seed(self, case_idx=0):
+        return int(self.sharded_split_seed) + int(case_idx)
+
+    def _maybe_limit_val_dataset(self, dataset, case_idx=0, case_label=None):
+        if self.val_subset_samples <= 0:
+            return dataset
+        label = case_label if case_label is not None else f"case_{case_idx}"
+        if isinstance(dataset, IterableDataset):
+            if self.global_rank == 0:
+                try:
+                    total = len(dataset)
+                except TypeError:
+                    total = None
+                if total is None:
+                    print(f"Validation subset for {label}: {self.val_subset_samples} samples")
+                else:
+                    print(f"Validation subset for {label}: {self.val_subset_samples}/{total} samples")
+            return LimitedIterableDataset(dataset, self.val_subset_samples)
+        try:
+            total = len(dataset)
+        except TypeError:
+            return dataset
+        if total <= self.val_subset_samples:
+            return dataset
+        generator = torch.Generator().manual_seed(self._val_subset_seed(case_idx))
+        indices = torch.randperm(total, generator=generator)[: self.val_subset_samples].tolist()
+        indices.sort()
+        if self.global_rank == 0:
+            print(f"Validation subset for {label}: {self.val_subset_samples}/{total} samples")
+        return Subset(dataset, indices)
 
     def _loader_kwargs(self, loader_config):
         num_workers = int(loader_config.get("num_workers", 0))
@@ -1366,6 +1399,11 @@ class OPFTrainer(BaseOPFTrainer):
                 ),
                 case_id,
             )
+            self.val_dataset = self._maybe_limit_val_dataset(
+                self.val_dataset,
+                case_idx=case_id,
+                case_label=self.case_name,
+            )
             self.test_dataset = CaseTaggedIterableDataset(
                 OPFShardedIterableDataset(
                     self.sharded_splits.get("test", []),
@@ -1399,6 +1437,11 @@ class OPFTrainer(BaseOPFTrainer):
         train_dataset = CaseTaggedDataset(train_dataset, case_id)
         val_dataset = CaseTaggedDataset(val_dataset, case_id)
         test_dataset = CaseTaggedDataset(test_dataset, case_id)
+        val_dataset = self._maybe_limit_val_dataset(
+            val_dataset,
+            case_idx=case_id,
+            case_label=self.case_name,
+        )
 
         loader_config = self.config["loader"]
 
@@ -1953,6 +1996,11 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
                         ),
                         case_idx,
                     )
+                    val_dataset = self._maybe_limit_val_dataset(
+                        val_dataset,
+                        case_idx=case_idx,
+                        case_label=self.case_names[case_idx] if case_idx < len(self.case_names) else None,
+                    )
                     self.val_samplers[case_idx] = None
                     self.val_loaders[case_idx] = DataLoader(
                         val_dataset,
@@ -1998,6 +2046,11 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
             train_dataset = CaseTaggedDataset(train_dataset, case_idx)
             if val_len > 0:
                 val_dataset = CaseTaggedDataset(val_dataset, case_idx)
+                val_dataset = self._maybe_limit_val_dataset(
+                    val_dataset,
+                    case_idx=case_idx,
+                    case_label=self.case_names[case_idx] if case_idx < len(self.case_names) else None,
+                )
             if test_len > 0:
                 test_dataset = CaseTaggedDataset(test_dataset, case_idx)
 

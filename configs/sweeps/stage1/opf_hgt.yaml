@@ -12,15 +12,13 @@ parameters:
   optimizer.AdamW.lr:
     distribution: log_uniform_values
     min: 1e-5
-    max: 1e-3
+    max: 5e-4
   optimizer.AdamW.weight_decay:
     distribution: log_uniform_values
     min: 1e-8
     max: 1e-2
-  training.global_batch_size:
-    values: [2048, 4096, 8192]
 early_terminate:
   type: hyperband
-  min_iter: 8
-  max_iter: 80
+  min_iter: 2
+  max_iter: 5
   s: 2

@@ -1,7 +1,7 @@
 ---
 root: "/pscratch/sd/k/kibaekk/datasets/"
-logging_dir: "/global/cfs/cdirs/amsc004/lumina/logs/"
-checkpoint_dir: "/global/cfs/cdirs/amsc004/lumina/ddp_checkpoints/"
+logging_dir: "/pscratch/sd/k/kibaekk/lumina/logs/"
+checkpoint_dir: "/pscratch/sd/k/kibaekk/lumina/ddp_checkpoints/"
 data:
   backend: "on_disk" # in_memory | on_disk
   sharded_manifest_name: "manifest.json"
@@ -66,7 +66,7 @@ loader:
 training:
   max_epochs: 10
   patience: 100000
-  max_global_samples: 500000
+  max_global_samples: 368640
   global_batch_size: 512
   score_alpha: 1.0
   gradient_clip_val: 1.0
@@ -76,13 +76,14 @@ training:
   log_every_n_steps: 1
   log_every_n_samples: 0
   val_every_n_epochs: 0
-  val_every_n_samples: 3584
+  val_every_n_samples: 73728
+  val_subset_samples: 1024
   validation_timing: true
   validation_timing_every_n_batches: 1
   validation_timing_max_batches: 50
   throughput_enabled: false
   log_normalized_violation: true
-  violation_eval_p: 0.1
+  violation_eval_p: 1.0
   violation_eval_min_batches: 1
   violation_eval_seed: 0
 checkpointing:
