@@ -1182,10 +1182,13 @@ class BaseOPFTrainer:
             return
         objective = metric_avgs.get("val/loss/objective")
         if objective is None:
-            objective = metric_avgs.get("val/loss/total")
-        violation = metric_avgs.get("val/feas/total_violation")
-        if objective is None or violation is None:
-            return
+            objective = 0.0
+        violation_key = "val/feas/total_violation"
+        if self.log_normalized_violation:
+            violation_key = "val/feas/total_violation_norm"
+        violation = metric_avgs.get(violation_key)
+        if violation is None:
+            violation = 0.0
         metric_avgs["val/score"] = objective + self.score_alpha * violation
 
     def _violation_eval_disabled(self):
