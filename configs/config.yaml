@@ -10,6 +10,10 @@ optimizer:
       - 0.999
     eps: 1.0e-08
     weight_decay: 0.01
+scheduler:
+  type: "cosine"
+  t_max: null
+  eta_min: 0.0
 lagrangian:
   base_loss_type: "mse"
   mu_0: 0.1
@@ -52,8 +56,12 @@ training:
   log_every_n_samples: 8192
   val_every_n_epochs: 0
   val_every_n_samples: 40960
+  val_subset_samples: 0
   throughput_enabled: false
   log_normalized_violation: false
+  violation_eval_p: 1.0
+  violation_eval_min_batches: 1
+  violation_eval_seed: 0
 checkpointing:
   monitor: "val/score"
   save_last: true

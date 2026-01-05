@@ -30,6 +30,10 @@ optimizer:
       - 0.999
     eps: 1.0e-08
     weight_decay: 0.01
+scheduler:
+  type: "cosine"
+  t_max: null
+  eta_min: 0.0
 lagrangian:
   base_loss_type: "mse"
   mu_0: 0.1
