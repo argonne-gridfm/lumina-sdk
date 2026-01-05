@@ -28,8 +28,15 @@ class CaseYCacheEntry:
     y_imag_sparse: torch.Tensor
     y_diag_real: torch.Tensor
     y_diag_imag: torch.Tensor
-    line_y_real: Optional[torch.Tensor]
-    line_y_imag: Optional[torch.Tensor]
+    line_edge_index: Optional[torch.Tensor]
+    line_y_ff_real: Optional[torch.Tensor]
+    line_y_ff_imag: Optional[torch.Tensor]
+    line_y_ft_real: Optional[torch.Tensor]
+    line_y_ft_imag: Optional[torch.Tensor]
+    line_y_tf_real: Optional[torch.Tensor]
+    line_y_tf_imag: Optional[torch.Tensor]
+    line_y_tt_real: Optional[torch.Tensor]
+    line_y_tt_imag: Optional[torch.Tensor]
     line_limits: Optional[torch.Tensor]
     base_mva: float
     device: torch.device
@@ -899,16 +906,34 @@ class OPFLossManager(nn.Module):
         if ('bus', 'load_link', 'load') in getattr(batch, 'edge_types', []):
             load_bus_indices = batch['bus', 'load_link', 'load'].edge_index[0].to(device)
 
-        # Line topology and limits
+        # Line topology and limits (ac lines + transformers)
         line_edge_index = None
         line_limits = None
+        line_edges = []
+        line_limits_list = []
         if ('bus', 'ac_line', 'bus') in getattr(batch, 'edge_types', []):
-            line_edge_index = batch['bus', 'ac_line', 'bus'].edge_index.to(device)
-            if batch['bus', 'ac_line', 'bus'].edge_attr is not None:
-                edge_attr = batch['bus', 'ac_line', 'bus'].edge_attr.to(device)
-                # rate_a if available; otherwise no limits
-                if edge_attr.size(1) >= 7:
-                    line_limits = edge_attr[:, 6].abs()
+            edge_index = batch['bus', 'ac_line', 'bus'].edge_index.to(device)
+            edge_attr = batch['bus', 'ac_line', 'bus'].edge_attr
+            if edge_attr is not None and edge_attr.size(1) >= 7:
+                edge_attr = edge_attr.to(device)
+                limits = edge_attr[:, 6].abs()
+                valid = torch.isfinite(limits) & (limits > 0)
+                if bool(valid.any().item()):
+                    line_edges.append(edge_index[:, valid])
+                    line_limits_list.append(limits[valid])
+        if ('bus', 'transformer', 'bus') in getattr(batch, 'edge_types', []):
+            edge_index = batch['bus', 'transformer', 'bus'].edge_index.to(device)
+            edge_attr = batch['bus', 'transformer', 'bus'].edge_attr
+            if edge_attr is not None and edge_attr.size(1) >= 5:
+                edge_attr = edge_attr.to(device)
+                limits = edge_attr[:, 4].abs()
+                valid = torch.isfinite(limits) & (limits > 0)
+                if bool(valid.any().item()):
+                    line_edges.append(edge_index[:, valid])
+                    line_limits_list.append(limits[valid])
+        if line_edges:
+            line_edge_index = torch.cat(line_edges, dim=1)
+            line_limits = torch.cat(line_limits_list, dim=0)
 
         # Build constraint batch wrapper
         class ConstraintBatch:
@@ -1100,22 +1125,53 @@ class OPFLossManager(nn.Module):
 
         line_edge_index = None
         line_limits = None
-        line_edge_id = self._homo_edge_type_id(edge_type_names, "bus", "ac_line", "bus")
-        if edge_type is not None and line_edge_id is not None:
-            line_edge_mask = (edge_type == line_edge_id) & edge_graph_mask
+        line_edges = []
+        line_limits_list = []
+        if edge_type_names:
+            ac_line_edge_id = self._homo_edge_type_id(edge_type_names, "bus", "ac_line", "bus")
+            transformer_edge_id = self._homo_edge_type_id(edge_type_names, "bus", "transformer", "bus")
+        else:
+            ac_line_edge_id = 0
+            transformer_edge_id = 1
+
+        if edge_type is not None and ac_line_edge_id is not None:
+            line_edge_mask = (edge_type == ac_line_edge_id) & edge_graph_mask
         else:
             line_edge_mask = (src_type == bus_type_id) & (dst_type == bus_type_id) & edge_graph_mask
-        line_edges = edge_index[:, line_edge_mask]
-        if line_edges.numel() > 0:
-            bus_i = bus_index_map[line_edges[0]]
-            bus_j = bus_index_map[line_edges[1]]
+        if line_edge_mask.numel() > 0 and bool(line_edge_mask.any().item()):
+            line_edges_raw = edge_index[:, line_edge_mask]
+            bus_i = bus_index_map[line_edges_raw[0]]
+            bus_j = bus_index_map[line_edges_raw[1]]
             valid = (bus_i >= 0) & (bus_j >= 0)
-            if bool(valid.any().item()):
-                line_edge_index = torch.stack([bus_i[valid], bus_j[valid]], dim=0)
-                if edge_attr is not None:
-                    line_attr = edge_attr[line_edge_mask][valid]
-                    if line_attr.size(1) >= 7:
-                        line_limits = line_attr[:, 6].abs()
+            if bool(valid.any().item()) and edge_attr is not None:
+                line_attr = edge_attr[line_edge_mask][valid]
+                if line_attr.size(1) >= 7:
+                    limits = line_attr[:, 6].abs()
+                    valid_limits = torch.isfinite(limits) & (limits > 0)
+                    if bool(valid_limits.any().item()):
+                        line_edges.append(torch.stack([bus_i[valid][valid_limits], bus_j[valid][valid_limits]], dim=0))
+                        line_limits_list.append(limits[valid_limits])
+
+        if edge_type is not None and transformer_edge_id is not None:
+            transformer_mask = (edge_type == transformer_edge_id) & edge_graph_mask
+            if bool(transformer_mask.any().item()):
+                trans_edges_raw = edge_index[:, transformer_mask]
+                bus_i = bus_index_map[trans_edges_raw[0]]
+                bus_j = bus_index_map[trans_edges_raw[1]]
+                valid = (bus_i >= 0) & (bus_j >= 0)
+                if bool(valid.any().item()) and edge_attr is not None:
+                    trans_attr = edge_attr[transformer_mask][valid]
+                    if trans_attr.size(1) >= 5:
+                        limits = trans_attr[:, 4].abs()
+                        valid_limits = torch.isfinite(limits) & (limits > 0)
+                        if bool(valid_limits.any().item()):
+                            line_edges.append(torch.stack([bus_i[valid][valid_limits], bus_j[valid][valid_limits]], dim=0))
+                            line_limits_list.append(limits[valid_limits])
+
+        if line_edges:
+            line_edge_index = torch.cat(line_edges, dim=1)
+            if line_limits_list:
+                line_limits = torch.cat(line_limits_list, dim=0)
 
         class ConstraintBatch:
             def __init__(self):
@@ -1140,38 +1196,312 @@ class OPFLossManager(nn.Module):
         return ConstraintBatch()
 
     def _build_admittance_from_batch(self, batch, device):
-        """Approximate Y-bus (real/imag) from line r/x; ignores shunts/transformers for now."""
-        if ('bus', 'ac_line', 'bus') not in batch.edge_index_dict:
-            return None, None, None, None, None, None
-
-        edge_index = batch['bus', 'ac_line', 'bus'].edge_index.to(device)
-        edge_attr = batch['bus', 'ac_line', 'bus'].edge_attr
-        if edge_attr is None or edge_attr.size(0) != edge_index.size(1) or edge_attr.size(1) < 6:
-            return None, None, None, None, None, None
-
-        edge_attr = edge_attr.to(device)
-        r = edge_attr[:, 4]
-        x = edge_attr[:, 5]
-        denom = (r ** 2 + x ** 2).clamp_min(1e-6)
-        y_real = r / denom
-        y_imag = -x / denom
-        line_y_real = -y_real
-        line_y_imag = -y_imag
-
+        """Build full AC Y-bus and per-branch admittances from ac lines/transformers."""
         n_bus = batch['bus'].x.size(0)
 
-        i = edge_index[0].clamp(max=n_bus - 1)
-        j = edge_index[1].clamp(max=n_bus - 1)
+        branch_sets = []
+        # AC lines: [angmin, angmax, b_fr, b_to, r, x, rate_a, rate_b, rate_c]
+        if ('bus', 'ac_line', 'bus') in batch.edge_index_dict:
+            edge_index = batch['bus', 'ac_line', 'bus'].edge_index.to(device)
+            edge_attr = batch['bus', 'ac_line', 'bus'].edge_attr
+            branch = self._build_branch_admittance(
+                edge_index=edge_index,
+                edge_attr=edge_attr,
+                r_idx=4,
+                x_idx=5,
+                b_fr_idx=2,
+                b_to_idx=3,
+                rate_a_idx=6,
+                tap_idx=None,
+                shift_idx=None,
+            )
+            if branch is not None:
+                branch_sets.append(branch)
+
+        # Transformers: [angmin, angmax, r, x, rate_a, rate_b, rate_c, tap, shift, b_fr, b_to]
+        if ('bus', 'transformer', 'bus') in batch.edge_index_dict:
+            edge_index = batch['bus', 'transformer', 'bus'].edge_index.to(device)
+            edge_attr = batch['bus', 'transformer', 'bus'].edge_attr
+            branch = self._build_branch_admittance(
+                edge_index=edge_index,
+                edge_attr=edge_attr,
+                r_idx=2,
+                x_idx=3,
+                b_fr_idx=9,
+                b_to_idx=10,
+                rate_a_idx=4,
+                tap_idx=7,
+                shift_idx=8,
+            )
+            if branch is not None:
+                branch_sets.append(branch)
+
+        if not branch_sets:
+            return (
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+
+        bus_i = torch.cat([b["i"] for b in branch_sets], dim=0)
+        bus_j = torch.cat([b["j"] for b in branch_sets], dim=0)
+        y_ff = torch.cat([b["y_ff"] for b in branch_sets], dim=0)
+        y_ft = torch.cat([b["y_ft"] for b in branch_sets], dim=0)
+        y_tf = torch.cat([b["y_tf"] for b in branch_sets], dim=0)
+        y_tt = torch.cat([b["y_tt"] for b in branch_sets], dim=0)
+        rate_a = torch.cat([b["rate_a"] for b in branch_sets], dim=0)
+
+        valid_bus = (bus_i >= 0) & (bus_i < n_bus) & (bus_j >= 0) & (bus_j < n_bus)
+        if not bool(valid_bus.any().item()):
+            return (
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        bus_i = bus_i[valid_bus]
+        bus_j = bus_j[valid_bus]
+        y_ff = y_ff[valid_bus]
+        y_ft = y_ft[valid_bus]
+        y_tf = y_tf[valid_bus]
+        y_tt = y_tt[valid_bus]
+        rate_a = rate_a[valid_bus]
+
+        shunt_bus_idx = None
+        shunt_y = None
+        if 'shunt' in getattr(batch, 'node_types', []):
+            shunt_x = batch['shunt'].x.to(device)
+            shunt_edge = None
+            if ('shunt', 'shunt_link', 'bus') in batch.edge_index_dict:
+                shunt_edge = batch['shunt', 'shunt_link', 'bus'].edge_index.to(device)
+                shunt_src = shunt_edge[0]
+                shunt_dst = shunt_edge[1]
+            elif ('bus', 'shunt_link', 'shunt') in batch.edge_index_dict:
+                shunt_edge = batch['bus', 'shunt_link', 'shunt'].edge_index.to(device)
+                shunt_src = shunt_edge[1]
+                shunt_dst = shunt_edge[0]
+            if shunt_edge is not None and shunt_x is not None and shunt_x.numel() > 0:
+                if shunt_x.size(1) >= 2:
+                    bs = shunt_x[shunt_src, 0]
+                    gs = shunt_x[shunt_src, 1]
+                else:
+                    bs = shunt_x[shunt_src, 0]
+                    gs = torch.zeros_like(bs)
+                shunt_bus_idx = shunt_dst
+                shunt_y = torch.complex(gs, bs)
+                valid_shunt = (shunt_bus_idx >= 0) & (shunt_bus_idx < n_bus)
+                if bool(valid_shunt.any().item()):
+                    shunt_bus_idx = shunt_bus_idx[valid_shunt]
+                    shunt_y = shunt_y[valid_shunt]
+                else:
+                    shunt_bus_idx = None
+                    shunt_y = None
+
+        (
+            Y_real_sparse,
+            Y_imag_sparse,
+            diag_real,
+            diag_imag,
+        ) = self._build_sparse_ybus_from_branches(
+            bus_i=bus_i,
+            bus_j=bus_j,
+            y_ff=y_ff,
+            y_ft=y_ft,
+            y_tf=y_tf,
+            y_tt=y_tt,
+            n_bus=n_bus,
+            device=device,
+            shunt_bus_idx=shunt_bus_idx,
+            shunt_y=shunt_y,
+        )
+
+        valid_limits = torch.isfinite(rate_a) & (rate_a > 0)
+        if not bool(valid_limits.any().item()):
+            return (
+                Y_real_sparse,
+                Y_imag_sparse,
+                diag_real,
+                diag_imag,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+
+        bus_i = bus_i[valid_limits]
+        bus_j = bus_j[valid_limits]
+        line_edge_index = torch.stack([bus_i, bus_j], dim=0)
+        line_limits = rate_a[valid_limits]
+        y_ff = y_ff[valid_limits]
+        y_ft = y_ft[valid_limits]
+        y_tf = y_tf[valid_limits]
+        y_tt = y_tt[valid_limits]
+
+        return (
+            Y_real_sparse,
+            Y_imag_sparse,
+            diag_real,
+            diag_imag,
+            line_edge_index,
+            y_ff.real,
+            y_ff.imag,
+            y_ft.real,
+            y_ft.imag,
+            y_tf.real,
+            y_tf.imag,
+            y_tt.real,
+            y_tt.imag,
+            line_limits,
+        )
+
+    def _build_branch_admittance(
+        self,
+        edge_index,
+        edge_attr,
+        *,
+        r_idx: int,
+        x_idx: int,
+        b_fr_idx: int,
+        b_to_idx: int,
+        rate_a_idx: int,
+        tap_idx: Optional[int],
+        shift_idx: Optional[int],
+    ):
+        if edge_index is None or edge_attr is None:
+            return None
+        if edge_attr.size(0) != edge_index.size(1):
+            return None
+        max_idx = max(
+            r_idx,
+            x_idx,
+            b_fr_idx,
+            b_to_idx,
+            rate_a_idx,
+            tap_idx if tap_idx is not None else 0,
+            shift_idx if shift_idx is not None else 0,
+        )
+        if edge_attr.size(1) <= max_idx:
+            return None
+
+        edge_attr = edge_attr.to(edge_index.device)
+        r = edge_attr[:, r_idx]
+        x = edge_attr[:, x_idx]
+        b_fr = edge_attr[:, b_fr_idx]
+        b_to = edge_attr[:, b_to_idx]
+        rate_a = edge_attr[:, rate_a_idx]
+        tap = edge_attr[:, tap_idx] if tap_idx is not None else torch.ones_like(r)
+        shift = edge_attr[:, shift_idx] if shift_idx is not None else torch.zeros_like(r)
+
+        r = torch.nan_to_num(r, nan=0.0, posinf=0.0, neginf=0.0)
+        x = torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+        b_fr = torch.nan_to_num(b_fr, nan=0.0, posinf=0.0, neginf=0.0)
+        b_to = torch.nan_to_num(b_to, nan=0.0, posinf=0.0, neginf=0.0)
+        rate_a = torch.nan_to_num(rate_a, nan=0.0, posinf=0.0, neginf=0.0).abs()
+        tap = torch.nan_to_num(tap, nan=1.0, posinf=1.0, neginf=1.0)
+        tap = torch.where(tap.abs() < 1e-6, torch.ones_like(tap), tap)
+        shift = torch.nan_to_num(shift, nan=0.0, posinf=0.0, neginf=0.0)
+
+        denom = (r ** 2 + x ** 2).clamp_min(1e-12)
+        y_real = r / denom
+        y_imag = -x / denom
+        y = torch.complex(y_real, y_imag)
+
+        tap_real = tap * torch.cos(shift)
+        tap_imag = tap * torch.sin(shift)
+        tap_complex = torch.complex(tap_real, tap_imag)
+        tap_mag_sq = tap * tap
+
+        y_ff = (y + torch.complex(torch.zeros_like(b_fr), b_fr)) / tap_mag_sq
+        y_tt = y + torch.complex(torch.zeros_like(b_to), b_to)
+        y_ft = -y / torch.conj(tap_complex)
+        y_tf = -y / tap_complex
+
+        return {
+            "i": edge_index[0],
+            "j": edge_index[1],
+            "y_ff": y_ff,
+            "y_ft": y_ft,
+            "y_tf": y_tf,
+            "y_tt": y_tt,
+            "rate_a": rate_a,
+        }
+
+    def _build_sparse_ybus_from_branches(
+        self,
+        *,
+        bus_i,
+        bus_j,
+        y_ff,
+        y_ft,
+        y_tf,
+        y_tt,
+        n_bus: int,
+        device,
+        shunt_bus_idx=None,
+        shunt_y=None,
+    ):
+        if bus_i is None or bus_j is None or y_ff is None:
+            return None, None, None, None
+        if bus_i.numel() == 0 or n_bus <= 0:
+            empty_idx = torch.empty((2, 0), dtype=torch.long, device=device)
+            empty_val = torch.empty((0,), device=device)
+            y_real_sparse = torch.sparse_coo_tensor(empty_idx, empty_val, (n_bus, n_bus))
+            y_imag_sparse = torch.sparse_coo_tensor(empty_idx, empty_val, (n_bus, n_bus))
+            diag_real = torch.zeros(n_bus, device=device)
+            diag_imag = torch.zeros(n_bus, device=device)
+            return y_real_sparse, y_imag_sparse, diag_real, diag_imag
+
+        row = torch.cat([bus_i, bus_i, bus_j, bus_j], dim=0)
+        col = torch.cat([bus_i, bus_j, bus_i, bus_j], dim=0)
+        values = torch.cat([y_ff, y_ft, y_tf, y_tt], dim=0)
+
+        if shunt_bus_idx is not None and shunt_y is not None and shunt_bus_idx.numel() > 0:
+            row = torch.cat([row, shunt_bus_idx], dim=0)
+            col = torch.cat([col, shunt_bus_idx], dim=0)
+            values = torch.cat([values, shunt_y], dim=0)
+
+        indices = torch.stack([row, col], dim=0)
+        y_real_sparse = torch.sparse_coo_tensor(indices, values.real, (n_bus, n_bus)).coalesce()
+        y_imag_sparse = torch.sparse_coo_tensor(indices, values.imag, (n_bus, n_bus)).coalesce()
 
         diag_real = torch.zeros(n_bus, device=device)
         diag_imag = torch.zeros(n_bus, device=device)
-        diag_real.index_add_(0, i, y_real)
-        diag_real.index_add_(0, j, y_real)
-        diag_imag.index_add_(0, i, y_imag)
-        diag_imag.index_add_(0, j, y_imag)
+        diag_real.index_add_(0, bus_i, y_ff.real)
+        diag_real.index_add_(0, bus_j, y_tt.real)
+        diag_imag.index_add_(0, bus_i, y_ff.imag)
+        diag_imag.index_add_(0, bus_j, y_tt.imag)
+        if shunt_bus_idx is not None and shunt_y is not None and shunt_bus_idx.numel() > 0:
+            diag_real.index_add_(0, shunt_bus_idx, shunt_y.real)
+            diag_imag.index_add_(0, shunt_bus_idx, shunt_y.imag)
 
-        Y_real_sparse, Y_imag_sparse = self._build_sparse_ybus(i, j, y_real, y_imag, n_bus, device)
-        return Y_real_sparse, Y_imag_sparse, diag_real, diag_imag, line_y_real, line_y_imag
+        return y_real_sparse, y_imag_sparse, diag_real, diag_imag
 
     def _build_admittance_from_homo(self, batch, device):
         node_type = getattr(batch, 'node_type', None)
@@ -1181,7 +1511,7 @@ class OPFLossManager(nn.Module):
         if edge_attr is None:
             edge_attr = getattr(batch, 'edge_attr', None)
         if node_type is None or edge_index is None or edge_attr is None:
-            return None, None, None, None, None, None, None
+            return None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
         node_type = node_type.to(device)
         if edge_type is not None:
@@ -1203,76 +1533,195 @@ class OPFLossManager(nn.Module):
         bus_nodes = bus_mask.nonzero(as_tuple=False).view(-1)
         n_bus = int(bus_nodes.numel())
         if n_bus == 0:
-            return None, None, None, None, None, None, None
+            return None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
         bus_index_map = torch.full((batch.x.size(0),), -1, device=device, dtype=torch.long)
         bus_index_map[bus_nodes] = torch.arange(n_bus, device=device)
-
-        line_edge_id = self._homo_edge_type_id(edge_type_names, "bus", "ac_line", "bus")
 
         if node_batch is not None:
             edge_graph_mask = (node_batch[edge_index[0]] == 0) & (node_batch[edge_index[1]] == 0)
         else:
             edge_graph_mask = torch.ones(edge_index.size(1), dtype=torch.bool, device=device)
 
-        if edge_type is not None and line_edge_id is not None:
-            line_mask = (edge_type == line_edge_id) & edge_graph_mask
+        # Determine edge type IDs (fallback to default mapping if names missing)
+        if edge_type_names:
+            ac_line_edge_id = self._homo_edge_type_id(edge_type_names, "bus", "ac_line", "bus")
+            transformer_edge_id = self._homo_edge_type_id(edge_type_names, "bus", "transformer", "bus")
+            shunt_edge_id = self._homo_edge_type_id(edge_type_names, "shunt", "shunt_link", "bus")
+            shunt_edge_rev_id = self._homo_edge_type_id(edge_type_names, "bus", "shunt_link", "shunt")
+        else:
+            ac_line_edge_id = 0
+            transformer_edge_id = 1
+            shunt_edge_id = 4
+            shunt_edge_rev_id = 4
+
+        if edge_type is not None and ac_line_edge_id is not None:
+            line_mask = (edge_type == ac_line_edge_id) & edge_graph_mask
         else:
             src_type = node_type[edge_index[0]]
             dst_type = node_type[edge_index[1]]
             line_mask = (src_type == bus_type_id) & (dst_type == bus_type_id) & edge_graph_mask
-        if not bool(line_mask.any().item()):
-            return None, None, None, None, None, None, None
 
-        if edge_attr.size(0) != edge_index.size(1) or edge_attr.size(1) < 6:
-            return None, None, None, None, None, None, None
+        if edge_type is not None and transformer_edge_id is not None:
+            transformer_mask = (edge_type == transformer_edge_id) & edge_graph_mask
+        else:
+            transformer_mask = torch.zeros_like(edge_graph_mask)
+
+        if edge_attr.size(0) != edge_index.size(1):
+            return None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
         edge_attr = edge_attr.to(device)
-        line_attr = edge_attr[line_mask]
-        line_edges = edge_index[:, line_mask]
+        branch_sets = []
 
-        bus_i = bus_index_map[line_edges[0]]
-        bus_j = bus_index_map[line_edges[1]]
-        valid = (bus_i >= 0) & (bus_j >= 0)
-        if not bool(valid.any().item()):
-            return None, None, None, None, None, None, None
+        if bool(line_mask.any().item()):
+            line_edges = edge_index[:, line_mask]
+            line_attr = edge_attr[line_mask]
+            bus_i = bus_index_map[line_edges[0]]
+            bus_j = bus_index_map[line_edges[1]]
+            valid = (bus_i >= 0) & (bus_j >= 0)
+            if bool(valid.any().item()):
+                mapped_edges = torch.stack([bus_i[valid], bus_j[valid]], dim=0)
+                branch = self._build_branch_admittance(
+                    edge_index=mapped_edges,
+                    edge_attr=line_attr[valid],
+                    r_idx=4,
+                    x_idx=5,
+                    b_fr_idx=2,
+                    b_to_idx=3,
+                    rate_a_idx=6,
+                    tap_idx=None,
+                    shift_idx=None,
+                )
+                if branch is not None:
+                    branch_sets.append(branch)
 
-        r = line_attr[:, 4]
-        x = line_attr[:, 5]
-        r = torch.nan_to_num(r, nan=0.0, posinf=0.0, neginf=0.0)
-        x = torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
-        denom = (r ** 2 + x ** 2).clamp_min(1e-6)
-        y_real = r / denom
-        y_imag = -x / denom
-        line_y_real = -y_real
-        line_y_imag = -y_imag
+        if bool(transformer_mask.any().item()):
+            trans_edges = edge_index[:, transformer_mask]
+            trans_attr = edge_attr[transformer_mask]
+            bus_i = bus_index_map[trans_edges[0]]
+            bus_j = bus_index_map[trans_edges[1]]
+            valid = (bus_i >= 0) & (bus_j >= 0)
+            if bool(valid.any().item()):
+                mapped_edges = torch.stack([bus_i[valid], bus_j[valid]], dim=0)
+                branch = self._build_branch_admittance(
+                    edge_index=mapped_edges,
+                    edge_attr=trans_attr[valid],
+                    r_idx=2,
+                    x_idx=3,
+                    b_fr_idx=9,
+                    b_to_idx=10,
+                    rate_a_idx=4,
+                    tap_idx=7,
+                    shift_idx=8,
+                )
+                if branch is not None:
+                    branch_sets.append(branch)
 
-        bus_i = bus_i[valid]
-        bus_j = bus_j[valid]
-        y_real = y_real[valid]
-        y_imag = y_imag[valid]
-        line_y_real = line_y_real[valid]
-        line_y_imag = line_y_imag[valid]
+        if not branch_sets:
+            return None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
-        diag_real = torch.zeros(n_bus, device=device)
-        diag_imag = torch.zeros(n_bus, device=device)
-        diag_real.index_add_(0, bus_i, y_real)
-        diag_real.index_add_(0, bus_j, y_real)
-        diag_imag.index_add_(0, bus_i, y_imag)
-        diag_imag.index_add_(0, bus_j, y_imag)
+        bus_i = torch.cat([b["i"] for b in branch_sets], dim=0)
+        bus_j = torch.cat([b["j"] for b in branch_sets], dim=0)
+        y_ff = torch.cat([b["y_ff"] for b in branch_sets], dim=0)
+        y_ft = torch.cat([b["y_ft"] for b in branch_sets], dim=0)
+        y_tf = torch.cat([b["y_tf"] for b in branch_sets], dim=0)
+        y_tt = torch.cat([b["y_tt"] for b in branch_sets], dim=0)
+        rate_a = torch.cat([b["rate_a"] for b in branch_sets], dim=0)
 
-        line_limits = None
-        if line_attr.size(1) >= 7:
-            line_limits = line_attr[:, 6].abs()[valid]
+        shunt_bus_idx = None
+        shunt_y = None
+        if edge_type is not None and (shunt_edge_id is not None or shunt_edge_rev_id is not None):
+            if shunt_edge_id is not None:
+                shunt_mask = (edge_type == shunt_edge_id) & edge_graph_mask
+                shunt_src = edge_index[0, shunt_mask]
+                shunt_dst = edge_index[1, shunt_mask]
+            elif shunt_edge_rev_id is not None:
+                shunt_mask = (edge_type == shunt_edge_rev_id) & edge_graph_mask
+                shunt_src = edge_index[1, shunt_mask]
+                shunt_dst = edge_index[0, shunt_mask]
+            else:
+                shunt_mask = torch.zeros_like(edge_graph_mask)
+                shunt_src = torch.empty(0, dtype=torch.long, device=device)
+                shunt_dst = torch.empty(0, dtype=torch.long, device=device)
 
-        Y_real_sparse, Y_imag_sparse = self._build_sparse_ybus(bus_i, bus_j, y_real, y_imag, n_bus, device)
+            if bool(shunt_mask.any().item()):
+                shunt_x = batch.x.to(device)
+                if shunt_x.size(1) >= 2:
+                    bs = shunt_x[shunt_src, 0]
+                    gs = shunt_x[shunt_src, 1]
+                else:
+                    bs = shunt_x[shunt_src, 0]
+                    gs = torch.zeros_like(bs)
+                shunt_bus_idx = bus_index_map[shunt_dst]
+                shunt_y = torch.complex(gs, bs)
+                valid_shunt = (shunt_bus_idx >= 0) & (shunt_bus_idx < n_bus)
+                if bool(valid_shunt.any().item()):
+                    shunt_bus_idx = shunt_bus_idx[valid_shunt]
+                    shunt_y = shunt_y[valid_shunt]
+                else:
+                    shunt_bus_idx = None
+                    shunt_y = None
+
+        (
+            Y_real_sparse,
+            Y_imag_sparse,
+            diag_real,
+            diag_imag,
+        ) = self._build_sparse_ybus_from_branches(
+            bus_i=bus_i,
+            bus_j=bus_j,
+            y_ff=y_ff,
+            y_ft=y_ft,
+            y_tf=y_tf,
+            y_tt=y_tt,
+            n_bus=n_bus,
+            device=device,
+            shunt_bus_idx=shunt_bus_idx,
+            shunt_y=shunt_y,
+        )
+
+        valid_limits = torch.isfinite(rate_a) & (rate_a > 0)
+        if not bool(valid_limits.any().item()):
+            return (
+                Y_real_sparse,
+                Y_imag_sparse,
+                diag_real,
+                diag_imag,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+
+        bus_i = bus_i[valid_limits]
+        bus_j = bus_j[valid_limits]
+        line_edge_index = torch.stack([bus_i, bus_j], dim=0)
+        line_limits = rate_a[valid_limits]
+        y_ff = y_ff[valid_limits]
+        y_ft = y_ft[valid_limits]
+        y_tf = y_tf[valid_limits]
+        y_tt = y_tt[valid_limits]
+
         return (
             Y_real_sparse,
             Y_imag_sparse,
             diag_real,
             diag_imag,
-            line_y_real,
-            line_y_imag,
+            line_edge_index,
+            y_ff.real,
+            y_ff.imag,
+            y_ft.real,
+            y_ft.imag,
+            y_tf.real,
+            y_tf.imag,
+            y_tt.real,
+            y_tt.imag,
             line_limits,
         )
 
@@ -1336,8 +1785,15 @@ class OPFLossManager(nn.Module):
             Y_imag_sparse=entry.y_imag_sparse,
             Y_diag_real=entry.y_diag_real,
             Y_diag_imag=entry.y_diag_imag,
-            line_y_real=entry.line_y_real,
-            line_y_imag=entry.line_y_imag,
+            line_edge_index=entry.line_edge_index,
+            line_y_ff_real=entry.line_y_ff_real,
+            line_y_ff_imag=entry.line_y_ff_imag,
+            line_y_ft_real=entry.line_y_ft_real,
+            line_y_ft_imag=entry.line_y_ft_imag,
+            line_y_tf_real=entry.line_y_tf_real,
+            line_y_tf_imag=entry.line_y_tf_imag,
+            line_y_tt_real=entry.line_y_tt_real,
+            line_y_tt_imag=entry.line_y_tt_imag,
             line_limits=entry.line_limits,
             base_mva=entry.base_mva,
         )
@@ -1355,8 +1811,15 @@ class OPFLossManager(nn.Module):
         y_imag_sparse,
         y_diag_real,
         y_diag_imag,
-        line_y_real,
-        line_y_imag,
+        line_edge_index,
+        line_y_ff_real,
+        line_y_ff_imag,
+        line_y_ft_real,
+        line_y_ft_imag,
+        line_y_tf_real,
+        line_y_tf_imag,
+        line_y_tt_real,
+        line_y_tt_imag,
         line_limits,
         base_mva,
     ):
@@ -1369,8 +1832,15 @@ class OPFLossManager(nn.Module):
             y_imag_sparse=y_imag_sparse,
             y_diag_real=y_diag_real,
             y_diag_imag=y_diag_imag,
-            line_y_real=line_y_real,
-            line_y_imag=line_y_imag,
+            line_edge_index=line_edge_index,
+            line_y_ff_real=line_y_ff_real,
+            line_y_ff_imag=line_y_ff_imag,
+            line_y_ft_real=line_y_ft_real,
+            line_y_ft_imag=line_y_ft_imag,
+            line_y_tf_real=line_y_tf_real,
+            line_y_tf_imag=line_y_tf_imag,
+            line_y_tt_real=line_y_tt_real,
+            line_y_tt_imag=line_y_tt_imag,
             line_limits=line_limits,
             base_mva=base_mva,
             device=device,
@@ -1413,8 +1883,15 @@ class OPFLossManager(nn.Module):
                 Y_imag_sparse,
                 diag_real,
                 diag_imag,
-                line_y_real,
-                line_y_imag,
+                line_edge_index,
+                line_y_ff_real,
+                line_y_ff_imag,
+                line_y_ft_real,
+                line_y_ft_imag,
+                line_y_tf_real,
+                line_y_tf_imag,
+                line_y_tt_real,
+                line_y_tt_imag,
                 line_limits,
             ) = self._build_admittance_from_homo(batch, device)
             if Y_real_sparse is None or Y_imag_sparse is None:
@@ -1432,8 +1909,15 @@ class OPFLossManager(nn.Module):
                 Y_imag_sparse=Y_imag_sparse,
                 Y_diag_real=diag_real,
                 Y_diag_imag=diag_imag,
-                line_y_real=line_y_real,
-                line_y_imag=line_y_imag,
+                line_edge_index=line_edge_index,
+                line_y_ff_real=line_y_ff_real,
+                line_y_ff_imag=line_y_ff_imag,
+                line_y_ft_real=line_y_ft_real,
+                line_y_ft_imag=line_y_ft_imag,
+                line_y_tf_real=line_y_tf_real,
+                line_y_tf_imag=line_y_tf_imag,
+                line_y_tt_real=line_y_tt_real,
+                line_y_tt_imag=line_y_tt_imag,
                 line_limits=line_limits,
                 base_mva=base_mva,
             )
@@ -1449,8 +1933,15 @@ class OPFLossManager(nn.Module):
                 Y_imag_sparse,
                 diag_real,
                 diag_imag,
-                line_y_real,
-                line_y_imag,
+                line_edge_index,
+                line_y_ff_real,
+                line_y_ff_imag,
+                line_y_ft_real,
+                line_y_ft_imag,
+                line_y_tf_real,
+                line_y_tf_imag,
+                line_y_tt_real,
+                line_y_tt_imag,
                 line_limits,
                 base_mva,
             )
@@ -1472,17 +1963,19 @@ class OPFLossManager(nn.Module):
             Y_imag_sparse,
             diag_real,
             diag_imag,
-            line_y_real,
-            line_y_imag,
+            line_edge_index,
+            line_y_ff_real,
+            line_y_ff_imag,
+            line_y_ft_real,
+            line_y_ft_imag,
+            line_y_tf_real,
+            line_y_tf_imag,
+            line_y_tt_real,
+            line_y_tt_imag,
+            line_limits,
         ) = self._build_admittance_from_batch(batch, device)
         if Y_real_sparse is None or Y_imag_sparse is None:
             return
-
-        line_limits = None
-        if ('bus', 'ac_line', 'bus') in getattr(batch, 'edge_types', []):
-            edge_attr = batch['bus', 'ac_line', 'bus'].edge_attr
-            if edge_attr is not None and edge_attr.size(1) >= 7:
-                line_limits = edge_attr[:, 6].abs().to(device)
 
         base_mva = getattr(batch, 'baseMVA', None)
         if base_mva is None and hasattr(batch, 'base_mva'):
@@ -1496,8 +1989,15 @@ class OPFLossManager(nn.Module):
             Y_imag_sparse=Y_imag_sparse,
             Y_diag_real=diag_real,
             Y_diag_imag=diag_imag,
-            line_y_real=line_y_real,
-            line_y_imag=line_y_imag,
+            line_edge_index=line_edge_index,
+            line_y_ff_real=line_y_ff_real,
+            line_y_ff_imag=line_y_ff_imag,
+            line_y_ft_real=line_y_ft_real,
+            line_y_ft_imag=line_y_ft_imag,
+            line_y_tf_real=line_y_tf_real,
+            line_y_tf_imag=line_y_tf_imag,
+            line_y_tt_real=line_y_tt_real,
+            line_y_tt_imag=line_y_tt_imag,
             line_limits=line_limits,
             base_mva=base_mva,
         )
@@ -1514,8 +2014,15 @@ class OPFLossManager(nn.Module):
             Y_imag_sparse,
             diag_real,
             diag_imag,
-            line_y_real,
-            line_y_imag,
+            line_edge_index,
+            line_y_ff_real,
+            line_y_ff_imag,
+            line_y_ft_real,
+            line_y_ft_imag,
+            line_y_tf_real,
+            line_y_tf_imag,
+            line_y_tt_real,
+            line_y_tt_imag,
             line_limits,
             base_mva,
         )
