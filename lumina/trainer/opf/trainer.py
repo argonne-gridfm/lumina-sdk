@@ -1,3 +1,4 @@
+import math
 import os
 import time
 
@@ -292,6 +293,7 @@ class BaseOPFTrainer:
         self._create_model()
         self._initialize_loss_managers()
         self._init_optimizer()
+        self._init_scheduler()
 
         self.current_epoch = 0
         self.best_val_loss = float("inf")
@@ -804,6 +806,115 @@ class BaseOPFTrainer:
         elif "AdamW" in optimizer_config:
             self.optimizer = optim.AdamW(self.model.parameters(), **optimizer_config["AdamW"])
 
+    def _effective_global_batch_size(self):
+        loader_config = self.config.get("loader", {})
+        batch_size = int(loader_config.get("batch_size", 1))
+        return batch_size * self.world_size * max(1, int(self.accumulate_grad_batches))
+
+    def _train_steps_per_epoch(self):
+        accumulate = max(1, int(self.accumulate_grad_batches))
+        if hasattr(self, "train_loader") and self.train_loader is not None:
+            try:
+                total_batches = len(self.train_loader)
+            except Exception:
+                total_batches = None
+            if total_batches is not None:
+                return int(math.ceil(total_batches / accumulate))
+        if hasattr(self, "train_loaders") and self.train_loaders:
+            sequential = self.case_mix_every_n_steps <= 0 or len(self.train_loaders) <= 1
+            total_steps = 0
+            total_batches = 0
+            found = False
+            for loader in self.train_loaders.values():
+                if loader is None:
+                    continue
+                try:
+                    num_batches = len(loader)
+                except Exception:
+                    return None
+                found = True
+                if sequential:
+                    total_steps += int(math.ceil(num_batches / accumulate))
+                else:
+                    total_batches += num_batches
+            if not found:
+                return None
+            if sequential:
+                return total_steps
+            return int(math.ceil(total_batches / accumulate))
+        return None
+
+    def _infer_scheduler_t_max(self):
+        training_config = self.config.get("training", {})
+        max_global_samples = training_config.get("max_global_samples")
+        try:
+            max_global_samples = int(max_global_samples) if max_global_samples is not None else 0
+        except (TypeError, ValueError):
+            max_global_samples = 0
+        if max_global_samples > 0:
+            global_batch_size = self._effective_global_batch_size()
+            if global_batch_size > 0:
+                return int(math.ceil(max_global_samples / global_batch_size))
+
+        max_epochs = training_config.get("max_epochs")
+        try:
+            max_epochs = int(max_epochs) if max_epochs is not None else 0
+        except (TypeError, ValueError):
+            max_epochs = 0
+        if max_epochs <= 0:
+            return None
+        steps_per_epoch = self._train_steps_per_epoch()
+        if steps_per_epoch is None or steps_per_epoch <= 0:
+            return None
+        return int(max_epochs * steps_per_epoch)
+
+    def _init_scheduler(self):
+        self.scheduler = None
+        scheduler_config = self.config.get("scheduler")
+        if not isinstance(scheduler_config, dict):
+            return
+        sched_type = str(scheduler_config.get("type", "")).strip().lower()
+        if not sched_type or sched_type in {"none", "null", "false"}:
+            return
+        if sched_type not in {"cosine", "cosineannealing", "cosineannealinglr"}:
+            if self.global_rank == 0:
+                print(f"Warning: Unsupported scheduler type '{sched_type}'. Skipping scheduler.")
+            return
+
+        t_max = scheduler_config.get("t_max")
+        if t_max is None:
+            t_max = self._infer_scheduler_t_max()
+            if t_max is None or t_max <= 0:
+                if self.global_rank == 0:
+                    print("Warning: scheduler.t_max not set and could not infer; skipping scheduler.")
+                return
+            if self.global_rank == 0:
+                print(f"Setting scheduler.t_max={t_max} from training config.")
+        try:
+            t_max = int(t_max)
+        except (TypeError, ValueError):
+            if self.global_rank == 0:
+                print("Warning: scheduler.t_max must be an integer; skipping scheduler.")
+            return
+        if t_max <= 0:
+            if self.global_rank == 0:
+                print("Warning: scheduler.t_max must be > 0; skipping scheduler.")
+            return
+
+        eta_min = scheduler_config.get("eta_min", 0.0)
+        try:
+            eta_min = float(eta_min)
+        except (TypeError, ValueError):
+            eta_min = 0.0
+
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer,
+            T_max=t_max,
+            eta_min=eta_min,
+        )
+        if self.global_rank == 0:
+            print(f"LR scheduler initialized: cosine (t_max={t_max}, eta_min={eta_min})")
+
     def _clip_gradients(self):
         if self.grad_clip_val is None or self.grad_clip_val <= 0:
             return
@@ -890,6 +1001,9 @@ class BaseOPFTrainer:
             "train/loss/total": self._as_float(loss_value),
             "train/samples_seen": int(self.global_samples),
         }
+        lr = self._current_lr()
+        if lr is not None:
+            metrics["train/lr"] = lr
         for info_key, metric_name in self.train_metric_map:
             if info_key in loss_info:
                 metric_value = self._as_float(loss_info[info_key])
@@ -933,6 +1047,17 @@ class BaseOPFTrainer:
             return float(value.mean())
         try:
             return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _current_lr(self):
+        if not hasattr(self, "optimizer") or self.optimizer is None:
+            return None
+        if not self.optimizer.param_groups:
+            return None
+        lr_value = self.optimizer.param_groups[0].get("lr")
+        try:
+            return float(lr_value)
         except (TypeError, ValueError):
             return None
 
@@ -1597,6 +1722,8 @@ class OPFTrainer(BaseOPFTrainer):
                     tracker.accelerator_synchronize()
                 self._clip_gradients()
                 self.optimizer.step()
+                if self.scheduler is not None:
+                    self.scheduler.step()
                 self.optimizer.zero_grad()
 
                 self.global_step += 1
@@ -2207,6 +2334,8 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
                     tracker.accelerator_synchronize()
                 self._clip_gradients()
                 self.optimizer.step()
+                if self.scheduler is not None:
+                    self.scheduler.step()
                 self.optimizer.zero_grad()
 
                 self.global_step += 1
