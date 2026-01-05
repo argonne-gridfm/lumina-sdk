@@ -1,0 +1,12 @@
+---
+models:
+  GIN:
+    hidden_dim: 512
+    num_layers: 6
+    dropout: 0.1
+    readout: "mean"
+  HGT:
+    hidden_channels: 512
+    num_layers: 6
+    num_heads: 4
+    dropout: 0.1
