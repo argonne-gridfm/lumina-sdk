@@ -307,6 +307,104 @@ class AugmentedLagrangian(nn.Module):
         return self.augmented_lagrangian(x)
 
 
+class _LagrangianSchedule:
+    def __init__(
+        self,
+        warmup_epochs: int,
+        warmup_samples: Optional[int],
+        penalty_check_interval: int,
+        penalty_check_samples: Optional[int],
+        multiplier_check_interval: int,
+        multiplier_check_samples: Optional[int],
+    ):
+        self.warmup_epochs = warmup_epochs
+        self.warmup_samples = warmup_samples
+        self.penalty_check_interval = max(1, penalty_check_interval)
+        self.penalty_check_samples = penalty_check_samples
+        self.multiplier_check_interval = max(1, multiplier_check_interval)
+        self.multiplier_check_samples = multiplier_check_samples
+
+        self.current_epoch = 0
+        self.current_samples = 0
+        self.epochs_since_penalty_check = 0
+        self.samples_since_penalty_check = 0
+        self.multiplier_steps_since_update = 0
+        self.samples_since_multiplier_update = 0
+
+    @staticmethod
+    def normalize_sample_value(value: Optional[int]) -> Optional[int]:
+        if value is None:
+            return None
+        try:
+            value_int = int(value)
+        except (TypeError, ValueError):
+            return None
+        return value_int if value_int > 0 else None
+
+    def warmup_complete(self) -> bool:
+        if self.warmup_samples is not None:
+            return self.current_samples >= self.warmup_samples
+        return self.current_epoch >= self.warmup_epochs
+
+    def uses_sample_penalty(self) -> bool:
+        return self.penalty_check_samples is not None
+
+    def uses_sample_multiplier(self) -> bool:
+        return self.multiplier_check_samples is not None
+
+    def advance_epoch(self):
+        self.current_epoch += 1
+
+    def advance_samples(self, sample_count: int):
+        self.current_samples += sample_count
+        if self.penalty_check_samples is not None:
+            self.samples_since_penalty_check += sample_count
+        if self.multiplier_check_samples is not None:
+            self.samples_since_multiplier_update += sample_count
+
+    def penalty_check_due(self) -> bool:
+        if self.penalty_check_samples is not None:
+            if self.samples_since_penalty_check < self.penalty_check_samples:
+                return False
+            self.samples_since_penalty_check = 0
+            return True
+
+        self.epochs_since_penalty_check += 1
+        if self.epochs_since_penalty_check < self.penalty_check_interval:
+            return False
+        self.epochs_since_penalty_check = 0
+        return True
+
+    def force_penalty_check(self):
+        if self.penalty_check_samples is not None:
+            self.samples_since_penalty_check = 0
+        else:
+            self.epochs_since_penalty_check = 0
+
+    def multiplier_interval_ready(self) -> bool:
+        if self.multiplier_check_samples is not None:
+            return self.samples_since_multiplier_update >= self.multiplier_check_samples
+
+        if self.multiplier_steps_since_update < self.multiplier_check_interval - 1:
+            self.multiplier_steps_since_update += 1
+            return False
+        return True
+
+    def reset_multiplier_interval(self):
+        self.multiplier_steps_since_update = 0
+        self.samples_since_multiplier_update = 0
+
+    def reset_penalty_interval(self):
+        self.epochs_since_penalty_check = 0
+        self.samples_since_penalty_check = 0
+
+    def reset(self):
+        self.current_epoch = 0
+        self.current_samples = 0
+        self.reset_penalty_interval()
+        self.reset_multiplier_interval()
+
+
 class AugmentedLagrangianACOPF(nn.Module):
     """
     Augmented Lagrangian method for ACOPF neural network training.
@@ -330,8 +428,10 @@ class AugmentedLagrangianACOPF(nn.Module):
         normalize_constraints: bool = False,
         verbose: bool = False,
         warmup_epochs: int = 0,
+        warmup_samples: Optional[int] = None,
         ema_beta: float = 0.9,
         penalty_check_interval: int = 5,
+        penalty_check_samples: Optional[int] = None,
         penalty_drop_ratio: float = 0.5,
         penalty_increase_factor: Optional[float] = None,
         min_penalty: Optional[float] = None,
@@ -339,7 +439,9 @@ class AugmentedLagrangianACOPF(nn.Module):
         multiplier_clip: float = 1000.0,
         multiplier_improve_ratio: float = 0.0,
         multiplier_check_interval: int = 1,
+        multiplier_check_samples: Optional[int] = None,
         multiplier_min_improve: float = 0.0,
+        angles_in_degrees: bool = False,
         **_
     ):
         """
@@ -356,8 +458,10 @@ class AugmentedLagrangianACOPF(nn.Module):
             normalize_constraints(bool): Whether to normalize constraint violations
             verbose(bool): If True, print penalty update logging during training
             warmup_epochs(int): Number of epochs to run penalty-only (λ = 0)
+            warmup_samples(Optional[int]): Sample-based warmup before multipliers activate
             ema_beta(float): Exponential moving average factor for constraint violations
             penalty_check_interval(int): Epoch interval for checking penalty increases
+            penalty_check_samples(Optional[int]): Sample interval for penalty updates
             penalty_drop_ratio(float): Required reduction ratio to avoid penalty increase
             penalty_increase_factor(Optional[float]): Factor to scale μ when increasing
             min_penalty(Optional[float]): Lower bound for μ (defaults to mu_0)
@@ -365,7 +469,9 @@ class AugmentedLagrangianACOPF(nn.Module):
             multiplier_clip(float): Clamp range for λ updates
             multiplier_improve_ratio(float): Require violation ≤ ratio * last_violation to update λ (<=0 disables check)
             multiplier_check_interval(int): Minimum steps between multiplier updates
+            multiplier_check_samples(Optional[int]): Sample interval between multiplier updates
             multiplier_min_improve(float): Absolute improvement required to update λ (0 disables)
+            angles_in_degrees(bool): If True, interpret voltage angles as degrees (default: radians).
             **_: Ignore extra keyword arguments for forward compatibility
         """
         super().__init__()
@@ -382,26 +488,54 @@ class AugmentedLagrangianACOPF(nn.Module):
         self.normalize_constraints = normalize_constraints
         self.verbose = verbose
         self.warmup_epochs = warmup_epochs
+        self.warmup_samples = _LagrangianSchedule.normalize_sample_value(warmup_samples)
         self.ema_beta = ema_beta
         self.penalty_check_interval = max(1, penalty_check_interval)
+        self.penalty_check_samples = _LagrangianSchedule.normalize_sample_value(penalty_check_samples)
         self.penalty_drop_ratio = penalty_drop_ratio
         self.multiplier_clip = multiplier_clip
         self.multiplier_improve_ratio = multiplier_improve_ratio
         self.multiplier_check_interval = max(1, multiplier_check_interval)
+        self.multiplier_check_samples = _LagrangianSchedule.normalize_sample_value(multiplier_check_samples)
         self.multiplier_min_improve = multiplier_min_improve
+        self.angles_in_degrees = bool(angles_in_degrees)
         self.min_penalty = min_penalty if min_penalty is not None else mu_0
         self.max_penalty = max_penalty if max_penalty is not None else max_mu
         self.max_mu = self.max_penalty
+
+        self._schedule = _LagrangianSchedule(
+            warmup_epochs=self.warmup_epochs,
+            warmup_samples=self.warmup_samples,
+            penalty_check_interval=self.penalty_check_interval,
+            penalty_check_samples=self.penalty_check_samples,
+            multiplier_check_interval=self.multiplier_check_interval,
+            multiplier_check_samples=self.multiplier_check_samples,
+        )
 
         # Current algorithm state
         self.mu_k = float(np.clip(mu_0, self.min_penalty, self.max_penalty))
         self.lambda_k = None  # Lagrange multipliers
         self.outer_iteration = 0
-        self.current_epoch = 0
 
         # Network parameters (to be set)
         self.Y_real = None
         self.Y_imag = None
+        self.Y_real_sparse = None
+        self.Y_imag_sparse = None
+        self.Y_diag_real = None
+        self.Y_diag_imag = None
+        self.line_edge_index = None
+        self.line_y_ff_real = None
+        self.line_y_ff_imag = None
+        self.line_y_ft_real = None
+        self.line_y_ft_imag = None
+        self.line_y_tf_real = None
+        self.line_y_tf_imag = None
+        self.line_y_tt_real = None
+        self.line_y_tt_imag = None
+        self._Y_real_sparse_cpu = None
+        self._Y_imag_sparse_cpu = None
+        self._sparse_mm_supported = None
         self.line_limits = None
         self.base_mva = 100.0
 
@@ -414,40 +548,109 @@ class AugmentedLagrangianACOPF(nn.Module):
         self._latest_constraint_signal: Optional[torch.Tensor] = None
         self._raw_violation: Optional[float] = None
         self._ema_violation: Optional[float] = None
-        self._epochs_since_penalty_check = 0
         self._last_penalty_check_violation: Optional[float] = None
         self._last_multiplier_norm: Optional[float] = None
         self._last_multiplier_violation: Optional[float] = None
-        self._multiplier_steps_since_update: int = 0
         self._last_multiplier_updated: bool = False
         # Last computed RMS values for P and Q balance and line limit (float or None)
         self._last_p_balance_rms: Optional[float] = None
         self._last_q_balance_rms: Optional[float] = None
         self._last_line_limit_rms: Optional[float] = None
 
+    def _warmup_complete(self) -> bool:
+        return self._schedule.warmup_complete()
+
+    @property
+    def current_epoch(self) -> int:
+        return self._schedule.current_epoch
+
+    @current_epoch.setter
+    def current_epoch(self, value: int):
+        try:
+            self._schedule.current_epoch = int(value)
+        except (TypeError, ValueError):
+            self._schedule.current_epoch = 0
+
+    @property
+    def current_samples(self) -> int:
+        return self._schedule.current_samples
+
+    @current_samples.setter
+    def current_samples(self, value: int):
+        try:
+            self._schedule.current_samples = int(value)
+        except (TypeError, ValueError):
+            self._schedule.current_samples = 0
+
     def set_network_parameters(
         self,
-        Y_real: torch.Tensor,
-        Y_imag: torch.Tensor,
+        Y_real_sparse: Optional[torch.Tensor] = None,
+        Y_imag_sparse: Optional[torch.Tensor] = None,
+        Y_diag_real: Optional[torch.Tensor] = None,
+        Y_diag_imag: Optional[torch.Tensor] = None,
+        line_edge_index: Optional[torch.Tensor] = None,
+        line_y_ff_real: Optional[torch.Tensor] = None,
+        line_y_ff_imag: Optional[torch.Tensor] = None,
+        line_y_ft_real: Optional[torch.Tensor] = None,
+        line_y_ft_imag: Optional[torch.Tensor] = None,
+        line_y_tf_real: Optional[torch.Tensor] = None,
+        line_y_tf_imag: Optional[torch.Tensor] = None,
+        line_y_tt_real: Optional[torch.Tensor] = None,
+        line_y_tt_imag: Optional[torch.Tensor] = None,
         line_limits: Optional[torch.Tensor] = None,
-        base_mva: float = 100.0
+        base_mva: float = 100.0,
     ):
         """Set network parameters for constraint computation.
 
         Args:
-            Y_real(torch.Tensor): Real part of admittance matrix(n_bus x n_bus)
-            Y_imag(torch.Tensor): Imaginary part of admittance matrix(n_bus x n_bus)
-            line_limits(Optional[torch.Tensor]): Line flow limits(n_lines x 2)
+            Y_real_sparse(Optional[torch.Tensor]): Sparse real admittance matrix
+            Y_imag_sparse(Optional[torch.Tensor]): Sparse imaginary admittance matrix
+            Y_diag_real(Optional[torch.Tensor]): Real diagonal of Y-bus (size n_bus)
+            Y_diag_imag(Optional[torch.Tensor]): Imag diagonal of Y-bus (size n_bus)
+            line_edge_index(Optional[torch.Tensor]): Line/transformer edge indices [2, n_lines]
+            line_y_ff_real(Optional[torch.Tensor]): Real Y_ff per branch
+            line_y_ff_imag(Optional[torch.Tensor]): Imag Y_ff per branch
+            line_y_ft_real(Optional[torch.Tensor]): Real Y_ft per branch
+            line_y_ft_imag(Optional[torch.Tensor]): Imag Y_ft per branch
+            line_y_tf_real(Optional[torch.Tensor]): Real Y_tf per branch
+            line_y_tf_imag(Optional[torch.Tensor]): Imag Y_tf per branch
+            line_y_tt_real(Optional[torch.Tensor]): Real Y_tt per branch
+            line_y_tt_imag(Optional[torch.Tensor]): Imag Y_tt per branch
+            line_limits(Optional[torch.Tensor]): Line flow limits [n_lines]
             base_mva(float): Base MVA for power system
         """
-        self.Y_real = Y_real
-        self.Y_imag = Y_imag
+        self.Y_real = None
+        self.Y_imag = None
         self.line_limits = line_limits
         self.base_mva = base_mva
+        self.Y_real_sparse = Y_real_sparse.coalesce() if Y_real_sparse is not None else None
+        self.Y_imag_sparse = Y_imag_sparse.coalesce() if Y_imag_sparse is not None else None
+        self.Y_diag_real = Y_diag_real
+        self.Y_diag_imag = Y_diag_imag
+        self.line_edge_index = line_edge_index
+        self.line_y_ff_real = line_y_ff_real
+        self.line_y_ff_imag = line_y_ff_imag
+        self.line_y_ft_real = line_y_ft_real
+        self.line_y_ft_imag = line_y_ft_imag
+        self.line_y_tf_real = line_y_tf_real
+        self.line_y_tf_imag = line_y_tf_imag
+        self.line_y_tt_real = line_y_tt_real
+        self.line_y_tt_imag = line_y_tt_imag
+        self._Y_real_sparse_cpu = None
+        self._Y_imag_sparse_cpu = None
+        self._sparse_mm_supported = None
 
         # Initialize Lagrange multipliers
-        n_bus = Y_real.size(0)
-        device = Y_real.device
+        n_bus = None
+        device = None
+        if self.Y_real_sparse is not None:
+            n_bus = int(self.Y_real_sparse.size(0))
+            device = self.Y_real_sparse.device
+        elif self.Y_diag_real is not None:
+            n_bus = int(self.Y_diag_real.numel())
+            device = self.Y_diag_real.device
+        if n_bus is None or device is None:
+            return
 
         # Power flow equality constraints: 2 * n_bus (P and Q balance at each bus)
         n_equality = 2 * n_bus
@@ -466,12 +669,12 @@ class AugmentedLagrangianACOPF(nn.Module):
         self._raw_violation = None
         self._ema_violation = None
         self._last_penalty_check_violation = None
-        self._epochs_since_penalty_check = 0
+        self._schedule.reset_penalty_interval()
 
 
     def _should_use_multipliers(self) -> bool:
         """Return True when multiplier updates are allowed (post-warmup)."""
-        return self.current_epoch >= self.warmup_epochs
+        return self._warmup_complete()
 
     def _init_constraint_buffers(self, constraints: torch.Tensor):
         """Initialize buffers that depend on the constraint dimension."""
@@ -531,15 +734,15 @@ class AugmentedLagrangianACOPF(nn.Module):
         self.mu_k = float(np.clip(self.mu_k, self.min_penalty, self.max_penalty))
 
         # During warmup, just seed the baseline and skip updates
-        if self.current_epoch < self.warmup_epochs and not force:
+        if not self._warmup_complete() and not force:
             self._last_penalty_check_violation = current_violation
             return
 
         if not force:
-            self._epochs_since_penalty_check += 1
-            if self._epochs_since_penalty_check < self.penalty_check_interval:
+            if not self._schedule.penalty_check_due():
                 return
-            self._epochs_since_penalty_check = 0
+        else:
+            self._schedule.force_penalty_check()
 
         if self._last_penalty_check_violation is None:
             self._last_penalty_check_violation = current_violation
@@ -571,8 +774,7 @@ class AugmentedLagrangianACOPF(nn.Module):
             return True
 
         # Respect minimum interval between updates
-        if self._multiplier_steps_since_update < self.multiplier_check_interval - 1:
-            self._multiplier_steps_since_update += 1
+        if not self._schedule.multiplier_interval_ready():
             return False
 
         ratio_ok = (
@@ -610,7 +812,7 @@ class AugmentedLagrangianACOPF(nn.Module):
 
         Args:
             vm (torch.Tensor): Voltage magnitudes at buses [batch_size, n_bus]
-            va (torch.Tensor): Voltage angles at buses [batch_size, n_bus] in degrees
+            va (torch.Tensor): Voltage angles at buses [batch_size, n_bus] in radians
             pg (torch.Tensor): Active power generation at generators [batch_size, n_gen]
             qg (torch.Tensor): Reactive power generation at generators [batch_size, n_gen]
             pd (torch.Tensor): Active power demand at load buses [batch_size, n_load]
@@ -622,13 +824,13 @@ class AugmentedLagrangianACOPF(nn.Module):
             Constraint violations [c_1(x), c_2(x), ..., c_n(x)]
             where c_i(x) = 0 represents power balance at bus i
         """
-        if self.Y_real is None or self.Y_imag is None:
+        if self.Y_real_sparse is None or self.Y_imag_sparse is None:
             return torch.tensor([], device=vm_pred.device, requires_grad=True)
 
         # Detect actual batch size and number of buses
         if vm_pred.dim() == 1:
             # If 1D, it could be a single sample or flattened batch
-            n_bus = self.Y_real.shape[0]
+            n_bus = self.Y_real_sparse.shape[0]
             if vm_pred.numel() % n_bus == 0:
                 batch_size = vm_pred.numel() // n_bus
                 vm_pred = vm_pred.view(batch_size, n_bus)
@@ -653,8 +855,8 @@ class AugmentedLagrangianACOPF(nn.Module):
         if qd is not None and qd.dim() == 1:
             qd = qd.unsqueeze(0) if batch_size == 1 else qd.view(batch_size, -1)
 
-        # Convert voltage angles from degrees to radians
-        va_rad = torch.deg2rad(va_pred)
+        # OPFData stores angles in radians by default.
+        va_rad = torch.deg2rad(va_pred) if self.angles_in_degrees else va_pred
 
         # Compute voltage phasors
         v_real = vm_pred * torch.cos(va_rad)
@@ -694,28 +896,84 @@ class AugmentedLagrangianACOPF(nn.Module):
             q_inj.scatter_add_(1, gen_indices_expanded, qg_limited)
 
         # Subtract loads at load buses (assuming loads are also in per-unit)
-        if load_bus_indices is not None and pd is not None:
-            load_indices_expanded = load_bus_indices.unsqueeze(0).expand(batch_size, -1).to(pd.device)
-            p_inj.scatter_add_(1, load_indices_expanded, -pd)
-            q_inj.scatter_add_(1, load_indices_expanded, -qd)
+        if pd is not None:
+            if qd is None:
+                qd = torch.zeros_like(pd)
+            if pd.dim() == 1:
+                pd = pd.unsqueeze(0) if batch_size == 1 else pd.view(batch_size, -1)
+            if qd.dim() == 1:
+                qd = qd.unsqueeze(0) if batch_size == 1 else qd.view(batch_size, -1)
 
-        # Compute power flows using admittance matrix
+            if pd.size(1) == p_inj.size(1):
+                # pd already aggregated per bus.
+                p_inj = p_inj - pd
+                q_inj = q_inj - qd
+            elif load_bus_indices is not None and pd.size(1) == load_bus_indices.numel():
+                load_indices_expanded = load_bus_indices.unsqueeze(0).expand(batch_size, -1).to(pd.device)
+                p_inj.scatter_add_(1, load_indices_expanded, -pd)
+                q_inj.scatter_add_(1, load_indices_expanded, -qd)
+
+        # Compute power flows using full AC equations via Y-bus currents
         device = v_real.device
-        y_real_batch = self.Y_real.to(device).unsqueeze(0).expand(batch_size, -1, -1)
-        y_imag_batch = self.Y_imag.to(device).unsqueeze(0).expand(batch_size, -1, -1)
 
-        # Simplified power flow calculation using linearized approximation for stability
-        # This avoids the extremely large values from the full AC power flow equations
-        # P_calc ≈ sum_j (G_ij * V_j * cos(theta_j) + B_ij * V_j * sin(theta_j))
-        # Q_calc ≈ sum_j (G_ij * V_j * sin(theta_j) - B_ij * V_j * cos(theta_j))
+        def _sparse_mm_cpu(v_real_local, v_imag_local):
+            if self._Y_real_sparse_cpu is None or self._Y_imag_sparse_cpu is None:
+                y_real_cpu = self.Y_real_sparse.coalesce().cpu()
+                y_imag_cpu = self.Y_imag_sparse.coalesce().cpu()
+                if y_real_cpu.dtype in (torch.float16, torch.bfloat16):
+                    y_real_cpu = y_real_cpu.float()
+                    y_imag_cpu = y_imag_cpu.float()
+                self._Y_real_sparse_cpu = y_real_cpu
+                self._Y_imag_sparse_cpu = y_imag_cpu
+            v_real_cpu = v_real_local if v_real_local.device.type == "cpu" else v_real_local.to("cpu")
+            v_imag_cpu = v_imag_local if v_imag_local.device.type == "cpu" else v_imag_local.to("cpu")
+            target_dtype = self._Y_real_sparse_cpu.dtype
+            if v_real_cpu.dtype != target_dtype:
+                v_real_cpu = v_real_cpu.to(target_dtype)
+                v_imag_cpu = v_imag_cpu.to(target_dtype)
+            v_real_t_cpu = v_real_cpu.transpose(0, 1)
+            v_imag_t_cpu = v_imag_cpu.transpose(0, 1)
+            i_real_t_cpu = torch.sparse.mm(self._Y_real_sparse_cpu, v_real_t_cpu) - torch.sparse.mm(
+                self._Y_imag_sparse_cpu,
+                v_imag_t_cpu,
+            )
+            i_imag_t_cpu = torch.sparse.mm(self._Y_real_sparse_cpu, v_imag_t_cpu) + torch.sparse.mm(
+                self._Y_imag_sparse_cpu,
+                v_real_t_cpu,
+            )
+            return i_real_t_cpu, i_imag_t_cpu
 
-        v_cos = vm_pred * torch.cos(va_rad)  # V * cos(theta)
-        v_sin = vm_pred * torch.sin(va_rad)  # V * sin(theta)
+        if device.type != "cuda" or self._sparse_mm_supported is False:
+            i_real_t, i_imag_t = _sparse_mm_cpu(v_real, v_imag)
+        else:
+            try:
+                y_real_sparse = self.Y_real_sparse
+                y_imag_sparse = self.Y_imag_sparse
+                if y_real_sparse.device != device:
+                    y_real_sparse = y_real_sparse.to(device)
+                if y_imag_sparse.device != device:
+                    y_imag_sparse = y_imag_sparse.to(device)
+                if y_real_sparse.layout == torch.sparse_coo:
+                    y_real_sparse = y_real_sparse.coalesce()
+                if y_imag_sparse.layout == torch.sparse_coo:
+                    y_imag_sparse = y_imag_sparse.coalesce()
+                v_real_t = v_real.transpose(0, 1)
+                v_imag_t = v_imag.transpose(0, 1)
+                i_real_t = torch.sparse.mm(y_real_sparse, v_real_t) - torch.sparse.mm(y_imag_sparse, v_imag_t)
+                i_imag_t = torch.sparse.mm(y_real_sparse, v_imag_t) + torch.sparse.mm(y_imag_sparse, v_real_t)
+                if self._sparse_mm_supported is None:
+                    self._sparse_mm_supported = True
+            except RuntimeError as exc:
+                if self._sparse_mm_supported is not False:
+                    warnings.warn(f"Sparse mm failed on device {device}; falling back to CPU. {exc}")
+                self._sparse_mm_supported = False
+                i_real_t, i_imag_t = _sparse_mm_cpu(v_real, v_imag)
 
-        # Using matrix-vector multiplication for efficiency
-        # Shape: [batch_size, n_bus]
-        p_calc = torch.einsum('bij,bj->bi', y_real_batch, v_cos) + torch.einsum('bij,bj->bi', y_imag_batch, v_sin)
-        q_calc = torch.einsum('bij,bj->bi', y_real_batch, v_sin) - torch.einsum('bij,bj->bi', y_imag_batch, v_cos)
+        i_real = i_real_t.transpose(0, 1).to(device)
+        i_imag = i_imag_t.transpose(0, 1).to(device)
+
+        p_calc = v_real * i_real + v_imag * i_imag
+        q_calc = v_imag * i_real - v_real * i_imag
 
         # Power balance constraints: injection - calculated_flow = 0
         p_balance = p_inj - p_calc
@@ -773,71 +1031,116 @@ class AugmentedLagrangianACOPF(nn.Module):
 
         Args:
             vm (torch.Tensor): Voltage magnitudes at buses [batch_size, n_bus]
-            va (torch.Tensor): Voltage angles at buses [batch_size, n_bus] in degrees
+            va (torch.Tensor): Voltage angles at buses [batch_size, n_bus] in radians
             line_edge_index (torch.Tensor): Edge indices for lines [2, n_lines]
 
         Returns:
             Line flow constraint violations
         """
-        if line_edge_index is None or self.line_limits is None or self.line_limits.numel() == 0:
+        if self.line_edge_index is not None:
+            line_edge_index = self.line_edge_index
+
+        if (
+            line_edge_index is None
+            or self.line_limits is None
+            or self.line_limits.numel() == 0
+            or self.line_y_ff_real is None
+            or self.line_y_ff_imag is None
+            or self.line_y_ft_real is None
+            or self.line_y_ft_imag is None
+            or self.line_y_tf_real is None
+            or self.line_y_tf_imag is None
+            or self.line_y_tt_real is None
+            or self.line_y_tt_imag is None
+        ):
             return torch.tensor([], device=vm.device, requires_grad=True)
 
-        batch_size = vm.size(0) if vm.dim() > 1 else 1
         device = vm.device
+        if line_edge_index.device != device:
+            line_edge_index = line_edge_index.to(device)
+        line_limits = self.line_limits
+        if line_limits.device != device:
+            line_limits = line_limits.to(device)
+        line_y_ff_real = self.line_y_ff_real
+        line_y_ff_imag = self.line_y_ff_imag
+        line_y_ft_real = self.line_y_ft_real
+        line_y_ft_imag = self.line_y_ft_imag
+        line_y_tf_real = self.line_y_tf_real
+        line_y_tf_imag = self.line_y_tf_imag
+        line_y_tt_real = self.line_y_tt_real
+        line_y_tt_imag = self.line_y_tt_imag
+        if line_y_ff_real.device != device:
+            line_y_ff_real = line_y_ff_real.to(device)
+            line_y_ff_imag = line_y_ff_imag.to(device)
+            line_y_ft_real = line_y_ft_real.to(device)
+            line_y_ft_imag = line_y_ft_imag.to(device)
+            line_y_tf_real = line_y_tf_real.to(device)
+            line_y_tf_imag = line_y_tf_imag.to(device)
+            line_y_tt_real = line_y_tt_real.to(device)
+            line_y_tt_imag = line_y_tt_imag.to(device)
 
         # Handle single sample case
         if vm.dim() == 1:
             vm = vm.unsqueeze(0)
             va = va.unsqueeze(0)
 
-        # Convert angles to radians
-        va_rad = torch.deg2rad(va)
+        # Limit to available line limits
+        n_lines = min(
+            line_edge_index.size(1),
+            line_limits.numel(),
+            line_y_ff_real.numel(),
+            line_y_ff_imag.numel(),
+            line_y_ft_real.numel(),
+            line_y_ft_imag.numel(),
+            line_y_tf_real.numel(),
+            line_y_tf_imag.numel(),
+            line_y_tt_real.numel(),
+            line_y_tt_imag.numel(),
+        )
+        if n_lines <= 0:
+            return torch.tensor([], device=device, requires_grad=True)
+        line_edge_index = line_edge_index[:, :n_lines]
+        line_limits = line_limits[:n_lines]
+        line_y_ff_real = line_y_ff_real[:n_lines]
+        line_y_ff_imag = line_y_ff_imag[:n_lines]
+        line_y_ft_real = line_y_ft_real[:n_lines]
+        line_y_ft_imag = line_y_ft_imag[:n_lines]
+        line_y_tf_real = line_y_tf_real[:n_lines]
+        line_y_tf_imag = line_y_tf_imag[:n_lines]
+        line_y_tt_real = line_y_tt_real[:n_lines]
+        line_y_tt_imag = line_y_tt_imag[:n_lines]
+
+        # OPFData stores angles in radians by default.
+        va_rad = torch.deg2rad(va) if self.angles_in_degrees else va
 
         # Compute voltage phasors
         v_real = vm * torch.cos(va_rad)
         v_imag = vm * torch.sin(va_rad)
+        v_complex = torch.complex(v_real, v_imag)
 
-        line_constraints = []
-        device = vm.device
+        i = line_edge_index[0]
+        j = line_edge_index[1]
 
-        # For each transmission line
-        for k, (i, j) in enumerate(line_edge_index.t()):
-            if k >= len(self.line_limits):
-                break
+        v_i = v_complex[:, i]
+        v_j = v_complex[:, j]
 
-            line_violations = []
+        y_ff = torch.complex(line_y_ff_real, line_y_ff_imag)
+        y_ft = torch.complex(line_y_ft_real, line_y_ft_imag)
+        y_tf = torch.complex(line_y_tf_real, line_y_tf_imag)
+        y_tt = torch.complex(line_y_tt_real, line_y_tt_imag)
 
-            for b in range(batch_size):
-                # Voltage phasors at both ends
-                v_i = v_real[b, i] + 1j * v_imag[b, i]
-                v_j = v_real[b, j] + 1j * v_imag[b, j]
+        i_from = y_ff.unsqueeze(0) * v_i + y_ft.unsqueeze(0) * v_j
+        i_to = y_tf.unsqueeze(0) * v_i + y_tt.unsqueeze(0) * v_j
 
-                # Line admittance elements (simplified - use diagonal elements)
-                y_ii = self.Y_real[i, i].to(device) + 1j * self.Y_imag[i, i].to(device)
-                y_ij = self.Y_real[i, j].to(device) + 1j * self.Y_imag[i, j].to(device)
+        s_from = v_i * torch.conj(i_from)
+        s_to = v_j * torch.conj(i_to)
 
-                # Current flow from i to j (simplified)
-                i_ij = y_ii * v_i - y_ij * v_j
-
-                # Apparent power flow from i to j
-                s_ij = v_i * torch.conj(i_ij)
-                s_magnitude_squared = torch.real(s_ij * torch.conj(s_ij))
-
-                # Line constraint: |S|² - S_max² ≤ 0
-                # Convert to equality with slack: |S|² - S_max² + slack² = 0
-                # For now, we'll use the constraint violation directly
-                line_limit_val = float(self.line_limits[k])
-                violation_squared = s_magnitude_squared - line_limit_val**2
-                # Only consider positive violations; scale to keep magnitudes stable
-                line_violations.append(torch.sqrt(torch.relu(violation_squared)))
-
-            line_constraint = torch.stack(line_violations).mean()
-            line_constraints.append(line_constraint)
-
-        if line_constraints:
-            constraints = torch.stack(line_constraints)
-        else:
-            constraints = torch.tensor([], device=device, requires_grad=True)
+        s_from_sq = torch.real(s_from * torch.conj(s_from))
+        s_to_sq = torch.real(s_to * torch.conj(s_to))
+        limit_sq = line_limits.unsqueeze(0) ** 2
+        violation_squared = torch.maximum(s_from_sq - limit_sq, s_to_sq - limit_sq)
+        line_violations = torch.sqrt(torch.relu(violation_squared))
+        constraints = line_violations.mean(dim=0)
 
         if constraints.numel() > 0:
             self._last_line_limit_rms = float(torch.sqrt(torch.mean(constraints**2)).detach().item())
@@ -998,6 +1301,16 @@ class AugmentedLagrangianACOPF(nn.Module):
 
         return augmented_lagrangian, components
 
+    def _apply_multiplier_update(self, constraint_signal: torch.Tensor):
+        update = self.mu_k * constraint_signal.detach()
+        self.lambda_k = self.lambda_k - update
+
+        if self.multiplier_clip is not None:
+            self.lambda_k = torch.clamp(self.lambda_k, -self.multiplier_clip, self.multiplier_clip)
+
+    def _post_multiplier_update(self):
+        return
+
     def update_multipliers(self, constraints: Optional[torch.Tensor] = None):
         """
         Update Lagrange multipliers using equation (17.39):
@@ -1024,19 +1337,30 @@ class AugmentedLagrangianACOPF(nn.Module):
             self._last_multiplier_updated = False
             return
 
-        self._multiplier_steps_since_update = 0
-
-        # Update multipliers with clipping to prevent explosive growth
-        update = self.mu_k * constraint_signal.detach()
-        self.lambda_k = self.lambda_k - update
-
-        # Clip multipliers to reasonable range to prevent divergence
-        if self.multiplier_clip is not None:
-            self.lambda_k = torch.clamp(self.lambda_k, -self.multiplier_clip, self.multiplier_clip)
+        self._schedule.reset_multiplier_interval()
+        self._apply_multiplier_update(constraint_signal)
 
         self._last_multiplier_norm = torch.norm(self.lambda_k).item()
         self._last_multiplier_violation = violation_val
         self._last_multiplier_updated = True
+        self._post_multiplier_update()
+
+    def step_samples(self, sample_count: Optional[int]):
+        """Advance sample counters and run sample-based penalty updates."""
+        if sample_count is None:
+            return
+        try:
+            sample_count = int(sample_count)
+        except (TypeError, ValueError):
+            return
+        if sample_count <= 0:
+            return
+
+        self._schedule.advance_samples(sample_count)
+
+        if self._schedule.uses_sample_penalty():
+            current_violation = self._ema_violation if self._ema_violation is not None else self._raw_violation
+            self._maybe_update_penalty(current_violation)
 
         # Store history
         self.lagrange_history.append(self.lambda_k.clone().cpu().numpy())
@@ -1050,7 +1374,6 @@ class AugmentedLagrangianACOPF(nn.Module):
             prev_violation: Previous constraint violation norm
         """
         # Allow manual/legacy updates by forcing an immediate penalty check
-        self._epochs_since_penalty_check = 0
         if prev_violation is not None:
             self._last_penalty_check_violation = prev_violation
         self._maybe_update_penalty(constraint_violation, force=True)
@@ -1120,9 +1443,10 @@ class AugmentedLagrangianACOPF(nn.Module):
 
     def step_epoch(self):
         """Advance epoch counter and run scheduled penalty updates."""
-        current_violation = self._ema_violation if self._ema_violation is not None else self._raw_violation
-        self._maybe_update_penalty(current_violation)
-        self.current_epoch += 1
+        if not self._schedule.uses_sample_penalty():
+            current_violation = self._ema_violation if self._ema_violation is not None else self._raw_violation
+            self._maybe_update_penalty(current_violation)
+        self._schedule.advance_epoch()
 
     def reset_for_new_problem(self):
         """Reset algorithm state for a new optimization problem."""
@@ -1137,9 +1461,7 @@ class AugmentedLagrangianACOPF(nn.Module):
         self._latest_constraint_signal = None
         self._raw_violation = None
         self._ema_violation = None
-        self.current_epoch = 0
-        self._epochs_since_penalty_check = 0
+        self._schedule.reset()
         self._last_penalty_check_violation = None
         self._last_multiplier_violation = None
-        self._multiplier_steps_since_update = 0
         self._last_multiplier_updated = False

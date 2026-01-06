@@ -19,7 +19,7 @@ classifiers = [
 ]
 dependencies = [
     # core dependencies
-    "torch==2.8.0", # Fixed version to ensure compatibility with torch-geometric and cuda
+    "torch",
     "torch-geometric",
     "numpy",
     "pandas",
@@ -44,7 +44,7 @@ test = [
     "pytest"
 ]
 
-# `pip install -e .[cuGraph] -f https://data.pyg.org/whl/torch-2.8.0+cu128.html`
+# `pip install -e ".[cuGraph]"` (add the PyG wheel index for your torch/CUDA build if needed)
 cuGraph = [
   "pyg-lib"
 ]
@@ -82,9 +82,9 @@ benchmark = [
     "lightning",
 ]
 
-# `pip install -e .[all] -f https://data.pyg.org/whl/torch-2.8.0+cu128.html`
+# `pip install -e ".[all]"`
 all = [
-    "torch==2.8.0",
+    "torch",
     "torch-geometric",
     "pyg-lib",
     "numpy",

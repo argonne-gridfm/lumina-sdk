@@ -46,12 +46,18 @@ loader:
 training:
   max_epochs: 10
   patience: 10 
+  max_global_samples: 150000
+  global_batch_size: 0
+  score_alpha: 1.0
   gradient_clip_val: 1.0
   gradient_clip_algorithm: "norm"
   accumulate_grad_batches: 1
   log_every_n_steps: 50
-  val_check_interval: 1
+  log_every_n_samples: 2048
+  val_every_n_epochs: 1
+  val_every_n_samples: 0
 checkpointing:
   monitor: "val_loss"
   save_last: true
   every_n_epochs: 1
+  every_n_samples: 0

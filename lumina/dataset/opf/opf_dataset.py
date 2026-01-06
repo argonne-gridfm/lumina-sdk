@@ -34,6 +34,8 @@ from torch.utils.data import ConcatDataset
 from torch_geometric.data import (HeteroData, InMemoryDataset, download_url,
                                   extract_tar)
 
+from lumina.utils.graph_utils import OPFHomoWrapper
+
 from .utils import extract_edge_index, extract_edge_index_rev
 
 
@@ -340,6 +342,97 @@ class OPFDataset(InMemoryDataset):
                 f'topological_perturbations={self.topological_perturbations})')
 
 
+class OPFHomogeneousDataset(OPFDataset):
+    r"""OPFDataset variant that stores homogeneous graphs during preprocessing."""
+
+    def __init__(
+        self,
+        *args,
+        add_node_type: bool = True,
+        add_edge_type: bool = True,
+        attach_full_edge_attr: bool = False,
+        sanitize_targets: bool = True,
+        log_bad_targets: bool = True,
+        max_bad_target_logs: int = 1,
+        processed_suffix: str = "homo",
+        **kwargs,
+    ) -> None:
+        self._homo_wrapper = OPFHomoWrapper(
+            add_node_type=add_node_type,
+            add_edge_type=add_edge_type,
+            attach_full_edge_attr=attach_full_edge_attr,
+        )
+        self._sanitize_targets = bool(sanitize_targets)
+        self._log_bad_targets = bool(log_bad_targets)
+        self._max_bad_target_logs = int(max_bad_target_logs)
+        self._bad_target_logs = 0
+        self._processed_suffix = processed_suffix or "homo"
+
+        user_pre_transform = kwargs.pop("pre_transform", None)
+
+        def pre_transform(data):
+            homo_data = self._homo_wrapper.convert(data)
+            self._sanitize_homo_targets(homo_data)
+            if user_pre_transform is not None:
+                homo_data = user_pre_transform(homo_data)
+            return homo_data
+
+        super().__init__(*args, pre_transform=pre_transform, **kwargs)
+
+    @property
+    def processed_dir(self) -> str:
+        if self._processed_suffix:
+            release = f"{self._release}_{self._processed_suffix}"
+        else:
+            release = self._release
+        return osp.join(self._processed_root, release, self.case_name)
+
+    def _sanitize_homo_targets(self, homo_data):
+        y = getattr(homo_data, "y", None)
+        if not torch.is_tensor(y):
+            return
+
+        finite_mask = torch.isfinite(y)
+        if finite_mask.ndim > 1:
+            row_mask = finite_mask.all(dim=-1)
+        else:
+            row_mask = finite_mask
+
+        if bool(row_mask.all().item()):
+            return
+
+        if self._sanitize_targets:
+            if y.ndim == 0:
+                y = torch.zeros_like(y)
+            else:
+                y = y.clone()
+                y[~row_mask] = 0
+            homo_data.y = y
+
+        homo_data.y_mask = row_mask.to(dtype=torch.bool)
+
+        if self._should_log_bad_targets():
+            bad_count = int((~row_mask).sum().item())
+            total = int(row_mask.numel())
+            action = "sanitized" if self._sanitize_targets else "left as-is"
+            print(
+                f"[OPFHomogeneousDataset] Non-finite targets: "
+                f"{bad_count}/{total} rows {action}; stored y_mask."
+            )
+            self._bad_target_logs += 1
+
+    def _should_log_bad_targets(self):
+        if not self._log_bad_targets:
+            return False
+        if self._bad_target_logs >= self._max_bad_target_logs:
+            return False
+        try:
+            rank = int(os.environ.get("RANK", "0"))
+        except ValueError:
+            rank = 0
+        return rank == 0
+
+
 class OPFMultiDataset(ConcatDataset):
     r"""Multi-group OPF dataset that combines multiple OPFDataset instances using ConcatDataset.
 
@@ -375,13 +468,21 @@ class OPFMultiDataset(ConcatDataset):
         self.datasets = datasets
 
     @classmethod
-    def from_case_groups(cls, root: str, case_name: str, group_ids: List[int], **kwargs):
+    def from_case_groups(
+        cls,
+        root: str,
+        case_name: str,
+        group_ids: List[int],
+        dataset_cls=OPFDataset,
+        **kwargs,
+    ):
         r"""Create OPFMultiDataset from multiple groups of the same case.
 
         Args:
             root (str): Root directory where the dataset should be saved.
             case_name (str): The name of the original pglib-opf case.
             group_ids (List[int]): List of group IDs to load.
+            dataset_cls: Dataset class to instantiate for each group.
             **kwargs: Additional arguments passed to OPFDataset constructor.
 
         Returns:
@@ -389,18 +490,25 @@ class OPFMultiDataset(ConcatDataset):
         """
         datasets = []
         for group_id in group_ids:
-            ds = OPFDataset(root=root, case_name=case_name, group_id=group_id, **kwargs)
+            ds = dataset_cls(root=root, case_name=case_name, group_id=group_id, **kwargs)
             datasets.append(ds)
         return cls(datasets)
 
     @classmethod
-    def from_multiple_cases(cls, root: str, case_configs: List[Dict], **kwargs):
+    def from_multiple_cases(
+        cls,
+        root: str,
+        case_configs: List[Dict],
+        dataset_cls=OPFDataset,
+        **kwargs,
+    ):
         r"""Create OPFMultiDataset from multiple cases with their respective group IDs.
 
         Args:
             root (str): Root directory where the dataset should be saved.
             case_configs (List[Dict]): List of dictionaries, each containing 'case_name'
                 and 'group_id' keys.
+            dataset_cls: Dataset class to instantiate for each case.
             **kwargs: Additional arguments passed to OPFDataset constructor.
 
         Returns:
@@ -419,12 +527,18 @@ class OPFMultiDataset(ConcatDataset):
             group_id = config.pop('group_id')
             # Merge with additional kwargs
             dataset_kwargs = {**kwargs, **config}
-            ds = OPFDataset(root=root, case_name=case_name, group_id=group_id, **dataset_kwargs)
+            ds = dataset_cls(root=root, case_name=case_name, group_id=group_id, **dataset_kwargs)
             datasets.append(ds)
         return cls(datasets)
 
     @classmethod
-    def from_mixed_cases(cls, root: str, case_group_mapping: Dict[str, List[int]], **kwargs):
+    def from_mixed_cases(
+        cls,
+        root: str,
+        case_group_mapping: Dict[str, List[int]],
+        dataset_cls=OPFDataset,
+        **kwargs,
+    ):
         r"""Create OPFMultiDataset from multiple groups across different cases.
 
         This method allows loading multiple groups from multiple cases in a single call,
@@ -434,6 +548,7 @@ class OPFMultiDataset(ConcatDataset):
             root (str): Root directory where the dataset should be saved.
             case_group_mapping (Dict[str, List[int]]): Dictionary mapping case names to
                 lists of group IDs to load for each case.
+            dataset_cls: Dataset class to instantiate for each group.
             **kwargs: Additional arguments passed to OPFDataset constructor.
 
         Returns:
@@ -450,7 +565,7 @@ class OPFMultiDataset(ConcatDataset):
         datasets = []
         for case_name, group_ids in case_group_mapping.items():
             for group_id in group_ids:
-                ds = OPFDataset(root=root, case_name=case_name, group_id=group_id, **kwargs)
+                ds = dataset_cls(root=root, case_name=case_name, group_id=group_id, **kwargs)
                 datasets.append(ds)
         return cls(datasets)
 

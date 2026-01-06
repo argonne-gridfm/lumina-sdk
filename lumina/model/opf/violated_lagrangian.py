@@ -154,27 +154,7 @@ class ViolatedLagrangianACOPF(AugmentedLagrangianACOPF):
 
         return lag_loss, info
 
-    def update_multipliers(self, constraints: Optional[torch.Tensor] = None):
-        """Update non-negative multipliers using current violation signal."""
-        if not self._should_use_multipliers():
-            self._last_multiplier_updated = False
-            return
-
-        self._init_constraint_buffers(constraints)
-        constraint_signal = self.constraint_ema
-
-        if constraint_signal is None or constraint_signal.numel() == 0:
-            self._last_multiplier_updated = False
-            return
-
-        violation_val = self._ema_violation if self._ema_violation is not None else self._compute_violation_norm(constraint_signal)
-        should_update = self._should_update_multipliers_now(violation_val)
-        if not should_update:
-            self._last_multiplier_updated = False
-            return
-
-        self._multiplier_steps_since_update = 0
-
+    def _apply_multiplier_update(self, constraint_signal: torch.Tensor):
         update = self.mu_k * constraint_signal.detach()
         self.lambda_k = self.lambda_k + update
 
@@ -183,15 +163,12 @@ class ViolatedLagrangianACOPF(AugmentedLagrangianACOPF):
         else:
             self.lambda_k = torch.clamp_min(self.lambda_k, 0.0)
 
-        self._last_multiplier_norm = torch.norm(self.lambda_k).item()
-        self._last_multiplier_violation = violation_val
-        self._last_multiplier_updated = True
-
+    def _post_multiplier_update(self):
         self.lagrange_history.append(self.lambda_k.clone().cpu().numpy())
 
     def step_epoch(self):
-        """Increment epoch counter without penalty updates."""
-        self.current_epoch += 1
+        """Increment epoch counter; sample-based scheduling uses step_samples."""
+        self._schedule.advance_epoch()
 
     def reset_for_new_problem(self):
         """Reset algorithm state for a new optimization problem."""

@@ -11,62 +11,105 @@ Lumina Core is the core package for LUMINA, a large-scale unified model for inte
 
 ## Quick Start
 
-### Basic Training (MSE Loss)
+Run distributed training with `example/opf/train_opf_ddp.py` (works on single node or multi-node via `torchrun`):
 ```bash
-python example/opf/train_opf.py --case case14 --loss_type mse
-```
-
-### Physics-Informed Training (Augmented Lagrangian)
-```bash
-python example/opf/train_opf.py --case case14 --loss_type augmented_lagrangian
-```
-
-### Violation-Based Training (Violated Lagrangian)
-```bash
-python example/opf/train_opf.py --case case14 --loss_type violated_lagrangian
+torchrun --standalone --nproc_per_node=4 \
+  example/opf/train_opf_ddp.py \
+  --config configs/config.yaml \
+  --cases case14 \
+  --group_ids 0 \
+  --model_type HeteroGNN \
+  --loss_type mse
 ```
 
 For detailed information about loss functions and training strategies, see [Loss Functions Documentation](docs/LOSS_FUNCTIONS.md). 
 
-## Install Instructions for Lumina Core
+## Installation
 
-### ALCF Polaris
+### Prerequisites
+- Python 3.10+
+- PyTorch and PyTorch Geometric installed for your platform (CPU/CUDA/ROCm)
 
+### Install from source
 ```shell
-bash install/polaris/create_env.sh
-```
-
-See `docs/polaris.md`.
-
-### Generis systems
-
-1. create and activate a virtual environment (recommended)
-
-```
 python -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
+
+# Install PyTorch and PyG using their official instructions:
+# https://pytorch.org/get-started/locally/
+# https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html
+pip install torch torch-geometric
+
+# Install lumina-core with common extras
+pip install -e ".[acopf,hps,benchmark]"
+
+# Or install everything
+pip install -e ".[all]"
 ```
 
-2. install Lumina Core package and optional dependencies
-
-- install the general package in editable mode
-```
-pip install -e . 
-```
-
-- install optional dependencies as needed, e.g., for cuGraph support
-```
-pip install -e .[cuGraph] -f https://data.pyg.org/whl/torch-2.8.0+cu128.html
-```
-
-- (Recommended) install all optional dependencies
-```
-pip install -e .[all] -f https://data.pyg.org/whl/torch-2.8.0+cu128.html
-```
-
-- checkout `Makefile` for other optional dependencies installation commands.
-```
+Check `Makefile` for additional optional dependency targets:
+```shell
 make help
+```
+
+If you use a shared HPC environment, see the activation notes in `docs/perlmutter.md` or `docs/polaris.md`.
+
+## OPFData dataset
+
+OPFData is distributed as raw `.tar.gz` files (15,000 samples per group). Lumina expects the following layout under your dataset root:
+```text
+<root>/OPFData/raw/<release>/*.tar.gz
+<root>/OPFData/processed/<release>/<case_name>/group_<id>.pt
+```
+
+Set `root` in your config to the parent directory that contains `OPFData`. For example:
+```yaml
+root: "/path/to/datasets"
+```
+
+On NERSC Perlmutter, the raw and processed datasets are available at `$CFS/amsc004/datasets/OPFData` (set `root: $CFS/amsc004/datasets`).
+
+## Data preprocessing (recommended)
+
+`scripts/data_process.py` converts raw OPFData groups into `.pt` files under `OPFData/processed`, and also writes homogeneous variants. It is CPU/IO heavy, so run it as a separate preprocessing job before training.
+
+Before running, edit:
+- `root` to point at your dataset directory
+- `case_mapping` and `group_ids` for the cases/groups you want
+- `topological_perturbations` if you need the N-1 release
+- Set `data.topological_perturbations: true` in your training config when using the N-1 release
+
+Example:
+```shell
+python scripts/data_process.py
+# or launch multiple ranks with MPI/SLURM for faster preprocessing
+```
+
+## Large cases (use on-disk backend)
+
+For large cases, use the on-disk dataset backend to avoid loading full groups into memory. Set the following in your config:
+```yaml
+data:
+  backend: "on_disk"
+  on_disk_backend: "sqlite"
+```
+
+This writes per-group databases under `<root>/OPFData/on_disk` on first access.
+
+## Distributed training on OPFData (DDP)
+
+`example/opf/train_opf_ddp.py` trains on OPFData with PyTorch DDP. It accepts short case names (e.g., `case14`) or full PGLIB names and expects preprocessed groups under `OPFData/processed`.
+
+Example (single node):
+```shell
+torchrun --standalone --nproc_per_node=4 \
+  example/opf/train_opf_ddp.py \
+  --config configs/config.yaml \
+  --cases case14 case30 \
+  --group_ids 0 1 \
+  --model_type HGT \
+  --loss_type mse
 ```
 
 <!-- 
