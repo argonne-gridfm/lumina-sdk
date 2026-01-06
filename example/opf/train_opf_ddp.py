@@ -15,6 +15,7 @@ except ImportError:
 
 from lumina.trainer.opf.trainer import MultiCaseOPFTrainer, OPFTrainer
 from lumina.trainer.opf.utils import apply_nested, parse_case_name, parse_cases_arg
+from lumina.utils.model import set_seed as _set_seed
 
 
 def build_parser():
@@ -32,6 +33,12 @@ def build_parser():
         nargs="+",
         default=[0],
         help="Group IDs for dataset (default: 0)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducibility (default: disabled)",
     )
     parser.add_argument("--config", type=str, default="configs/config.yaml", help="Path to config file")
     parser.add_argument(
@@ -121,6 +128,15 @@ def init_ddp():
         torch.cuda.set_device(local_rank)
 
     return local_rank, global_rank, world_size
+
+
+def set_all_seeds(seed):
+    if seed is None:
+        return None
+    seed = int(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    _set_seed(seed)
+    return seed
 
 
 def resolve_config_path(config_path):
@@ -290,6 +306,16 @@ def main():
         args, config = obj_list
 
     training_config = config.setdefault("training", {})
+    seed = args.seed
+    if seed is None:
+        seed = training_config.get("seed")
+    if seed is None:
+        seed = config.get("seed")
+    if seed is not None:
+        resolved_seed = set_all_seeds(seed)
+        if global_rank == 0:
+            print(f"Using seed: {resolved_seed}")
+
     global_batch_size = training_config.get("global_batch_size")
     if global_batch_size is not None:
         try:
