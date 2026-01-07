@@ -544,41 +544,43 @@ class OPFLossManager(nn.Module):
             )
 
         if self.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
-            if self._is_homo_batch(batch):
-                # Compute base MSE loss
-                base_results = self.base_loss(masked_predictions, masked_targets)
-                mse_loss = base_results['total_loss']
+            is_homo = self._is_homo_batch(batch)
+            
+            base_results = self.base_loss(masked_predictions, masked_targets) if is_homo else self.base_loss(predictions, targets)
+            mse_loss = base_results["total_loss"]
 
-                # Compute Lagrangian loss using shared constraint pipeline
-                current_n_bus = masked_predictions['bus'].size(0)
-                stored_ybus = getattr(self.lagrangian, 'Y_real_sparse', None)
-                need_init = (
-                    not self._lagrangian_initialized
-                    or stored_ybus is None
-                    or stored_ybus.size(0) != current_n_bus
-                )
-                if need_init:
-                    self._ensure_network_parameters(batch, masked_predictions['bus'].device, target=self.lagrangian)
-                constraint_batch = constraint_data or self._create_constraint_batch_homo(batch, masked_predictions)
-                lag_loss, info = self.lagrangian(mse_loss, masked_predictions, constraint_batch)
+            if is_homo:
+                n_bus = masked_predictions["bus"].size(0)
+                device = masked_predictions["bus"].device
             else:
-                # Compute base MSE loss
-                base_results = self.base_loss(predictions, targets)
-                mse_loss = base_results['total_loss']
-
-                # Compute Lagrangian loss using shared constraint pipeline
-                current_n_bus = batch['bus'].x.size(0)
-                stored_ybus = getattr(self.lagrangian, 'Y_real_sparse', None)
-                need_init = (
-                    not self._lagrangian_initialized
-                    or stored_ybus is None
-                    or stored_ybus.size(0) != current_n_bus
+                n_bus = batch["bus"].x.size(0)
+                device = predictions["bus"].device
+            
+            stored_ybus = getattr(self.lagrangian, "Y_real_sparse", None)
+            need_init = (
+                not self._lagrangian_initialized
+                or stored_ybus is None
+                or stored_ybus.size(0) != n_bus
+            )
+            
+            if need_init:
+                self._ensure_network_parameters(batch, device, target=self.lagrangian)
+            
+            if constraint_data is not None:
+                constraint_batch = constraint_data
+            else:
+                constraint_batch = (
+                    self._create_constraint_batch_homo(batch, masked_predictions)
+                    if is_homo
+                    else self._create_constraint_batch(batch, predictions)
                 )
-                if need_init:
-                    self._ensure_network_parameters(batch, predictions['bus'].device, target=self.lagrangian)
-                constraint_batch = constraint_data or self._create_constraint_batch(batch, predictions)
-                lag_loss, info = self.lagrangian(mse_loss, predictions, constraint_batch)
-
+            
+            lag_loss, info = self.lagrangian(
+                mse_loss,
+                masked_predictions if is_homo else predictions,
+                constraint_batch,
+            )            
+            
             if return_info:
                 if self.log_normalized_violation:
                     self._add_normalized_violation_metrics(info)
