@@ -16,8 +16,7 @@ scheduler:
   eta_min: 0.0
 lagrangian:
   base_loss_type: "mse"
-  rho: 0.001 # step size for Lagrangian multipliers update (VBL)
-  mu_0: 0.1
+  mu_0: 0.001 
   tolerance: 1.0e-06
   constraint_tolerance: 0.01
   max_outer_iterations: 20
@@ -25,7 +24,7 @@ lagrangian:
   mu_increase_factor: 1.5
   max_mu: 10000.0
   warmup_epochs: 5
-  ema_beta: 0.0 # set 0.0 for VBL
+  ema_beta: 0.0 
   penalty_check_interval: 1
   penalty_drop_ratio: 0.5
   penalty_increase_factor: 1.5
