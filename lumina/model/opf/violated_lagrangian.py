@@ -31,11 +31,8 @@ class ViolatedLagrangianACOPF(AugmentedLagrangianACOPF):
             warmup_epochs = warmup_iter
         super().__init__(mu_0=mu_0, warmup_epochs=warmup_epochs, multiplier_clip=multiplier_clip, **kwargs)
 
-    def _p_balance(self, p_inj: torch.Tensor, p_calc: torch.Tensor)-> torch.Tensor:
-        return (p_inj - p_calc).abs()
-
-    def _q_balance(self, q_inj: torch.Tensor, q_calc: torch.Tensor)-> torch.Tensor:
-        return (q_inj - q_calc).abs()
+    def _compute_balance(self, _inj: torch.Tensor, _calc: torch.Tensor)-> torch.Tensor:
+        return (_inj - _calc).abs()
 
     def _build_violation_vector(
         self,
