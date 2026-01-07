@@ -788,6 +788,9 @@ class AugmentedLagrangianACOPF(nn.Module):
 
         return ratio_ok and abs_ok
 
+    def _compute_balance(self, _inj: torch.Tensor, _calc: torch.Tensor)-> torch.Tensor:
+        return _inj - _calc
+
     def compute_power_flow_constraints(
         self,
         vm_pred: torch.Tensor,
@@ -976,8 +979,8 @@ class AugmentedLagrangianACOPF(nn.Module):
         q_calc = v_imag * i_real - v_real * i_imag
 
         # Power balance constraints: injection - calculated_flow = 0
-        p_balance = p_inj - p_calc
-        q_balance = q_inj - q_calc
+        p_balance = self._compute_balance(p_inj, p_calc)
+        q_balance = self._compute_balance(q_inj, q_calc)
 
         # Compute RMS of P and Q balance across buses (averaged over batch if present)
         try:
