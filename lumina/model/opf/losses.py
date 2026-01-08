@@ -550,11 +550,10 @@ class OPFLossManager(nn.Module):
             mse_loss = base_results["total_loss"]
 
             if is_homo:
-                n_bus = masked_predictions["bus"].size(0)
-                device = masked_predictions["bus"].device
+                n_bus = predictions["bus"].size(0)
             else:
                 n_bus = batch["bus"].x.size(0)
-                device = predictions["bus"].device
+            device = predictions["bus"].device
             
             stored_ybus = getattr(self.lagrangian, "Y_real_sparse", None)
             need_init = (
@@ -570,14 +569,14 @@ class OPFLossManager(nn.Module):
                 constraint_batch = constraint_data
             else:
                 constraint_batch = (
-                    self._create_constraint_batch_homo(batch, masked_predictions)
+                    self._create_constraint_batch_homo(batch, predictions)
                     if is_homo
                     else self._create_constraint_batch(batch, predictions)
                 )
             
             lag_loss, info = self.lagrangian(
                 mse_loss,
-                masked_predictions if is_homo else predictions,
+                predictions,
                 constraint_batch,
             )            
             
