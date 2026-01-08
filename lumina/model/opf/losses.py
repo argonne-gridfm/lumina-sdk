@@ -534,10 +534,8 @@ class OPFLossManager(nn.Module):
         # Extract targets from batch
         targets = self._extract_targets(predictions, batch)
 
-        masked_predictions = predictions
-        masked_targets = targets
         if self._is_homo_batch(batch) and hasattr(batch, "y_mask"):
-            masked_predictions, masked_targets = self._apply_homo_target_mask(
+            predictions, targets = self._apply_homo_target_mask(
                 predictions,
                 targets,
                 batch,
@@ -546,15 +544,14 @@ class OPFLossManager(nn.Module):
         if self.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
             is_homo = self._is_homo_batch(batch)
             
-            base_results = self.base_loss(masked_predictions, masked_targets) if is_homo else self.base_loss(predictions, targets)
+            base_results = self.base_loss(predictions, targets)
             mse_loss = base_results["total_loss"]
 
             if is_homo:
-                n_bus = masked_predictions["bus"].size(0)
-                device = masked_predictions["bus"].device
+                n_bus = predictions["bus"].size(0)
             else:
                 n_bus = batch["bus"].x.size(0)
-                device = predictions["bus"].device
+            device = predictions["bus"].device
             
             stored_ybus = getattr(self.lagrangian, "Y_real_sparse", None)
             need_init = (
@@ -570,14 +567,14 @@ class OPFLossManager(nn.Module):
                 constraint_batch = constraint_data
             else:
                 constraint_batch = (
-                    self._create_constraint_batch_homo(batch, masked_predictions)
+                    self._create_constraint_batch_homo(batch, predictions)
                     if is_homo
                     else self._create_constraint_batch(batch, predictions)
                 )
             
             lag_loss, info = self.lagrangian(
                 mse_loss,
-                masked_predictions if is_homo else predictions,
+                predictions,
                 constraint_batch,
             )            
             
@@ -591,7 +588,7 @@ class OPFLossManager(nn.Module):
                 return lag_loss
         else:
             # Standard ML loss
-            results = self.base_loss(masked_predictions, masked_targets)
+            results = self.base_loss(predictions, targets)
             loss = results['total_loss']
             results.setdefault('objective', loss)
 
