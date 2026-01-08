@@ -1,0 +1,7 @@
+---
+models:
+  Transformer:
+    num_layers: 6 # HPO value
+    hidden_dim: 512 # HPO value
+    dropout: 0.040953915018587035 # HPO value
+    readout: "mean"

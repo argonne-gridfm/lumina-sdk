@@ -1,0 +1,8 @@
+---
+models:
+  RGAT:
+    hidden_channels: 128 # HPO value
+    num_layers: 6 # HPO value
+    num_heads: 8 # HPO value
+    edge_dim: 8 # HPO value
+    dropout: 0.20948761604876676 # HPO value

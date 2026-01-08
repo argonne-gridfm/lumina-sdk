@@ -1,0 +1,36 @@
+command:
+  - bash
+  - -lc
+  - ./scripts/perlmutter/sweep/iclr/launch.heat.sh
+method: bayes
+metric:
+  name: val/score
+  goal: minimize
+parameters:
+  wandb_project:
+    value: lumina-sweep-heat-stage1
+  models.HEAT.num_layers:
+    values: [3, 4, 6]
+  models.HEAT.hidden_channels:
+    values: [128, 256, 512]
+  models.HEAT.dropout:
+    distribution: uniform
+    min: 0.0
+    max: 0.3
+  models.HEAT.attention_heads:
+    values: [2, 4, 8]
+  optimizer.AdamW.lr:
+    distribution: log_uniform_values
+    min: 1e-4
+    max: 3e-3
+  optimizer.AdamW.weight_decay:
+    distribution: log_uniform_values
+    min: 1e-6
+    max: 1e-2
+  training.gradient_clip_val:
+    distribution: uniform
+    min: 0.5
+    max: 2.0
+early_terminate:
+  type: hyperband
+  min_iter: 600000

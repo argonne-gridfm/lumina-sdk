@@ -1,10 +1,41 @@
 ---
 models:
+  GCN:
+    hidden_dim: 512
+    num_layers: 6
+    dropout: 0.1
+    readout: "mean"
+  GAT:
+    hidden_dim: 512
+    num_layers: 6
+    dropout: 0.1
+    readout: "mean"
+  Transformer:
+    hidden_dim: 512
+    num_layers: 6
+    dropout: 0.1
+    readout: "mean"
   GIN:
     hidden_dim: 512
     num_layers: 6
     dropout: 0.1
     readout: "mean"
+  HeteroGNN:
+    hidden_channels: 512
+    num_layers: 6
+    backend: "gat"
+    dropout: 0.1
+  RGAT:
+    hidden_channels: 512
+    num_layers: 6
+    num_heads: 8
+    edge_dim: 8
+    dropout: 0.1
+  HEAT:
+    hidden_channels: 512
+    num_layers: 6
+    attention_heads: 8
+    dropout: 0.1
   HGT:
     hidden_channels: 512
     num_layers: 6

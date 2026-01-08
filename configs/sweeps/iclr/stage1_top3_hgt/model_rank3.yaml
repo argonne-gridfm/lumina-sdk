@@ -1,0 +1,7 @@
+---
+models:
+  HGT:
+    num_layers: 6 # HPO value
+    hidden_channels: 256 # HPO value
+    dropout: 0.20554356372372476 # HPO value
+    num_heads: 2 # HPO value

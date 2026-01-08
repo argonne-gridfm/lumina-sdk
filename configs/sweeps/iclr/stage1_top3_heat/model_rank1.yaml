@@ -1,0 +1,7 @@
+---
+models:
+  HEAT:
+    num_layers: 6 # HPO value
+    hidden_channels: 256 # HPO value
+    dropout: 0.09341805143662683 # HPO value
+    attention_heads: 4 # HPO value

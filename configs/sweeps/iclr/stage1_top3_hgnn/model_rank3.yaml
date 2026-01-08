@@ -1,0 +1,7 @@
+---
+models:
+  HeteroGNN:
+    hidden_channels: 128 # HPO value
+    num_layers: 6 # HPO value
+    backend: "gat"
+    dropout: 0.27982661518259316 # HPO value
