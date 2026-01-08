@@ -1,0 +1,7 @@
+---
+models:
+  GIN:
+    num_layers: 6 # HPO value
+    hidden_dim: 128 # HPO value
+    dropout: 0.299023014356961 # HPO value
+    readout: "mean"

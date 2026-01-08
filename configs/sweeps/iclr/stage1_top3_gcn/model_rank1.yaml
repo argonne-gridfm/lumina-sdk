@@ -1,0 +1,7 @@
+---
+models:
+  GCN:
+    num_layers: 3 # HPO value
+    hidden_dim: 128 # HPO value
+    dropout: 0.2274300705193837 # HPO value
+    readout: "mean"
