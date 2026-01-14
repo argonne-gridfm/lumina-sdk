@@ -37,7 +37,7 @@ def build_parser():
     parser.add_argument(
         "--seed",
         type=int,
-        default=None,
+        default=0,
         help="Random seed for reproducibility (default: disabled)",
     )
     parser.add_argument("--config", type=str, default="configs/config.yaml", help="Path to config file")
