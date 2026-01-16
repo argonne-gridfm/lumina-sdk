@@ -18,6 +18,57 @@ from lumina.trainer.opf.utils import apply_nested, parse_case_name, parse_cases_
 from lumina.utils.model import set_seed as _set_seed
 
 
+def sanitize_run_name(run_name):
+    if not run_name:
+        return "run"
+    safe_chars = []
+    for ch in str(run_name):
+        if ch.isascii() and (ch.isalnum() or ch in ("-", "_", ".")):
+            safe_chars.append(ch)
+        else:
+            safe_chars.append("_")
+    safe_name = "".join(safe_chars).strip("_")
+    return safe_name or "run"
+
+
+def build_wandb_run_name(args, case_names, is_multi_case):
+    if args.wandb_run_name:
+        return args.wandb_run_name
+    if is_multi_case:
+        case_tag = f"{len(case_names)}cases"
+        return f"{case_tag}-{args.model_type}-{args.loss_type}"
+    return f"{args.model_type}-{args.loss_type}"
+
+
+def resolve_checkpoint_dir(config, run_name, global_rank, world_size):
+    checkpoint_dir = config.get("checkpoint_dir")
+    if not checkpoint_dir:
+        return
+    checkpointing_config = config.get("checkpointing", {})
+    run_scoped = checkpointing_config.get("run_scoped", True)
+    if not run_scoped:
+        return
+    run_id = None
+    if global_rank == 0 and wandb is not None and wandb.run is not None:
+        run_id = getattr(wandb.run, "id", None)
+    if dist.is_available() and dist.is_initialized() and world_size > 1:
+        obj_list = [run_id] if global_rank == 0 else [None]
+        dist.broadcast_object_list(obj_list, src=0)
+        run_id = obj_list[0]
+    if not run_id:
+        return
+    safe_name = sanitize_run_name(run_name)
+    resolved_dir = os.path.join(checkpoint_dir, f"{safe_name}-{run_id}")
+    config["checkpoint_dir"] = resolved_dir
+    if global_rank == 0:
+        print(f"Using run-scoped checkpoint_dir: {resolved_dir}")
+        if wandb is not None and wandb.run is not None:
+            try:
+                wandb.run.summary["checkpoint_dir"] = resolved_dir
+            except Exception:
+                pass
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description="OPF Training with PyTorch DDP")
     parser.add_argument(
@@ -355,16 +406,15 @@ def main():
         print(f"Training on cases: {case_names}")
         print(f"Using group IDs: {group_ids}")
 
-    if args.wandb and WANDB_AVAILABLE and global_rank == 0 and wandb is not None and wandb.run is not None:
-        if is_multi_case:
-            case_tag = f"{len(case_names)}cases"
-            run_name = args.wandb_run_name or f"acopf-ddp-{case_tag}-{args.model_type}-{args.loss_type}"
-        else:
-            run_name = args.wandb_run_name or f"acopf-ddp-{args.model_type}-{args.loss_type}"
-        try:
-            wandb.run.name = run_name
-        except Exception:
-            pass
+    run_name = None
+    if args.wandb:
+        run_name = build_wandb_run_name(args, case_names, is_multi_case)
+        if WANDB_AVAILABLE and global_rank == 0 and wandb is not None and wandb.run is not None:
+            try:
+                wandb.run.name = run_name
+            except Exception:
+                pass
+        resolve_checkpoint_dir(config, run_name, global_rank, world_size)
 
     run_metadata = None
     if args.wandb:
