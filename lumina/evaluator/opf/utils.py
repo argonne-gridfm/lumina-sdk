@@ -9,13 +9,12 @@ All rights reserved.
 """
 
 import ast
+import importlib
 import re
 import warnings
-from typing import Dict, Iterable, List, Optional, Tuple, Union
+from typing import Dict, Iterable, List, Optional, Tuple, Union, Any
 
-import numpy as np
 import torch
-from torch_geometric.data.data import BaseData
 from tqdm import tqdm
 
 from lumina.evaluator.opf.evaluator import ACOPFConstraintEvaluator
@@ -418,6 +417,56 @@ class Modeler:
         self.model = model
         self.config_data = config_data
         return model, config_data
+
+
+    def load_model_from_training_checkpoint(self,
+            ckpt_path: Union[str, "os.PathLike[str]"],
+            *,
+            strict: bool = True,
+    ) -> torch.nn.Module:
+        """
+        training checkpoint formats differ slightly from HF safetensor serialization
+        minimal checkpoint keys for self-contained checkpoints:
+          - model_class: str
+              Fully-qualified class name, e.g.:
+                "lumina.model.opf.hetero_model.HGT"
+          - model_kwargs: dict
+              Keyword arguments to reconstruct the model __init__(**model_kwargs)
+              (e.g., metadata/input_channels/hidden_channels/... for hetero models).
+          - model_state_dict: dict[str, Tensor]
+              Weights.
+
+        Returns:
+          torch.nn.Module (not DDP wrapped), moved to `device` if provided.
+        """
+        ckpt: Dict[str, Any] = torch.load(ckpt_path, map_location=self.device)
+        class_path = ckpt.get("model_class")
+
+        model_kwargs = ckpt.get("model_kwargs", {})
+        state_dict = ckpt.get("model_state")
+
+        normalized_state_dict = {key.replace('module.', ''): val for key, val in state_dict.items()}
+
+        # N.b. we should switch to using a model registry
+
+        module_name, _, cls_name = class_path.rpartition(".")
+
+        if not module_name:
+            raise ValueError(
+                f"Invalid model class in checkpoint: '{class_path}'. Expected fully-qualified path like 'pkg.module.ClassName'."
+            )
+
+        module = importlib.import_module(module_name)
+        cls = getattr(module, cls_name)
+
+        model: torch.nn.Module = cls(**model_kwargs)
+        model.load_state_dict(normalized_state_dict, strict=strict)
+        model = model.to(torch.device(self.device))
+
+        model.eval()
+        self.model = model
+        return model
+
 
     # -- helpers for tensors --------------------------------------------------------------------------------
     @staticmethod

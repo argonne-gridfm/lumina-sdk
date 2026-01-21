@@ -183,6 +183,8 @@ class BaseOPFTrainer:
         self.wandb_entity = wandb_entity
         self.run_metadata = run_metadata
         self.model_summary = None
+        self.model_class = None
+        self.model_kwargs = None
         data_config = self.config.get("data", {})
         if "use_precomputed_homo" in data_config:
             use_precomputed = bool(data_config.get("use_precomputed_homo"))
@@ -669,6 +671,15 @@ class BaseOPFTrainer:
     def _checkpoint_payload(self):
         return {
             "epoch": self.current_epoch,
+
+            "config": self.config,
+            "run_metadata": self.run_metadata,
+
+            "model_class": self.model_class,
+            "model_kwargs": self.model_kwargs,
+
+            "loss_type": self.loss_type,
+
             "model_state_dict": self.model.module.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "best_val_loss": self.best_val_loss,
@@ -707,7 +718,7 @@ class BaseOPFTrainer:
             elif self.model_type == "HGT":
                 model_class = HGT
 
-            kwargs = {
+            model_kwargs = kwargs = {
                 "metadata": metadata_tuple,
                 "input_channels": input_channels,
                 "hidden_channels": model_config["hidden_channels"],
@@ -721,7 +732,11 @@ class BaseOPFTrainer:
             if self.model_type == "HEAT":
                 kwargs["attention_heads"] = model_config.get("attention_heads", 1)
 
+            self.model_class = f"{model_class.__module__}.{model_class.__name__}"
+            self.model_kwargs = model_kwargs
+
             model = model_class(**kwargs)
+
             initialize_model(model, sample_data, self.device)
 
             if self.global_rank == 0:
@@ -760,11 +775,12 @@ class BaseOPFTrainer:
                     edge_dim = edge_attr.size(-1) if edge_attr.dim() > 1 else 1
                     model_config["edge_dim"] = int(edge_dim)
 
-            model = get_gnnNets(
-                input_dim=input_dim,
-                output_dim=per_node_output_size,
-                model_params=model_config,
-            )
+            kwargs = {'input_dim': input_dim, 'output_dim': per_node_output_size, 'model_params': model_config}
+
+            model = get_gnnNets(**kwargs)
+
+            self.model_class = f"{model.__class__.__module__}.{model.__class__.__name__}"
+            self.model_kwargs = kwargs
 
             initialize_model(model, homo_sample, self.device)
             if self.global_rank == 0:
