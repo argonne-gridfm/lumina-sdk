@@ -1,3 +1,15 @@
-# Core deps mirrored from pyproject
+# Core runtime dependencies for lumina-core
+torch==2.8.0
+torch_geometric
+numpy
+pandas
+scipy
+networkx
+joblib
 pyyaml
+
+# Frequently used optional dependencies
 pandapower
+wandb
+optuna
+lightning
