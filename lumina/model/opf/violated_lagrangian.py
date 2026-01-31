@@ -8,6 +8,7 @@ Violations are abs(eq) for power balance and relu(ineq) for line limits.
 Multipliers remain non-negative and are updated with a single penalty parameter mu_k.
 """
 
+import warnings
 from typing import Dict, Optional, Tuple
 
 import torch
@@ -29,6 +30,9 @@ class ViolatedLagrangianACOPF(AugmentedLagrangianACOPF):
         if warmup_iter is not None:
             warmup_epochs = warmup_iter
         super().__init__(mu_0=mu_0, warmup_epochs=warmup_epochs, multiplier_clip=multiplier_clip, **kwargs)
+
+    def _compute_balance(self, _inj: torch.Tensor, _calc: torch.Tensor)-> torch.Tensor:
+        return (_inj - _calc).abs()
 
     def _build_violation_vector(
         self,
