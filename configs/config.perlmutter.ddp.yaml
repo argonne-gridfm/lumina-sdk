@@ -1,9 +1,9 @@
 ---
 root: "/pscratch/sd/k/kibaekk/datasets/"
-logging_dir: "/pscratch/sd/k/kibaekk/lumina/logs/"
-checkpoint_dir: "/pscratch/sd/k/kibaekk/lumina/ddp_checkpoints/"
+logging_dir: "/global/cfs/cdirs/amsc004/lumina/logs/"
+checkpoint_dir: "/global/cfs/cdirs/amsc004/lumina/ddp_checkpoints/"
 data:
-  backend: "on_disk" # in_memory | on_disk
+  backend: "in_memory" # in_memory | on_disk
   sharded_manifest_name: "manifest.json"
   on_disk_backend: "sqlite"
   on_disk_write_batch_size: 128
@@ -24,65 +24,65 @@ data:
     lock_timeout_sec: 7200
 optimizer:
   AdamW:
-    lr: 1.0e-03
+    lr: 0.000907217891232129
     betas: 
       - 0.9
       - 0.999
     eps: 1.0e-08
-    weight_decay: 0.01
+    weight_decay: 0.002905704990067837
 scheduler:
   type: "cosine"
   t_max: null
   eta_min: 0.0
 lagrangian:
   base_loss_type: "mse"
-  mu_0: 0.1
-  tolerance: 1.0e-06
-  constraint_tolerance: 0.01
-  max_outer_iterations: 20
+  constraint_timing: true
+  constraint_tolerance: 1e-06
+  ema_beta: 0.5566145030311943
   max_inner_iterations: 200  # This is currently not used in the code; but kept for future use.
-  mu_increase_factor: 1.5
   max_mu: 10000.0
-  warmup_epochs: 5
-  ema_beta: 0.9
-  penalty_check_interval: 1
-  penalty_drop_ratio: 0.5
-  penalty_increase_factor: 1.5
+  max_outer_iterations: 20
+  mu_0: 0.003764222679882905
+  mu_increase_factor: 1.5
+  multiplier_check_interval: 1
+  multiplier_check_samples: 1500000
   multiplier_clip: 1000.0
   multiplier_improve_ratio: 0.9  # <= 0 keeps current always-update behavior
-  multiplier_check_interval: 1
   multiplier_min_improve: 0.0
   normalize_constraints: true
+  penalty_check_interval: 1
+  penalty_check_samples: 1500000
+  penalty_drop_ratio: 0.5
+  penalty_increase_factor: 1.5
+  tolerance: 1.0e-06
   verbose: false
-  warmup_samples: 12000
-  penalty_check_samples: 12000
-  multiplier_check_samples: 12000
-  constraint_timing: true
+  warmup_epochs: 5
+  warmup_samples: 1500000
 train_split: 0.8
 val_split: 0.1
 loader:
-  batch_size: 8
+  batch_size: 16
   shuffle: true
   num_workers: 8
   persistent_workers: true
   prefetch_factor: 4
   pin_memory: true
 training:
-  max_epochs: 10
+  max_epochs: 1000000
   patience: 100000
-  max_global_samples: 368640
-  global_batch_size: 512
+  max_global_samples: 2000000
+  global_batch_size: 64
   score_alpha: 1.0
-  gradient_clip_val: 1.0
+  gradient_clip_val: 1.7383227023260692
   gradient_clip_algorithm: "norm"
   accumulate_grad_batches: 1
   case_mix_every_n_steps: 1  # 0 = sequential, N = round-robin N steps per case
-  log_every_n_steps: 1
+  log_every_n_steps: 100
   log_every_n_samples: 0
   val_every_n_epochs: 0
-  val_every_n_samples: 73728
-  val_subset_samples: 1024
-  validation_timing: true
+  val_every_n_samples: 100000
+  val_subset_samples: 0
+  validation_timing: false
   validation_timing_every_n_batches: 1
   validation_timing_max_batches: 50
   throughput_enabled: false
@@ -93,5 +93,6 @@ training:
 checkpointing:
   monitor: "val/score"
   save_last: true
+  run_scoped: true
   every_n_epochs: 0
   every_n_samples: 0
