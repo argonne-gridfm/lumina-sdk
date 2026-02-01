@@ -65,5 +65,6 @@ training:
 checkpointing:
   monitor: "val/score"
   save_last: true
+  run_scoped: true
   every_n_epochs: 0
   every_n_samples: 0

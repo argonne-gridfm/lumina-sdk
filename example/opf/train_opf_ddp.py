@@ -216,6 +216,9 @@ def load_config(config_path, global_rank, hetero_model_config=None, homo_model_c
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
+    if "models" in config:
+        return config
+
     config_dir = Path(config_path).parent
     model_configs = (
         ("hetero", hetero_model_config, "heterognn.yaml"),
