@@ -445,6 +445,9 @@ class Modeler:
         model_kwargs = ckpt.get("model_kwargs", {})
         state_dict = ckpt.get("model_state")
 
+        if state_dict is None:
+            state_dict = ckpt.get("model_state_dict")
+
         normalized_state_dict = {key.replace('module.', ''): val for key, val in state_dict.items()}
 
         # N.b. we should switch to using a model registry
