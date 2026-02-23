@@ -395,12 +395,17 @@ class Modeler:
                 edges_dict[key] = value
             config_data['metadata']['edges'] = edges_dict
 
-        model = OPFHeteroGNN(
+        class_path = config_data.get("model_class")
+        module_name, _, cls_name = class_path.rpartition(".")
+        module = importlib.import_module(module_name)
+        cls = getattr(module, cls_name)
+
+        gnn_config = config_data.get('config', {}).get('models', {}).get('HeteroGNN', {})
+
+        model = cls(
             metadata=config_data['metadata'],
             input_channels=config_data['input_channels'],
-            hidden_channels=config_data['config']['models']['HeteroGNN']['hidden_channels'],
-            num_layers=config_data['config']['models']['HeteroGNN']['num_layers'],
-            backend=config_data['config']['models']['HeteroGNN']['backend'],
+            **{k: v for k, v in gnn_config.items()}
         ).to(self.device)
 
         # state_dict is the raw output of safetensors.load_file; remap its keys
