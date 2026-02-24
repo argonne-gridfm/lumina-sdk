@@ -22,6 +22,7 @@ import pandapower.networks as pn
 
 from lumina.dataset.opf.opf_dataset import OPFDataset, OPFHomogeneousDataset
 from lumina.model.opf.augmented_lagrangian import AugmentedLagrangianACOPF
+from lumina.model.opf.losses import OPFLossManager
 from lumina.evaluator.opf.utils import Modeler
 from lumina.loader.opf.opf_loader import DataLoader
 
@@ -333,7 +334,8 @@ def evaluate_case(
     loader: DataLoader,
     modeler: Modeler,
     max_batches: Optional[int],
-    normalize: bool
+    normalize: bool,
+    constraint_backend=None,
 ) -> dict:
     """Evaluate model on a single test case."""
     print(f"Evaluating case: {case_name}")
@@ -366,7 +368,8 @@ def evaluate_case(
         stats = modeler.evaluate_from_predictions(
             pred_batch_pairs,
             normalize=normalize,
-            cache_key=case_name
+            cache_key=case_name,
+            constraint_backend=constraint_backend,
         )
 
     print("Computing prediction errors")
@@ -697,14 +700,22 @@ def print_summary(results: List[dict]):
         print(f"\n{result['case_name']}:")
 
         violations = result['constraint_violations']
-        key_metrics = [
+        preferred_metrics = [
+            'backend_raw_constraint_violation',
+            'backend_raw_constraint_violation_norm',
+            'backend_p_balance_rmse',
+            'backend_q_balance_rmse',
+            'backend_line_limit_rmse',
+        ]
+        legacy_metrics = [
             'bound_total_bound_violations',
             'real_power_flow_violations',
             'reactive_power_flow_violations',
             'line_flow_violations'
         ]
 
-        for metric in key_metrics:
+        metrics_to_print = preferred_metrics if any(m in violations for m in preferred_metrics) else legacy_metrics
+        for metric in metrics_to_print:
             if metric in violations:
                 mean = violations[metric].get('mean', 0.0)
                 print(f"  {metric:40s}: {mean:.6e}")
@@ -761,6 +772,11 @@ def main():
         base_mva=args.base_mva,
         slack_bus_indices=args.slack_bus_indices
     )
+    constraint_backend = OPFLossManager(
+        loss_type="mse",
+        device=device,
+    )
+    constraint_backend.eval()
 
     if args.checkpoint_dir:
         model, config = load_model_from_checkpoint(args.checkpoint_dir, modeler)
@@ -808,7 +824,8 @@ def main():
                 loader,
                 modeler,
                 args.max_batches,
-                args.normalize
+                args.normalize,
+                constraint_backend=constraint_backend,
             )
             results.append(result)
         except Exception as e:

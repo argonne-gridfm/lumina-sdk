@@ -14,14 +14,6 @@ All rights reserved.
 import torch
 import torch.nn as nn
 from typing import Dict, List, Optional, Tuple, Union
-import numpy as np
-from .constraints import (
-    compute_power_flow_violation,
-    compute_power_flow_violation_v2,
-    compute_power_flow_violation_per_constraint,
-    compute_line_limit_violation,
-    compute_generation_cost
-)
 
 
 class ACOPFConstraintEvaluator(nn.Module):
@@ -310,337 +302,13 @@ class ACOPFConstraintEvaluator(nn.Module):
 
         return violations
 
-    def evaluate_power_flow_constraints(
-        self,
-        predictions: Dict[str, torch.Tensor],
-        batch_data,
-        normalize: bool = True
-    ) -> Dict[str, torch.Tensor]:
-        """
-        Evaluate power flow constraint violations using case-by-case approach.
-
-        Since makeYbus produces admittance matrices for single cases, we split
-        the batch and evaluate each sample individually, then aggregate.
-
-        Args:
-            predictions: Model predictions
-            batch_data: Batch containing network topology and loads
-            normalize: Whether to normalize violations
-
-        Returns:
-            Dictionary containing power flow violations
-        """
-        violations = {}
-
-        if self.Y_real is None or self.Y_imag is None:
-            violations['power_flow_violations'] = torch.tensor(0.0, device=self.device)
-            return violations
-
-        try:
-            # Extract concatenated predictions (bus: [VA, VM], generator: [PG, QG])
-            bus_pred = predictions['bus']
-            gen_pred = predictions['generator']
-
-            # Determine batch size and per-case dimensions
-            n_bus = self.Y_real.shape[0]  # Number of buses per case
-            batch_size = bus_pred.shape[0] // n_bus
-
-            if bus_pred.shape[0] % n_bus != 0:
-                print(f"Warning: Bus prediction size {bus_pred.shape[0]} not divisible by n_bus {n_bus}")
-                violations['power_flow_violations'] = torch.tensor(0.0, device=self.device)
-                return violations
-
-            # Determine number of generators per case
-            n_gen = gen_pred.shape[0] // batch_size if gen_pred.shape[0] > 0 else 0
-
-            # Process each sample in the batch
-            sample_p_violations = []
-            sample_q_violations = []
-
-            for sample_idx in range(batch_size):
-                try:
-                    sample_total_real_power = self._compute_sample_real_power_demand(
-                        batch_data=batch_data,
-                        sample_idx=sample_idx,
-                        batch_size=batch_size,
-                    )
-
-                    # Extract per-sample predictions
-                    bus_start = sample_idx * n_bus
-                    bus_end = (sample_idx + 1) * n_bus
-                    sample_bus_pred = bus_pred[bus_start:bus_end]  # [n_bus, 2] -> [VA, VM]
-
-                    vm_sample = sample_bus_pred[:, 1]  # Voltage magnitude
-                    va_sample = sample_bus_pred[:, 0]  # Voltage angle (degrees)
-
-                    # Extract per-sample generator predictions
-                    if n_gen > 0:
-                        gen_start = sample_idx * n_gen
-                        gen_end = (sample_idx + 1) * n_gen
-                        sample_gen_pred = gen_pred[gen_start:gen_end]  # [n_gen, 2]
-
-                        # Create injection vectors for this sample
-                        p_inj_sample = torch.zeros(n_bus, device=self.device)
-                        q_inj_sample = torch.zeros(n_bus, device=self.device)
-
-                        # Map generator injections to buses using connectivity if available
-                        mapped = False
-                        if batch_data is not None:
-                            try:
-                                # Try to use generator-bus connectivity from batch data
-                                if ('generator', 'generator_link', 'bus') in batch_data.edge_index_dict:
-                                    gen_bus_edges = batch_data[('generator', 'generator_link', 'bus')].edge_index
-                                    # Extract edges for this sample (assuming edges are also batched)
-                                    for k in range(gen_bus_edges.shape[1]):
-                                        gidx = int(gen_bus_edges[0, k].item())
-                                        bidx = int(gen_bus_edges[1, k].item())
-                                        # Map to sample-local indices
-                                        sample_gidx = gidx - sample_idx * n_gen
-                                        sample_bidx = bidx - sample_idx * n_bus
-                                        if 0 <= sample_gidx < n_gen and 0 <= sample_bidx < n_bus:
-                                            p_inj_sample[sample_bidx] += sample_gen_pred[sample_gidx, 0]
-                                            q_inj_sample[sample_bidx] += sample_gen_pred[sample_gidx, 1]
-                                            mapped = True
-                                elif ('bus', 'generator_link', 'generator') in batch_data.edge_index_dict:
-                                    bus_gen_edges = batch_data[('bus', 'generator_link', 'generator')].edge_index
-                                    # Similar mapping with reversed edge direction
-                                    for k in range(bus_gen_edges.shape[1]):
-                                        bidx = int(bus_gen_edges[0, k].item())
-                                        gidx = int(bus_gen_edges[1, k].item())
-                                        sample_gidx = gidx - sample_idx * n_gen
-                                        sample_bidx = bidx - sample_idx * n_bus
-                                        if 0 <= sample_gidx < n_gen and 0 <= sample_bidx < n_bus:
-                                            p_inj_sample[sample_bidx] += sample_gen_pred[sample_gidx, 0]
-                                            q_inj_sample[sample_bidx] += sample_gen_pred[sample_gidx, 1]
-                                            mapped = True
-                            except Exception:
-                                mapped = False
-
-                        # Fallback mapping if connectivity not available
-                        if not mapped:
-                            if n_gen <= n_bus:
-                                p_inj_sample[:n_gen] = sample_gen_pred[:, 0]
-                                q_inj_sample[:n_gen] = sample_gen_pred[:, 1]
-                            else:
-                                # If more generators than buses, sum contributions
-                                for g_idx in range(n_gen):
-                                    bus_idx = g_idx % n_bus  # Simple round-robin mapping
-                                    p_inj_sample[bus_idx] += sample_gen_pred[g_idx, 0]
-                                    q_inj_sample[bus_idx] += sample_gen_pred[g_idx, 1]
-                    else:
-                        p_inj_sample = torch.zeros(n_bus, device=self.device)
-                        q_inj_sample = torch.zeros(n_bus, device=self.device)
-
-                    # Subtract load demand if available: batch_data.x_dict['load'] stores [pd, qd]
-                    if batch_data is not None and hasattr(batch_data, 'x_dict') and 'load' in batch_data.x_dict:
-                        load_feat = batch_data.x_dict['load']
-                        if ('load', 'load_link', 'bus') in batch_data.edge_index_dict:
-                            load_bus_edges = batch_data[('load', 'load_link', 'bus')].edge_index
-                            # Filter edges for this sample (assuming contiguous batching)
-                            n_load = load_feat.shape[0] // batch_size if batch_size > 0 else 0
-                            for k in range(load_bus_edges.shape[1]):
-                                lidx = int(load_bus_edges[0, k].item())
-                                bidx = int(load_bus_edges[1, k].item())
-                                sample_lidx = lidx - sample_idx * n_load
-                                sample_bidx = bidx - sample_idx * n_bus
-                                if 0 <= sample_lidx < n_load and 0 <= sample_bidx < n_bus:
-                                    # print(f"sample_bidx {sample_bidx}: load_feat {load_feat[sample_lidx, :]}")  # DEBUG
-                                    p_inj_sample[sample_bidx] -= load_feat[sample_lidx, 0]
-                                    q_inj_sample[sample_bidx] -= load_feat[sample_lidx, 1]
-                        else:
-                            # Fallback: if load count matches buses per sample, align directly
-                            n_load = load_feat.shape[0] // batch_size if batch_size > 0 else 0
-                            if n_load == n_bus:
-                                load_start = sample_idx * n_load
-                                load_end = (sample_idx + 1) * n_load
-                                sample_load = load_feat[load_start:load_end]
-                                p_inj_sample -= sample_load[:, 0]
-                                q_inj_sample -= sample_load[:, 1]
-
-                    # Compute power flow violation for this sample using single-case admittance
-                    p_per_bus_violation, q_per_bus_violation = compute_power_flow_violation_per_constraint(
-                        VM=vm_sample,
-                        VA=va_sample,
-                        P_inj=p_inj_sample,
-                        Q_inj=q_inj_sample,
-                        Y_real=self.Y_real,  # Single case admittance matrix
-                        Y_imag=self.Y_imag,
-                    )
-                    slack_indices = [i for i in (self.slack_bus_indices or []) if 0 <= i < n_bus]
-                    if slack_indices:
-                        p_per_bus_violation = p_per_bus_violation.clone()
-                        q_per_bus_violation = q_per_bus_violation.clone()
-                        p_per_bus_violation[slack_indices] = 0.0
-                        q_per_bus_violation[slack_indices] = 0.0
-
-                    if normalize:
-                        denom = self._get_normalization_denominator(sample_total_real_power)
-                        p_per_bus_violation = p_per_bus_violation / denom
-                        q_per_bus_violation = q_per_bus_violation / denom
-
-                    sample_p_violation = p_per_bus_violation.max()
-                    sample_q_violation = q_per_bus_violation.max()
-
-                    sample_p_violations.append(sample_p_violation)
-                    sample_q_violations.append(sample_q_violation)
-
-                except Exception as e:
-                    print(f"Warning: Error processing sample {sample_idx}: {e}")
-                    sample_p_violations.append(torch.tensor(0.0, device=self.device))
-                    sample_q_violations.append(torch.tensor(0.0, device=self.device))
-
-            # Aggregate violations across batch
-            if sample_p_violations:
-                total_violation = torch.stack(sample_p_violations).sum()
-                if normalize:
-                    total_violation = total_violation / len(sample_p_violations)
-                violations['real_power_flow_violations'] = total_violation
-            else:
-                violations['real_power_flow_violations'] = torch.tensor(0.0, device=self.device)
-            if sample_q_violations:
-                total_violation = torch.stack(sample_q_violations).sum()
-                if normalize:
-                    total_violation = total_violation / len(sample_q_violations)
-                violations['reactive_power_flow_violations'] = total_violation
-            else:
-                violations['reactive_power_flow_violations'] = torch.tensor(0.0, device=self.device)
-
-        except Exception as e:
-            print(f"Warning: Could not compute power flow violations: {e}")
-            violations['power_flow_violations'] = torch.tensor(0.0, device=self.device)
-
-        return violations
-
-    def evaluate_line_flow_constraints(
-        self,
-        predictions: Dict[str, torch.Tensor],
-        batch_data=None,
-        normalize: bool = True
-    ) -> Dict[str, torch.Tensor]:
-        """
-        Evaluate line flow constraint violations using case-by-case approach.
-
-        Args:
-            predictions: Model predictions
-            batch_data: Batch data (optional)
-            normalize: Whether to normalize violations
-
-        Returns:
-            Dictionary containing line flow violations
-        """
-        violations = {}
-
-        if self.Y_real is None or self.Y_imag is None or self.edge_index is None:
-            violations['line_flow_violations'] = torch.tensor(0.0, device=self.device)
-            return violations
-
-        try:
-            # Extract concatenated predictions (bus: [VA, VM])
-            bus_pred = predictions['bus']
-
-            # Determine batch size and per-case dimensions
-            n_bus = self.Y_real.shape[0]
-            batch_size = bus_pred.shape[0] // n_bus
-
-            if bus_pred.shape[0] % n_bus != 0:
-                print(f"Warning: Bus prediction size {bus_pred.shape[0]} not divisible by n_bus {n_bus}")
-                violations['line_flow_violations'] = torch.tensor(0.0, device=self.device)
-                return violations
-
-            # Process each sample in the batch
-            sample_violations = []
-
-            for sample_idx in range(batch_size):
-                try:
-                    sample_total_real_power = self._compute_sample_real_power_demand(
-                        batch_data=batch_data,
-                        sample_idx=sample_idx,
-                        batch_size=batch_size,
-                    )
-
-                    # Extract per-sample bus predictions
-                    bus_start = sample_idx * n_bus
-                    bus_end = (sample_idx + 1) * n_bus
-                    sample_bus_pred = bus_pred[bus_start:bus_end]  # [n_bus, 2] -> [VA, VM]
-
-                    vm_sample = sample_bus_pred[:, 1]  # Voltage magnitude
-                    va_sample = sample_bus_pred[:, 0]  # Voltage angle (degrees)
-
-                    # Compute line flow violation for this sample
-                    sample_violation = compute_line_limit_violation(
-                        VM=vm_sample,
-                        VA=va_sample,
-                        Y_real=self.Y_real,  # Single case admittance matrix
-                        Y_imag=self.Y_imag,
-                        line_limits=self.line_limits,
-                        edge_index=self.edge_index,
-                        normalize=False  # We'll normalize after aggregating
-                    )
-                    if normalize:
-                        denom = self._get_normalization_denominator(sample_total_real_power)
-                        sample_violation = sample_violation / denom
-
-                    sample_violations.append(sample_violation)
-
-                except Exception as e:
-                    print(f"Warning: Error processing sample {sample_idx} for line flows: {e}")
-                    sample_violations.append(torch.tensor(0.0, device=self.device))
-
-            # Aggregate violations across batch
-            if sample_violations:
-                total_violation = torch.stack(sample_violations).sum()
-                if normalize:
-                    total_violation = total_violation / len(sample_violations)
-                violations['line_flow_violations'] = total_violation
-            else:
-                violations['line_flow_violations'] = torch.tensor(0.0, device=self.device)
-
-        except Exception as e:
-            print(f"Warning: Could not compute line flow violations: {e}")
-            violations['line_flow_violations'] = torch.tensor(0.0, device=self.device)
-
-        return violations
-
-    def _compute_sample_real_power_demand(self, batch_data, sample_idx: int, batch_size: int):
-        """Compute total real power demand for a specific sample in the batch."""
-        if batch_data is None or not hasattr(batch_data, 'x_dict') or 'load' not in batch_data.x_dict:
-            return None
-
-        load_feat = batch_data.x_dict['load']
-        total_demand = torch.tensor(0.0, device=load_feat.device if torch.is_tensor(load_feat) else self.device)
-
-        if ('load', 'load_link', 'bus') in batch_data.edge_index_dict:
-            load_bus_edges = batch_data[('load', 'load_link', 'bus')].edge_index
-            n_load = load_feat.shape[0] // batch_size if batch_size > 0 else 0
-            for k in range(load_bus_edges.shape[1]):
-                lidx = int(load_bus_edges[0, k].item())
-                sample_lidx = lidx - sample_idx * n_load
-                if 0 <= sample_lidx < n_load:
-                    total_demand += load_feat[sample_lidx, 0].abs()
-            return total_demand
-
-        n_load = load_feat.shape[0] // batch_size if batch_size > 0 else 0
-        if n_load == 0:
-            return None
-
-        load_start = sample_idx * n_load
-        load_end = (sample_idx + 1) * n_load
-        return load_feat[load_start:load_end, 0].abs().sum()
-
-    def _get_normalization_denominator(self, sample_total_real_power):
-        denom = sample_total_real_power if sample_total_real_power is not None else self.total_real_power_demand
-        if denom is None:
-            return torch.tensor(1e-6, device=self.device)
-        if not torch.is_tensor(denom):
-            denom = torch.tensor(float(denom), device=self.device)
-        return denom + 1e-6
-
     def evaluate_all_constraints(
         self,
         predictions: Dict[str, torch.Tensor],
         batch_data,
         normalize: bool = True,
-        return_individual: bool = True
+        return_individual: bool = True,
+        constraint_backend=None,
     ) -> Dict[str, Union[torch.Tensor, Dict[str, torch.Tensor]]]:
         """
         Evaluate all constraint violations comprehensively.
@@ -650,35 +318,25 @@ class ACOPFConstraintEvaluator(nn.Module):
             batch_data: Batch data containing network information
             normalize: Whether to normalize violations
             return_individual: Whether to return individual violation components
+            constraint_backend: Optional backend providing training-aligned constraint metrics
 
         Returns:
             Dictionary containing all constraint violations
         """
-        self.total_real_power_demand = torch.tensor(0.0, device=self.device)
-
-        if batch_data is not None and hasattr(batch_data, 'x_dict') and 'load' in batch_data.x_dict:
-            load_feat = batch_data.x_dict['load']
-            if ('load', 'load_link', 'bus') in batch_data.edge_index_dict:
-                load_bus_edges = batch_data[('load', 'load_link', 'bus')].edge_index
-                for k in range(load_bus_edges.shape[1]):
-                    lidx = int(load_bus_edges[0, k].item())
-                    self.total_real_power_demand += load_feat[lidx, 0].abs().sum()
-            else:
-                self.total_real_power_demand += load_feat[:, 0].abs().sum()
-
         all_violations = {}
 
         # Evaluate bound constraints
         bound_violations = self.evaluate_bound_constraints(predictions, batch_data, return_individual)
         all_violations.update({f"bound_{k}": v for k, v in bound_violations.items()})
 
-        # Evaluate power flow constraints
-        pf_violations = self.evaluate_power_flow_constraints(predictions, batch_data, normalize)
-        all_violations.update(pf_violations)
-
-        # Evaluate line flow constraints
-        line_violations = self.evaluate_line_flow_constraints(predictions, batch_data, normalize)
-        all_violations.update(line_violations)
+        if constraint_backend is not None:
+            backend_info = constraint_backend.compute_constraint_metrics(
+                predictions,
+                batch_data,
+                return_components=return_individual,
+            )
+            for key, value in backend_info.items():
+                all_violations[f"backend_{key}"] = value
 
         # Compute total constraint violation
         # violation_keys = ['bound_total_bound_violations', 'real_power_flow_violations', 'reactive_power_flow_violations', 'line_flow_violations']

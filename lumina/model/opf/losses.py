@@ -10,7 +10,7 @@ All rights reserved.
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import math
 import numpy as np
@@ -719,6 +719,114 @@ class OPFLossManager(nn.Module):
         if self.log_normalized_violation and constraints is not None:
             info["n_constraints"] = int(constraints.numel())
             self._add_normalized_violation_metrics(info)
+        self._stop_constraint_timing(timing_start, info)
+        return info
+
+    def compute_constraint_metrics(
+        self,
+        predictions: Dict[str, torch.Tensor],
+        batch,
+        *,
+        constraint_data: Optional[Dict] = None,
+        return_components: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Compute training/test-aligned constraint metrics without computing loss.
+
+        Returns:
+            Dict[str, Any]: Constraint metrics (raw/ema violations, RMS terms, etc).
+        """
+        monitor = self.lagrangian if self.lagrangian is not None else self.constraint_monitor
+        if monitor is None:
+            return {}
+        if 'bus' not in predictions or 'generator' not in predictions:
+            return {}
+
+        timing_start = self._start_constraint_timing()
+        device = predictions['bus'].device
+
+        try:
+            self._ensure_network_parameters(batch, device, target=monitor)
+        except Exception:
+            self._stop_constraint_timing(timing_start)
+            return {}
+
+        if (
+            getattr(monitor, 'Y_real_sparse', None) is None
+            or getattr(monitor, 'Y_imag_sparse', None) is None
+        ):
+            self._stop_constraint_timing(timing_start)
+            return {}
+
+        is_homo = self._is_homo_batch(batch)
+        try:
+            if is_homo:
+                constraint_batch = constraint_data or self._create_constraint_batch_homo(batch, predictions)
+            else:
+                constraint_batch = constraint_data or self._create_constraint_batch(batch, predictions)
+            if constraint_batch is None:
+                self._stop_constraint_timing(timing_start)
+                return {}
+
+            eq_constraints = None
+            ineq_constraints = None
+            if hasattr(monitor, "compute_constraint_components"):
+                eq_constraints, ineq_constraints = monitor.compute_constraint_components(predictions, constraint_batch)
+                if eq_constraints is None:
+                    eq_constraints = torch.tensor([], device=device)
+                if ineq_constraints is None:
+                    ineq_constraints = torch.tensor([], device=device)
+                if eq_constraints.numel() > 0 and ineq_constraints.numel() > 0:
+                    constraints = torch.cat([eq_constraints, ineq_constraints])
+                elif eq_constraints.numel() > 0:
+                    constraints = eq_constraints
+                elif ineq_constraints.numel() > 0:
+                    constraints = ineq_constraints
+                else:
+                    constraints = torch.tensor([], device=device)
+            else:
+                constraints = monitor.compute_constraints(predictions, constraint_batch)
+        except Exception:
+            self._stop_constraint_timing(timing_start)
+            return {}
+
+        if constraints is None or constraints.numel() == 0:
+            raw_violation = 0.0
+            ema_violation = 0.0
+        else:
+            if torch.is_grad_enabled():
+                monitor._constraint_signal_for_loss(constraints)
+                raw_violation = monitor._raw_violation
+                ema_violation = monitor._ema_violation
+                if raw_violation is None:
+                    raw_violation = monitor._compute_violation_norm(constraints)
+                if ema_violation is None:
+                    ema_violation = raw_violation
+            else:
+                raw_violation = monitor._compute_violation_norm(constraints)
+                ema_violation = raw_violation
+
+        constraint_violation = ema_violation if ema_violation is not None else raw_violation
+        info = {
+            'constraint_violation': constraint_violation,
+            'raw_constraint_violation': raw_violation,
+            'ema_constraint_violation': ema_violation,
+            'p_balance_rmse': getattr(monitor, "_last_p_balance_rms", None),
+            'q_balance_rmse': getattr(monitor, "_last_q_balance_rms", None),
+            'line_limit_rmse': getattr(monitor, "_last_line_limit_rms", None),
+        }
+
+        if self.log_normalized_violation and constraints is not None:
+            info["n_constraints"] = int(constraints.numel())
+            self._add_normalized_violation_metrics(info)
+
+        if return_components:
+            info["constraints"] = constraints
+            if eq_constraints is not None:
+                info["constraints_eq"] = eq_constraints
+            if ineq_constraints is not None:
+                info["constraints_ineq"] = ineq_constraints
+
         self._stop_constraint_timing(timing_start, info)
         return info
 

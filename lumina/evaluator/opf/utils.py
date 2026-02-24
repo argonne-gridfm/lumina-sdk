@@ -779,6 +779,7 @@ class Modeler:
         pred_batch_pairs: List[Tuple[dict, object]],
         normalize: bool = True,
         cache_key: Optional[str] = None,
+        constraint_backend=None,
     ):
         """
         Evaluate constraints using previously computed predictions and their corresponding batches.
@@ -788,6 +789,7 @@ class Modeler:
                 produced by `run_predictions`.
             normalize (bool, optional): Whether to normalize violations in the evaluator. Defaults to True.
             cache_key (Optional[str], optional): Cache key to pass to `derive_line_params` for reusing line matrices.
+            constraint_backend (optional): Backend to compute training-aligned constraint metrics.
 
         Returns:
             dict: Aggregated statistics keyed by violation name. Each value is a dict with keys:
@@ -826,6 +828,7 @@ class Modeler:
                 batch_data=batch,
                 normalize=normalize,
                 return_individual=False,
+                constraint_backend=constraint_backend,
             )
             summary = evaluator.get_violation_summary(violations)
 
