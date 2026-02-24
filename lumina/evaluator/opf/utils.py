@@ -18,7 +18,7 @@ import torch
 from tqdm import tqdm
 
 from lumina.evaluator.opf.evaluator import ACOPFConstraintEvaluator
-from lumina.model.opf.hetero_model import OPFHeteroGNN
+from lumina.trainer.opf.utils import build_hetero_model_spec, resolve_hetero_model_type
 
 _LINE_CACHE = {}
 
@@ -361,7 +361,7 @@ class Modeler:
     # -- model loading ---------------------------------------------------------------------------------------
     def load_model(self, config_data: dict, state_dict: dict):
         """
-        Construct the OPFHeteroGNN model from provided configuration and state dict.
+        Construct a hetero OPF model from provided configuration and state dict.
 
         Note:
             Downloads and file I/O for the configuration and safetensors are
@@ -395,18 +395,22 @@ class Modeler:
                 edges_dict[key] = value
             config_data['metadata']['edges'] = edges_dict
 
-        class_path = config_data.get("model_class")
-        module_name, _, cls_name = class_path.rpartition(".")
-        module = importlib.import_module(module_name)
-        cls = getattr(module, cls_name)
+        model_type = resolve_hetero_model_type(
+            model_type=config_data.get("model"),
+            model_class_path=config_data.get("model_class"),
+            default="HeteroGNN",
+        )
+        model_class, model_kwargs, _, used_fallback = build_hetero_model_spec(
+            model_type=model_type,
+            metadata=config_data["metadata"],
+            input_channels=config_data["input_channels"],
+            models_config=config_data.get("config", {}).get("models", {}),
+            out_channels=config_data.get("out_channels", 2),
+        )
+        if used_fallback and self.verbose:
+            print(f"[MODEL LOAD] Config for {model_type} not found; using HeteroGNN config.")
 
-        gnn_config = config_data.get('config', {}).get('models', {}).get('HeteroGNN', {})
-
-        model = cls(
-            metadata=config_data['metadata'],
-            input_channels=config_data['input_channels'],
-            **{k: v for k, v in gnn_config.items()}
-        ).to(self.device)
+        model = model_class(**model_kwargs).to(self.device)
 
         # state_dict is the raw output of safetensors.load_file; remap its keys
         checkpoint_dict = {self.convert_checkpoint_key_to_model_key(k): v for k, v in state_dict.items()}
