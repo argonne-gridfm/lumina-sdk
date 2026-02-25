@@ -64,9 +64,14 @@ def main() -> None:
     parser.add_argument("--max-batches", type=int, default=5, help="Max number of batches to evaluate.")
     parser.add_argument("--max-samples", type=int, default=None, help="Stop after this many samples.")
     parser.add_argument(
-        "--normalize-constraints",
+        "--normalize-by-rms",
         action="store_true",
-        help="Normalize constraint vector inside the constraint monitor.",
+        help="Normalize constraint vector by RMS magnitude.",
+    )
+    parser.add_argument(
+        "--no-normalize-by-size",
+        action="store_true",
+        help="Disable normalization by sqrt(number_of_constraints).",
     )
     parser.add_argument(
         "--log-normalized-violation",
@@ -90,7 +95,8 @@ def main() -> None:
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
 
     lag_config = {
-        "normalize_constraints": bool(args.normalize_constraints),
+        "normalize_by_rms": bool(args.normalize_by_rms),
+        "normalize_by_size": not bool(args.no_normalize_by_size),
         "angles_in_degrees": bool(args.angles_in_degrees),
     }
     loss_manager = OPFLossManager(
