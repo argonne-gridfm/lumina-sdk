@@ -680,6 +680,7 @@ class HGT(torch.nn.Module):
                  out_channels=2,
                  num_layers=3,
                  num_heads=1,
+                 dropout=0.0,
                  backend="sage",
                  edge_attr_dim=None,
                  **kwargs):
@@ -700,6 +701,7 @@ class HGT(torch.nn.Module):
         super().__init__()
 
         self.lin_dict = torch.nn.ModuleDict()
+        self.dropout = float(dropout)
 
         # Handle both old tuple format and new dict format
         if isinstance(metadata, dict):
@@ -770,11 +772,21 @@ class HGT(torch.nn.Module):
             node_type: torch.relu(self.lin_dict[node_type](x_dict[node_type]))
             for node_type in self.node_types
         }
+        if self.dropout > 0.0:
+            x_dict = {
+                key: F.dropout(x, p=self.dropout, training=self.training)
+                for key, x in x_dict.items()
+            }
 
         # Message passing
         for conv in self.convs:
             x_dict = conv(x_dict, edge_index_dict)
             x_dict = {key: F.relu(x) for key, x in x_dict.items()}
+            if self.dropout > 0.0:
+                x_dict = {
+                    key: F.dropout(x, p=self.dropout, training=self.training)
+                    for key, x in x_dict.items()
+                }
 
         # Final predictions
         bus_out = self.out_dict["bus"](x_dict["bus"])
