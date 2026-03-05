@@ -49,7 +49,8 @@ lagrangian:
   multiplier_clip: 1000.0
   multiplier_improve_ratio: 0.9  # <= 0 keeps current always-update behavior
   multiplier_min_improve: 0.0
-  normalize_constraints: true
+  normalize_by_rms: false
+  normalize_by_size: true
   penalty_check_interval: 1
   penalty_check_samples: 1500000
   penalty_drop_ratio: 0.5
