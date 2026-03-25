@@ -26,6 +26,8 @@ import warnings
 from glob import glob
 from typing import Callable, Dict, List, Literal, Optional, Union
 
+import h5py
+import logging
 import numpy as np
 import torch
 import tqdm
@@ -36,7 +38,15 @@ from torch_geometric.data import (HeteroData, InMemoryDataset, download_url,
 
 from lumina.utils.graph_utils import OPFHomoWrapper
 
-from .utils import extract_edge_index, extract_edge_index_rev
+from contingency import add_slack_generators, parse_contingency, apply_contingency
+from utils import extract_edge_index, extract_edge_index_rev
+from schema import (
+    JSONBus, JSONGenerator, JSONLoad, JSONShunt, JSONACLine, JSONTransformer,
+    JSONBusSolution, JSONGeneratorSolution, JSONEdgeSolution,
+    H5Bus, H5Generator, H5Load, H5Shunt, H5ACLine, H5Transformer,
+    H5BusSolution, H5GeneratorSolution, H5EdgeSolution,
+    ContingencyH5Load, ContingencyH5LoadSolution
+)
 
 
 class OPFDataset(InMemoryDataset):
@@ -92,7 +102,7 @@ class OPFDataset(InMemoryDataset):
             (default: :obj:`None`)
 
     Examples:
-        >>> from fm4g import OPFDataset
+        >>> from lumina.dataset.opf.opf_dataset import OPFDataset
         >>> dataset = OPFDataset(root='./data', case_name='pglib_opf_case14_ieee')
         >>> # By default, only first group (i.e., group 0) is loaded, if you want to load multiple groups,
         >>> #   please use OPFMultiDataset instead:
@@ -219,6 +229,17 @@ class OPFDataset(InMemoryDataset):
 
     def process(self) -> None:
         r""" Process the raw files into a single file. """
+        h5_files = [f for f in self.raw_paths if f.endswith('.h5')]
+        
+        if h5_files:
+            print(f"HDF5 files detected: {h5_files}")
+            try:
+                self.process_hdf5_group(self.group_id)
+            except Exception as e:
+                print(f"Error processing HDF5 group {self.group_id}: {e}")
+                raise e
+            return
+
         if not osp.exists(self.tmp_dir):
             os.makedirs(self.tmp_dir)
 
@@ -233,6 +254,28 @@ class OPFDataset(InMemoryDataset):
         # NOTE: remove tmp_dir content to save local space
         if not self.keep_temp:
             shutil.rmtree(osp.join(self.raw_dir, 'gridopt-dataset-tmp'))
+
+    def _post_process_and_save(self, data_list: List[Optional[Union[HeteroData, List[HeteroData]]]], group_id: int):
+        """Helper to filter, transform, collate and save processed data."""
+        flattened_list = []
+        for item in data_list:
+            if item is None:
+                continue
+            if isinstance(item, list):
+                flattened_list.extend(item)
+            else:
+                flattened_list.append(item)
+        
+        data_list = flattened_list
+
+        if self.pre_filter is not None or self.pre_transform is not None:
+            if self.pre_filter is not None:
+                data_list = [data for data in data_list if self.pre_filter(data)]
+            if self.pre_transform is not None:
+                data_list = [self.pre_transform(data) for data in data_list]
+
+        self.data, self.slices = self.collate(data_list)
+        torch.save((self._data, self.slices), osp.join(self.processed_dir, f'group_{group_id}.pt'))
 
     def process_json_group(self, group_id: int):
         r""" Process a single group of files, save processed data to disk.
@@ -250,20 +293,7 @@ class OPFDataset(InMemoryDataset):
         data_list = Parallel(n_jobs=self.n_jobs, backend="threading")(
             delayed(process_json_file)(fn) for fn in tqdm.tqdm(group_json_files, desc=f"Group {group_id}"))
 
-        if self.pre_filter is not None or self.pre_transform is not None:
-            if self.pre_filter is not None:
-                data_list = [data for data in data_list if self.pre_filter(data)]
-            if self.pre_transform is not None:
-                data_list = [self.pre_transform(data) for data in data_list]
-
-        self.data, self.slices = self.collate(data_list)
-
-        torch.save((self._data, self.slices), osp.join(self.processed_dir, f'group_{group_id}.pt'))
-
-        # NOTE: remove `save_pkl` - data_list to pickle file format.
-        # if self.save_pkl:
-        #     with open(osp.join(self.processed_dir, f'group_{group_id}.pkl'), 'wb') as f:
-        #         pickle.dump(data_list, f)
+        self._post_process_and_save(data_list, group_id)
 
     def combine_datasets(self, file_paths: List[str]) -> List[HeteroData]:
         r""" Combine datasets from multiple files.
@@ -335,6 +365,31 @@ class OPFDataset(InMemoryDataset):
             }
         }
 
+    def process_hdf5_group(self, group_id: int):
+        r""" Process a single group of HDF5 files, save processed data to disk.
+
+        Args:
+            group_id (int): Group id.
+        """
+        raw_paths = self.raw_paths
+        h5_files = [f for f in raw_paths if f.endswith('.h5')]
+
+        if not h5_files:
+            print(f"No HDF5 files found in {self.raw_dir}")
+            return
+
+        tasks = []
+        for h5_file in h5_files:
+            with h5py.File(h5_file, 'r') as f:
+                for scenario_key in f.keys():
+                    tasks.append((h5_file, scenario_key))
+
+        data_list = Parallel(n_jobs=self.n_jobs, backend="threading")(
+            delayed(_process_hdf5_scenario_from_path)(fn, key)
+            for fn, key in tqdm.tqdm(tasks, desc=f"Group {group_id} HDF5")
+        )
+        
+        self._post_process_and_save(data_list, group_id)
     def __repr__(self) -> str:
         r""" Returns the string representation of the dataset. """
         return (f'{self.__class__.__name__}({len(self)}, '
@@ -580,14 +635,6 @@ class OPFMultiDataset(ConcatDataset):
         cases_str = ", ".join(case_info)
         return f'{self.__class__.__name__}({len(self)}, cases=[{cases_str}])'
 
-    def process_hdf5_group(self, group_id: int):
-        r""" Process a single group of HDF5 files, save processed data to disk.
-        TODO: with new data format support in .h5
-
-        Args:
-            group_id (int): Group id.
-        """
-        raise NotImplementedError("HDF5 processing not implemented yet.")
 
 
 def process_json_file(json_file):
@@ -673,14 +720,423 @@ def process_json_file(json_file):
     return hdata
 
 
-def process_hdf5_file(h5_file):
+def process_hdf5_scenario(scenario, scenario_key: str) -> Union[Optional[HeteroData], List[HeteroData]]:
+    """Process a single scenario from HDF5 format to HeteroData."""
+    try:
+        # contingency scenario or acopf scenario
+        if 'base_solution' in scenario:
+            return process_contingency_scenario(scenario, scenario_key)
+
+        grid = scenario['grid']
+        solution = scenario['solution']
+        metadata = scenario['metadata']
+
+        hdata = HeteroData()
+        _process_nodes_hdf5(hdata, grid, solution)
+        _process_edges_hdf5(hdata, grid, solution)
+
+        hdata.baseMVA = torch.tensor(grid['context']['baseMVA'][()], dtype=torch.float32).view(-1)
+        hdata.objective = torch.tensor(metadata.attrs['objective'], dtype=torch.float32)
+        hdata.scenario_id = scenario_key
+
+        return hdata
+    except Exception as e:
+        print(f"Error in process_hdf5_scenario for {scenario_key}: {e}")
+        return None
+
+
+def process_contingency_scenario(scenario, scenario_key: str) -> List[HeteroData]:
+    """Process a contingency scenario from HDF5 format."""
+    try:
+        # formats are slightly different between single scenarios, grouped scenarios, and contingency (see schema.py)
+        if 'grid' in scenario:
+            grid = scenario['grid']
+        elif 'grid' in scenario.file:
+            grid = scenario.file['grid']
+        elif 'grid' in scenario.parent:
+            grid = scenario.parent['grid']
+        else:
+            grid = scenario['base_solution']['grid']
+
+        try:
+            base_mva = torch.tensor(grid['context']['baseMVA'][()], dtype=torch.float32).view(-1)
+        except Exception:
+            base_mva = torch.tensor([100.0], dtype=torch.float32)
+
+        metadata = scenario['metadata']
+        n_contingencies = int(metadata.attrs.get('n_contingencies', 0))
+
+        # Read contingency definition arrays once (before the loop)
+        cont_ids = cont_types = cont_names = None
+        if 'contingencies' in scenario:
+            cg = scenario['contingencies']
+            cont_ids = cg['ids'][()]
+            cont_types = cg['types'][()]
+            cont_names = cg['names'][()]
+        else:
+            logging.warning("No 'contingencies' group in scenario '%s'; topology unmodified", scenario_key)
+
+        # Load branch mapping JSON (must exist alongside the HDF5 file)
+        branch_mapping = None
+        if cont_ids is not None:
+            from pathlib import Path
+            h5_dir = Path(scenario.file.filename).parent
+            n_grid_branches = (
+                len(grid['edges']['ac_line']['senders'][()])
+                + len(grid['edges']['transformer']['senders'][()])
+            )
+            # Search for branch_mapping*.json files and pick the one
+            # whose entry count matches this grid's total branch count.
+            branch_mapping = None
+            for candidate_path in sorted(h5_dir.glob('branch_mapping*.json')):
+                with open(candidate_path, "r") as fp:
+                    candidate = json.load(fp)
+                if len(candidate) == n_grid_branches:
+                    branch_mapping = candidate
+                    break
+            if branch_mapping is None:
+                raise FileNotFoundError(
+                    f"No branch mapping file in {h5_dir} with {n_grid_branches} branches. "
+                    f"Generate one with: python example/opf/build_contingency_index.py "
+                    f"--matpower <path_to_.m_file> --output {h5_dir / 'branch_mapping.json'}"
+                )
+
+        results = []
+
+        # iterate over post-contingency solutions and load each as a separate sample in heterodata
+        if 'post_contingency' in scenario:
+            pc_group = scenario['post_contingency']
+            for cont_name in pc_group.keys():
+                cont_group = pc_group[cont_name]
+
+                if 'opf' not in cont_group:
+                    continue
+
+                solution = cont_group['opf']
+                if solution.attrs.get('opf_converged', 1) != 1:
+                    continue
+
+                hdata = HeteroData()
+                _process_nodes_hdf5(hdata, grid, solution)
+                _process_edges_hdf5(hdata, grid, solution)
+
+                hdata.baseMVA = base_mva
+                hdata.objective = torch.tensor(solution.attrs['objective'], dtype=torch.float32)
+                hdata.scenario_id = f"{scenario_key}_{cont_name}"
+                hdata.n_contingencies = n_contingencies
+
+                # Apply contingency topology modifications before adding slacks
+                if cont_ids is not None:
+                    cont_idx = int(cont_name.split('_')[1]) - 1  # contingency_000001 → 0, etc.
+                    parsed = parse_contingency(
+                        cont_idx, cont_ids, cont_types, cont_names,
+                        branch_mapping,
+                    )
+                    apply_contingency(hdata, parsed)
+
+                add_slack_generators(hdata)
+
+                results.append(hdata)
+
+        return results
+    except Exception as e:
+        print(f"Error in process_contingency_scenario for {scenario_key}: {e}")
+        return []
+
+
+def _process_hdf5_scenario_from_path(h5_file_path, scenario_key):
+    with h5py.File(h5_file_path, 'r') as f:
+        scenario = f[scenario_key]
+        return process_hdf5_scenario(scenario, scenario_key)
+
+
+def _align_features(data: np.ndarray, src_schema, dst_schema) -> np.ndarray:
+    """feature indices are different between hdf5 acopf, json acopf, and hdf5 contingency and must be aligned."""
+    mapping = src_schema.get_alignment_map(dst_schema)
+    aligned = np.zeros((data.shape[0], len(dst_schema.get_feature_names())))
+    for src_idx, dst_idx in mapping.items():
+        aligned[:, dst_idx] = data[:, src_idx]
+    return aligned
+
+
+def _process_nodes_hdf5(hdata: HeteroData, grid, solution):
+    """Process node data from HDF5 format aligned with JSON schema."""
+    nodes = grid['nodes']
+    sol_nodes = solution['nodes']
+
+    required_fields = ['bus', 'load', 'generator']
+    missing_fields = [f for f in required_fields if f not in nodes]
+
+    if missing_fields:
+        raise Exception(f"Invalid HDF5 file: missing the following required fields:{missing_fields}")
+
+
+    bus_data = nodes['bus'][()]
+    if bus_data.shape[0] == 5:
+        bus_data = bus_data.T
+    
+    if bus_data.shape[1] >= 5:
+        # HDF5 bus: vmin, vmax, zone, area, bus_type
+        # JSON bus: base_kv, bus_type, vmin, vmax
+        aligned_bus = _align_features(bus_data, H5Bus, JSONBus)
+        
+        # augment hdf5 data with base_kv if missing
+        json_indices = JSONBus.get_field_indices()
+        if 'base_kv' in json_indices and np.all(aligned_bus[:, json_indices['base_kv']] == 0):
+            aligned_bus[:, json_indices['base_kv']] = 1.0
+
+        # JSON loader does one-hot encoding for bus_type whereas hdf5 uses a category label so we add the one hot:
+        bus_type = aligned_bus[:, json_indices['bus_type']].astype(int)
+        bus_type_onehot = np.eye(4)[bus_type - 1]
+        bus_x_wo_type = np.delete(aligned_bus, json_indices['bus_type'], axis=1)
+        bus_x_final = np.concatenate([bus_x_wo_type, bus_type_onehot], axis=1)
+    else:
+        bus_x_final = bus_data
+
+    hdata['bus'].x = torch.tensor(bus_x_final, dtype=torch.float32)
+
+    # remaining fields are all aligned automatically (see schema.py for index mappings)
+
+    # generator
+    gen_data = nodes['generator'][()]
+    if gen_data.shape[0] == 10: # H5 format from PowerModels.jl is column-major
+        gen_data = gen_data.T
+    
+    if gen_data.shape[1] >= 10:
+        gen_x_final = _align_features(gen_data, H5Generator, JSONGenerator)
+    else:
+        gen_x_final = gen_data
+    hdata['generator'].x = torch.tensor(gen_x_final, dtype=torch.float32)
+
+    # load
+    load_data = nodes['load'][()]
+    if load_data.shape[0] == 4 or load_data.shape[0] == 2:
+        load_data = load_data.T
+
+    if load_data.shape[1] == 4:
+        load_x_final = _align_features(load_data, ContingencyH5Load, JSONLoad)
+    elif load_data.shape[1] == 2:
+        load_x_final = _align_features(load_data, H5Load, JSONLoad)
+    else:
+        load_x_final = load_data
+
+    hdata['load'].x = torch.tensor(load_x_final, dtype=torch.float32)
+
+    # shunt
+    if 'shunt' in nodes:
+        shunt_data = nodes['shunt'][()]
+        if shunt_data.shape[0] == 2:
+            shunt_data = shunt_data.T
+            
+        if shunt_data.shape[1] == 2:
+            shunt_x_final = _align_features(shunt_data, H5Shunt, JSONShunt)
+        else:
+            shunt_x_final = shunt_data
+        hdata['shunt'].x = torch.tensor(shunt_x_final, dtype=torch.float32)
+
+
+    # solution data
+    if 'bus' in sol_nodes:
+        bus_sol = sol_nodes['bus'][()]
+        if bus_sol.shape[0] == 2:
+            bus_sol = bus_sol.T
+        hdata['bus'].y = torch.tensor(_align_features(bus_sol, H5BusSolution, JSONBusSolution), dtype=torch.float32)
+
+    if 'generator' in sol_nodes:
+        gen_sol = sol_nodes['generator'][()]
+        if gen_sol.shape[0] == 2:
+            gen_sol = gen_sol.T
+        hdata['generator'].y = torch.tensor(_align_features(gen_sol, H5GeneratorSolution, JSONGeneratorSolution), dtype=torch.float32)
+
+    if 'load' in sol_nodes:
+        load_sol = sol_nodes['load'][()]
+        if load_sol.shape[0] == 2:
+            load_sol = load_sol.T
+        if load_sol.shape[1] == 2:
+            hdata['load'].y = torch.tensor(_align_features(load_sol, ContingencyH5LoadSolution, JSONLoad), dtype=torch.float32)
+
+
+def _process_edges_hdf5(hdata: HeteroData, grid, solution):
+    """Process edge data from HDF5 format."""
+    if 'edges' not in grid:
+        return
+    
+    edges = grid['edges']
+
+    # solution might not have edges in some structures (e.g. contingency)
+    sol_edges = solution.get('edges', {})
+
+    if 'ac_line' in edges:
+        ac_edge = edges['ac_line']
+        senders = ac_edge['senders'][()]
+        receivers = ac_edge['receivers'][()]
+        hdata['bus', 'ac_line', 'bus'].edge_index = torch.stack([
+            torch.tensor(senders, dtype=torch.long),
+            torch.tensor(receivers, dtype=torch.long)
+        ], dim=0)
+
+        ac_features = ac_edge['features'][()]
+        if ac_features.shape[0] == 9 or ac_features.shape[0] == 10:
+            ac_features = ac_features.T
+            
+        if ac_features.shape[0] > 0 and ac_features.shape[1] >= 9:
+            ac_x_final = _align_features(ac_features, H5ACLine, JSONACLine)
+        elif ac_features.shape[0] > 0:
+            ac_x_final = ac_features
+        else:
+            ac_x_final = np.zeros((0, len(JSONACLine.get_feature_names())))
+            
+        hdata['bus', 'ac_line', 'bus'].edge_attr = torch.tensor(ac_x_final, dtype=torch.float32)
+
+        # group-based and single scenario solution edges
+        if 'ac_line' in sol_edges:
+            ac_sol_obj = sol_edges['ac_line']
+            if isinstance(ac_sol_obj, h5py.Dataset):
+                ac_sol = ac_sol_obj[()]
+            elif isinstance(ac_sol_obj, h5py.Group) and 'features' in ac_sol_obj:
+                ac_sol = ac_sol_obj['features'][()]
+            else:
+                ac_sol = None
+            
+            if ac_sol is not None:
+                if ac_sol.shape[0] == 4:
+                    ac_sol = ac_sol.T
+                if ac_sol.shape[0] > 0:
+                    hdata['bus', 'ac_line', 'bus'].edge_label = torch.tensor(_align_features(ac_sol, H5EdgeSolution, JSONEdgeSolution),
+                                                                            dtype=torch.float32)
+                else:
+                    hdata['bus', 'ac_line', 'bus'].edge_label = torch.zeros((0, len(JSONEdgeSolution.get_feature_names())), dtype=torch.float32)
+
+    if 'transformer' in edges:
+        trans_edge = edges['transformer']
+        senders = trans_edge['senders'][()]
+        receivers = trans_edge['receivers'][()]
+        hdata['bus', 'transformer', 'bus'].edge_index = torch.stack([
+            torch.tensor(senders, dtype=torch.long),
+            torch.tensor(receivers, dtype=torch.long)
+        ], dim=0)
+
+        trans_features = trans_edge['features'][()]
+        if trans_features.shape[0] == 11 or trans_features.shape[0] == 12:
+            trans_features = trans_features.T
+
+        if trans_features.shape[0] > 0 and trans_features.shape[1] >= 11:
+            trans_x_final = _align_features(trans_features, H5Transformer, JSONTransformer)
+        elif trans_features.shape[0] > 0:
+            trans_x_final = trans_features
+        else:
+            trans_x_final = np.zeros((0, len(JSONTransformer.get_feature_names())))
+            
+        hdata['bus', 'transformer', 'bus'].edge_attr = torch.tensor(trans_x_final, dtype=torch.float32)
+
+        if 'transformer' in sol_edges:
+            tr_sol_obj = sol_edges['transformer']
+            if isinstance(tr_sol_obj, h5py.Dataset):
+                trans_sol = tr_sol_obj[()]
+            elif isinstance(tr_sol_obj, h5py.Group) and 'features' in tr_sol_obj:
+                trans_sol = tr_sol_obj['features'][()]
+            else:
+                trans_sol = None
+
+            if trans_sol is not None:
+                if trans_sol.shape[0] == 4:
+                    trans_sol = trans_sol.T
+                if trans_sol.shape[0] > 0:
+                    hdata['bus', 'transformer', 'bus'].edge_label = torch.tensor(_align_features(trans_sol, H5EdgeSolution, JSONEdgeSolution),
+                                                                                 dtype=torch.float32)
+                else:
+                    hdata['bus', 'transformer', 'bus'].edge_label = torch.zeros((0, len(JSONEdgeSolution.get_feature_names())), dtype=torch.float32)
+
+    _process_virtual_links_hdf5(hdata, edges)
+
+
+def _process_virtual_links_hdf5(hdata: HeteroData, edges):
+    """Process virtual links from HDF5 format."""
+    if 'generator_link' in edges:
+        gen_link = edges['generator_link']
+        senders = gen_link['senders'][()]
+        receivers = gen_link['receivers'][()]
+        hdata['generator', 'generator_link', 'bus'].edge_index = torch.stack([
+            torch.tensor(senders, dtype=torch.long),
+            torch.tensor(receivers, dtype=torch.long)
+        ], dim=0)
+        hdata['bus', 'generator_link', 'generator'].edge_index = torch.stack([
+            torch.tensor(receivers, dtype=torch.long),
+            torch.tensor(senders, dtype=torch.long)
+        ], dim=0)
+
+    if 'load_link' in edges:
+        load_link = edges['load_link']
+        senders = load_link['senders'][()]
+        receivers = load_link['receivers'][()]
+        hdata['load', 'load_link', 'bus'].edge_index = torch.stack([
+            torch.tensor(senders, dtype=torch.long),
+            torch.tensor(receivers, dtype=torch.long)
+        ], dim=0)
+        hdata['bus', 'load_link', 'load'].edge_index = torch.stack([
+            torch.tensor(receivers, dtype=torch.long),
+            torch.tensor(senders, dtype=torch.long)
+        ], dim=0)
+
+    if 'shunt_link' in edges:
+        shunt_link = edges['shunt_link']
+        senders = shunt_link['senders'][()]
+        receivers = shunt_link['receivers'][()]
+        if len(senders) > 0:
+            hdata['shunt', 'shunt_link', 'bus'].edge_index = torch.stack([
+                torch.tensor(senders, dtype=torch.long),
+                torch.tensor(receivers, dtype=torch.long)
+            ], dim=0)
+            hdata['bus', 'shunt_link', 'shunt'].edge_index = torch.stack([
+                torch.tensor(receivers, dtype=torch.long),
+                torch.tensor(senders, dtype=torch.long)
+            ], dim=0)
+        else:
+            hdata['shunt', 'shunt_link', 'bus'].edge_index = torch.empty((2, 0), dtype=torch.long)
+            hdata['bus', 'shunt_link', 'shunt'].edge_index = torch.empty((2, 0), dtype=torch.long)
+
+
+def process_hdf5_file(h5_file, n_jobs=1):
     """Process a single HDF5 file.
-    TODO: with new data format support in .h5
 
     Args:
         h5_file (str): Path to the HDF5 file.
+        n_jobs (int): Number of jobs for parallel processing. (default: 1)
 
     Returns:
-        data (HeteroData): Processed single data object.
+        List[HeteroData]: List of processed data objects.
     """
-    raise NotImplementedError("HDF5 processing not implemented yet.")
+    with h5py.File(h5_file, 'r') as f:
+        scenario_keys = list(f.keys())
+
+    if n_jobs == 1:
+        data_list = []
+        with h5py.File(h5_file, 'r') as f:
+            for scenario_key in scenario_keys:
+                try:
+                    scenario = f[scenario_key]
+                    hdata = process_hdf5_scenario(scenario, scenario_key)
+                    if hdata is not None:
+                        if isinstance(hdata, list):
+                            data_list.extend(hdata)
+                        else:
+                            data_list.append(hdata)
+                except Exception as e:
+                    print(f"Error processing scenario {scenario_key}: {e}")
+                    continue
+        return data_list
+    else:
+        results = Parallel(n_jobs=n_jobs, backend="threading")(
+            delayed(_process_hdf5_scenario_from_path)(h5_file, key)
+            for key in scenario_keys
+        )
+        
+        flattened = []
+        for r in results:
+            if r is None:
+                continue
+            if isinstance(r, list):
+                flattened.extend(r)
+            else:
+                flattened.append(r)
+        return flattened
