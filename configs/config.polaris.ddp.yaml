@@ -35,7 +35,8 @@ lagrangian:
   multiplier_improve_ratio: 0.9  # <= 0 keeps current always-update behavior
   multiplier_check_interval: 1
   multiplier_min_improve: 0.0
-  normalize_constraints: true
+  normalize_by_rms: false
+  normalize_by_size: true
   verbose: false
 train_split: 0.8
 val_split: 0.1

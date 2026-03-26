@@ -425,7 +425,9 @@ class AugmentedLagrangianACOPF(nn.Module):
         constraint_tolerance: float = 1e-4,
         max_outer_iterations: int = 20,
         max_inner_iterations: int = 50,
-        normalize_constraints: bool = False,
+        normalize_by_rms: Optional[bool] = None,
+        normalize_by_size: Optional[bool] = None,
+        normalize_constraints: Optional[bool] = None,
         verbose: bool = False,
         warmup_epochs: int = 0,
         warmup_samples: Optional[int] = None,
@@ -455,7 +457,9 @@ class AugmentedLagrangianACOPF(nn.Module):
             constraint_tolerance(float): Tolerance for constraint satisfaction
             max_outer_iterations(int): Maximum outer iterations(penalty updates)
             max_inner_iterations(int): Maximum inner iterations(optimization steps)
-            normalize_constraints(bool): Whether to normalize constraint violations
+            normalize_by_rms(Optional[bool]): If True, divide constraints by RMS magnitude.
+            normalize_by_size(Optional[bool]): If True, divide constraints by sqrt(vector_size).
+            normalize_constraints(Optional[bool]): Deprecated legacy switch. Use normalize_by_rms/normalize_by_size.
             verbose(bool): If True, print penalty update logging during training
             warmup_epochs(int): Number of epochs to run penalty-only (λ = 0)
             warmup_samples(Optional[int]): Sample-based warmup before multipliers activate
@@ -485,7 +489,23 @@ class AugmentedLagrangianACOPF(nn.Module):
         self.constraint_tolerance = constraint_tolerance
         self.max_outer_iterations = max_outer_iterations
         self.max_inner_iterations = max_inner_iterations
-        self.normalize_constraints = normalize_constraints
+        using_new_normalization_keys = normalize_by_rms is not None or normalize_by_size is not None
+        if using_new_normalization_keys:
+            self.normalize_by_rms = bool(False if normalize_by_rms is None else normalize_by_rms)
+            self.normalize_by_size = bool(True if normalize_by_size is None else normalize_by_size)
+        elif normalize_constraints is not None:
+            warnings.warn(
+                "`lagrangian.normalize_constraints` is deprecated and will be removed in a future release. "
+                "Use `lagrangian.normalize_by_rms` and `lagrangian.normalize_by_size` instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            legacy_enabled = bool(normalize_constraints)
+            self.normalize_by_rms = legacy_enabled
+            self.normalize_by_size = legacy_enabled
+        else:
+            self.normalize_by_rms = False
+            self.normalize_by_size = True
         self.verbose = verbose
         self.warmup_epochs = warmup_epochs
         self.warmup_samples = _LagrangianSchedule.normalize_sample_value(warmup_samples)
@@ -556,6 +576,21 @@ class AugmentedLagrangianACOPF(nn.Module):
         self._last_p_balance_rms: Optional[float] = None
         self._last_q_balance_rms: Optional[float] = None
         self._last_line_limit_rms: Optional[float] = None
+        self._last_line_limit_normalized_rms: Optional[float] = None
+
+    def _normalize_constraint_vector(self, constraints: torch.Tensor) -> torch.Tensor:
+        """Apply configured RMS/size normalization to a 1D constraint vector."""
+        if constraints.numel() == 0:
+            return constraints
+
+        normalized = constraints
+        if self.normalize_by_rms:
+            rms_value = torch.sqrt(torch.mean(normalized**2)) + 1e-8
+            normalized = normalized / rms_value
+        if self.normalize_by_size:
+            scale_factor = torch.sqrt(normalized.new_tensor(float(normalized.numel())))
+            normalized = normalized / scale_factor
+        return normalized
 
     def _warmup_complete(self) -> bool:
         return self._schedule.warmup_complete()
@@ -1007,15 +1042,7 @@ class AugmentedLagrangianACOPF(nn.Module):
         if constraints.dim() > 1:
             constraints = constraints.mean(dim=0)
 
-        # Normalize by number of buses and scale properly
-        if self.normalize_constraints:
-            # Scale constraints by RMS value and number of buses for better conditioning
-            rms_value = torch.sqrt(torch.mean(constraints**2)) + 1e-8
-            # Additional scaling by square root of number of constraints for stability
-            scale_factor = torch.sqrt(torch.tensor(float(len(constraints)), device=constraints.device))
-            constraints = constraints / (rms_value * scale_factor)
-
-        return constraints
+        return self._normalize_constraint_vector(constraints)
 
     def compute_line_flow_constraints(
         self,
@@ -1143,12 +1170,15 @@ class AugmentedLagrangianACOPF(nn.Module):
         limit_sq = line_limits.unsqueeze(0) ** 2
         violation_squared = torch.maximum(s_from_sq - limit_sq, s_to_sq - limit_sq)
         line_violations = torch.sqrt(torch.relu(violation_squared))
-        constraints = line_violations.mean(dim=0)
+        constraints_raw = line_violations.mean(dim=0)
+        constraints = self._normalize_constraint_vector(constraints_raw)
 
-        if constraints.numel() > 0:
-            self._last_line_limit_rms = float(torch.sqrt(torch.mean(constraints**2)).detach().item())
+        if constraints_raw.numel() > 0:
+            self._last_line_limit_rms = float(torch.sqrt(torch.mean(constraints_raw**2)).detach().item())
+            self._last_line_limit_normalized_rms = float(torch.sqrt(torch.mean(constraints**2)).detach().item())
         else:
             self._last_line_limit_rms = 0.0
+            self._last_line_limit_normalized_rms = 0.0
 
         return constraints
 
@@ -1296,6 +1326,9 @@ class AugmentedLagrangianACOPF(nn.Module):
             'p_balance_rmse': self._last_p_balance_rms,
             'q_balance_rmse': self._last_q_balance_rms,
             'line_limit_rmse': self._last_line_limit_rms,
+            'line_limit_normalized_rmse': self._last_line_limit_normalized_rms,
+            'normalize_by_rms': self.normalize_by_rms,
+            'normalize_by_size': self.normalize_by_size,
             'multipliers_active': self._should_use_multipliers(),
             'multiplier_updated': self._last_multiplier_updated,
             'last_multiplier_norm': last_multiplier_norm,
@@ -1468,3 +1501,7 @@ class AugmentedLagrangianACOPF(nn.Module):
         self._last_penalty_check_violation = None
         self._last_multiplier_violation = None
         self._last_multiplier_updated = False
+        self._last_p_balance_rms = None
+        self._last_q_balance_rms = None
+        self._last_line_limit_rms = None
+        self._last_line_limit_normalized_rms = None
