@@ -41,10 +41,13 @@ from lumina.dataset.opf.staging import (
     stage_sharded_case,
 )
 from lumina.model.base.utils import describe_model
-from lumina.model.opf.hetero_model import HEAT, HGT, RGAT, OPFHeteroGNN
 from lumina.model.opf.homo_model import get_gnnNets
 from lumina.model.opf.losses import OPFLossManager
-from lumina.trainer.opf.utils import HETERO_MODEL_TYPES, initialize_model
+from lumina.trainer.opf.utils import (
+    HETERO_MODEL_TYPES,
+    build_hetero_model_spec,
+    initialize_model,
+)
 from lumina.utils.graph_utils import HomoOPFDataset, convert_opf_to_homo
 from lumina.utils.throughput import ThroughputTracker
 
@@ -711,6 +714,15 @@ class BaseOPFTrainer:
                 if node_type in sample_data.x_dict:
                     input_channels[node_type] = sample_data[node_type].x.shape[1]
 
+            model_class, model_kwargs, model_config, used_fallback = build_hetero_model_spec(
+                model_type=self.model_type,
+                metadata=metadata_tuple,
+                input_channels=input_channels,
+                models_config=self.config.get("models", {}),
+                out_channels=per_node_output_size,
+            )
+            if used_fallback and self.global_rank == 0:
+                print(f"Warning: Config for {self.model_type} not found, using HeteroGNN config")
             if self.model_type in self.config["models"]:
                 model_config = self.config["models"][self.model_type]
             else:
@@ -746,7 +758,7 @@ class BaseOPFTrainer:
             self.model_class = f"{model_class.__module__}.{model_class.__name__}"
             self.model_kwargs = model_kwargs
 
-            model = model_class(**kwargs)
+            model = model_class(**model_kwargs)
 
             initialize_model(model, sample_data, self.device)
 

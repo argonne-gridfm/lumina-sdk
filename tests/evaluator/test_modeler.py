@@ -27,6 +27,7 @@ from types import SimpleNamespace
 
 from lumina.evaluator.opf.utils import Modeler
 from lumina.evaluator.opf.evaluator import ACOPFConstraintEvaluator
+from lumina.trainer.opf.utils import build_hetero_model_spec, resolve_hetero_model_type
 
 # The integration tests below will perform network downloads; disabled by default.
 RUN_INTEGRATION = os.getenv("RUN_LUMINA_INTEGRATION", "") == "1"
@@ -175,6 +176,35 @@ def test_build_constraint_evaluator_returns_evaluator():
     # Ensure the evaluator has expected attributes set (voltage_limits present)
     assert hasattr(evaluator, "voltage_limits")
     assert "vmin" in evaluator.voltage_limits and "vmax" in evaluator.voltage_limits
+
+
+def test_resolve_hetero_model_type_prefers_model_class_path():
+    """Model class path should take precedence over model type when both are present."""
+    resolved = resolve_hetero_model_type(
+        model_type="HeteroGNN",
+        model_class_path="lumina.model.opf.hetero_model.HGT",
+        default="HeteroGNN",
+    )
+    assert resolved == "HGT"
+
+
+def test_build_hetero_model_spec_uses_arch_specific_config():
+    """HGT kwargs should come from HGT config, not HeteroGNN fallback, when available."""
+    _, model_kwargs, _, used_fallback = build_hetero_model_spec(
+        model_type="HGT",
+        metadata=(["bus", "generator"], [("bus", "ac_line", "bus")]),
+        input_channels={"bus": 7, "generator": 11},
+        models_config={
+            "HeteroGNN": {"hidden_channels": 16, "num_layers": 1, "backend": "gcn"},
+            "HGT": {"hidden_channels": 128, "num_layers": 4, "num_heads": 8, "backend": "sage"},
+        },
+        out_channels=2,
+    )
+    assert used_fallback is False
+    assert model_kwargs["hidden_channels"] == 128
+    assert model_kwargs["num_layers"] == 4
+    assert model_kwargs["num_heads"] == 8
+    assert model_kwargs["backend"] == "sage"
 
 
 # --------------------
