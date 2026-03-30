@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import torch
 
-from lumina.dataset.opf.opf_dataset import OPFDataset, process_json_file, process_hdf5_file
+from lumina.dataset.opf.opf_dataset import OPFDataset, process_json_file, process_hdf5_scenario, _process_hdf5_scenario_from_path
 
 
 def create_mock_scenario_dict():
@@ -344,10 +344,16 @@ def test_standalone_hdf5_loading():
     if not os.path.exists(h5_path):
         pytest.skip(f"Test data {h5_path} not found")
         
-    data_list = process_hdf5_file(h5_path, n_jobs=2)
-    assert len(data_list) > 0
-    assert isinstance(data_list[0].baseMVA, torch.Tensor)
-    assert data_list[0].baseMVA.ndim == 1
+    with h5py.File(h5_path, 'r') as f:
+        scenario_key = list(f.keys())[0]
+        scenario = f[scenario_key]
+        data = process_hdf5_scenario(scenario, scenario_key)
+        
+    assert data is not None
+    if isinstance(data, list):
+        data = data[0]
+    assert isinstance(data.baseMVA, torch.Tensor)
+    assert data.baseMVA.ndim == 1
 
 def test_round_trip_alignment(tmp_path):
     # we try serializing the same data using each schema we know about, and validate that the resulting
@@ -361,7 +367,10 @@ def test_round_trip_alignment(tmp_path):
     save_as_hdf5(mock_data, h5_path)
 
     json_hdata = process_json_file(json_path)
-    hdf5_hdata = process_hdf5_file(h5_path)[0]
+    with h5py.File(h5_path, 'r') as f:
+        scenario_key = 'scenario_1'
+        scenario = f[scenario_key]
+        hdf5_hdata = process_hdf5_scenario(scenario, scenario_key)
 
     # same mock data loaded from different formats should have the same values
     assert torch.allclose(json_hdata.baseMVA.to(torch.float32), hdf5_hdata.baseMVA.to(torch.float32))
@@ -408,7 +417,15 @@ def test_contingency_loading(tmp_path):
     h5_path = osp.join(raw_dir, 'task_000001.h5')
     create_fake_contingency_h5(h5_path)
 
-    data_list = process_hdf5_file(h5_path)
+    with h5py.File(h5_path, 'r') as f:
+        data_list = []
+        for scenario_key in f.keys():
+            scenario = f[scenario_key]
+            res = process_hdf5_scenario(scenario, scenario_key)
+            if isinstance(res, list):
+                data_list.extend(res)
+            elif res is not None:
+                data_list.append(res)
     assert len(data_list) == 2
     objectives = sorted([d.objective.item() for d in data_list])
     assert objectives == [1234.5, 6789.0]
@@ -878,11 +895,19 @@ def test_apply_contingency_parallel_circuits():
 # --- End-to-end test ---
 
 def test_contingency_e2e_topology(tmp_path):
-    """Verify process_hdf5_file produces HeteroData with correct post-contingency topology."""
+    """Verify process_hdf5_scenario produces HeteroData with correct post-contingency topology."""
     h5_path = str(tmp_path / 'contingency_e2e.h5')
     create_fake_contingency_h5(h5_path)
 
-    data_list = process_hdf5_file(h5_path)
+    with h5py.File(h5_path, 'r') as f:
+        data_list = []
+        for scenario_key in f.keys():
+            scenario = f[scenario_key]
+            res = process_hdf5_scenario(scenario, scenario_key)
+            if isinstance(res, list):
+                data_list.extend(res)
+            elif res is not None:
+                data_list.append(res)
     assert len(data_list) == 2
 
     # Find contingency_000001 (branch tripped) and contingency_000002 (gen tripped)

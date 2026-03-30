@@ -38,9 +38,9 @@ from torch_geometric.data import (HeteroData, InMemoryDataset, download_url,
 
 from lumina.utils.graph_utils import OPFHomoWrapper
 
-from contingency import add_slack_generators, parse_contingency, apply_contingency
-from utils import extract_edge_index, extract_edge_index_rev
-from schema import (
+from .contingency import add_slack_generators, parse_contingency, apply_contingency
+from .utils import extract_edge_index, extract_edge_index_rev
+from .schema import (
     JSONBus, JSONGenerator, JSONLoad, JSONShunt, JSONACLine, JSONTransformer,
     JSONBusSolution, JSONGeneratorSolution, JSONEdgeSolution,
     H5Bus, H5Generator, H5Load, H5Shunt, H5ACLine, H5Transformer,
@@ -1096,47 +1096,3 @@ def _process_virtual_links_hdf5(hdata: HeteroData, edges):
             hdata['bus', 'shunt_link', 'shunt'].edge_index = torch.empty((2, 0), dtype=torch.long)
 
 
-def process_hdf5_file(h5_file, n_jobs=1):
-    """Process a single HDF5 file.
-
-    Args:
-        h5_file (str): Path to the HDF5 file.
-        n_jobs (int): Number of jobs for parallel processing. (default: 1)
-
-    Returns:
-        List[HeteroData]: List of processed data objects.
-    """
-    with h5py.File(h5_file, 'r') as f:
-        scenario_keys = list(f.keys())
-
-    if n_jobs == 1:
-        data_list = []
-        with h5py.File(h5_file, 'r') as f:
-            for scenario_key in scenario_keys:
-                try:
-                    scenario = f[scenario_key]
-                    hdata = process_hdf5_scenario(scenario, scenario_key)
-                    if hdata is not None:
-                        if isinstance(hdata, list):
-                            data_list.extend(hdata)
-                        else:
-                            data_list.append(hdata)
-                except Exception as e:
-                    print(f"Error processing scenario {scenario_key}: {e}")
-                    continue
-        return data_list
-    else:
-        results = Parallel(n_jobs=n_jobs, backend="threading")(
-            delayed(_process_hdf5_scenario_from_path)(h5_file, key)
-            for key in scenario_keys
-        )
-        
-        flattened = []
-        for r in results:
-            if r is None:
-                continue
-            if isinstance(r, list):
-                flattened.extend(r)
-            else:
-                flattened.append(r)
-        return flattened
