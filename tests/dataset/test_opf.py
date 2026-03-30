@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -10,16 +11,19 @@ from torch import Tensor
 from torch_geometric.data import HeteroData
 
 from lumina.dataset.opf.opf_dataset import build_heterodata_from_grid, process_json_file
+from lumina.dataset.opf.opf_on_disk_dataset import OPFOnDiskDataset
 
 
 _DATASET_DIR = Path(__file__).resolve().parent
-_EXAMPLE_JSON_PATH = _DATASET_DIR / "example_0.json"
-_PROCESS_JSON_SNAPSHOT_PATH = _DATASET_DIR / "example_0.process_json_file.pt"
+_EXAMPLE_JSON_PATH = _DATASET_DIR / "pglib_opf_case2000_goc_example_0.json"
+_PROCESS_JSON_SNAPSHOT_PATH = _DATASET_DIR / "pglib_opf_case2000_goc_example_0.process_json_file.pt"
+_ON_DISK_SNAPSHOT_PATH = _DATASET_DIR / "pglib_opf_case118_ieee_group_0_example_0.opf_on_disk_dataset.pt"
+_CASE118_TAR_PATH = _DATASET_DIR / "pglib_opf_case118_ieee_0.tar.gz"
 
 
-def _load_process_json_snapshot() -> HeteroData:
+def _load_snapshot(path: Path) -> HeteroData:
     snapshot = torch.load(
-        _PROCESS_JSON_SNAPSHOT_PATH,
+        path,
         map_location="cpu",
         weights_only=False,
     )
@@ -96,7 +100,7 @@ def _drop_targets(hdata: HeteroData) -> HeteroData:
 
 def test_process_json_file_example_0_matches_snapshot() -> None:
     actual = process_json_file(str(_EXAMPLE_JSON_PATH))
-    expected = _load_process_json_snapshot()
+    expected = _load_snapshot(_PROCESS_JSON_SNAPSHOT_PATH)
 
     assert_heterodata_exact_match(actual, expected)
 
@@ -106,7 +110,7 @@ def test_build_heterodata_from_grid_with_solution_matches_process_json_snapshot(
         obj = json.load(f)
 
     actual = build_heterodata_from_grid(obj["grid"], obj["metadata"], obj["solution"])
-    expected = _load_process_json_snapshot()
+    expected = _load_snapshot(_PROCESS_JSON_SNAPSHOT_PATH)
 
     assert_heterodata_exact_match(actual, expected)
 
@@ -116,6 +120,23 @@ def test_build_heterodata_from_grid_without_solution_matches_snapshot_without_ta
         obj = json.load(f)
 
     actual = build_heterodata_from_grid(obj["grid"], obj["metadata"])
-    expected = _drop_targets(_load_process_json_snapshot())
+    expected = _drop_targets(_load_snapshot(_PROCESS_JSON_SNAPSHOT_PATH))
+
+    assert_heterodata_exact_match(actual, expected)
+
+
+def test_opf_on_disk_dataset_processes_json_file_like_process_json_file(tmp_path) -> None:
+    raw_dir = tmp_path / "OPFData" / "raw" / "dataset_release_1"
+    raw_dir.mkdir(parents=True)
+    shutil.copy(_CASE118_TAR_PATH, raw_dir / "pglib_opf_case118_ieee_0.tar.gz")
+
+    actual = OPFOnDiskDataset(
+        root=str(tmp_path),
+        case_name="pglib_opf_case118_ieee",
+        group_id=0,
+        log=False,
+        write_batch_size=1,
+    ).get(0)
+    expected = _load_snapshot(_ON_DISK_SNAPSHOT_PATH)
 
     assert_heterodata_exact_match(actual, expected)
