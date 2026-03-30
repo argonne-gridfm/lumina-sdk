@@ -850,9 +850,20 @@ def _process_hdf5_scenario_from_path(h5_file_path, scenario_key):
         return process_hdf5_scenario(scenario, scenario_key)
 
 
-def _align_features(data: np.ndarray, src_schema, dst_schema) -> np.ndarray:
-    """feature indices are different between hdf5 acopf, json acopf, and hdf5 contingency and must be aligned."""
+def _align_features(data: np.ndarray, src_schema, dst_schema, aliases: dict = None) -> np.ndarray:
+    """feature indices are different between hdf5 acopf, json acopf, and hdf5 contingency and must be aligned.
+
+    Args:
+        aliases: optional mapping of src field names to dst field names for fields that are
+            semantically equivalent but have different names (e.g. {"pd_served": "pd"}).
+    """
     mapping = src_schema.get_alignment_map(dst_schema)
+    if aliases:
+        src_indices = src_schema.get_field_indices()
+        dst_indices = dst_schema.get_field_indices()
+        for src_name, dst_name in aliases.items():
+            if src_name in src_indices and dst_name in dst_indices:
+                mapping[src_indices[src_name]] = dst_indices[dst_name]
     aligned = np.zeros((data.shape[0], len(dst_schema.get_feature_names())))
     for src_idx, dst_idx in mapping.items():
         aligned[:, dst_idx] = data[:, src_idx]
@@ -953,7 +964,8 @@ def _process_nodes_hdf5(hdata: HeteroData, grid, solution):
         if load_sol.shape[0] == 2:
             load_sol = load_sol.T
         if load_sol.shape[1] == 2:
-            hdata['load'].y = torch.tensor(_align_features(load_sol, ContingencyH5LoadSolution, JSONLoad), dtype=torch.float32)
+            hdata['load'].y = torch.tensor(_align_features(load_sol, ContingencyH5LoadSolution, JSONLoad,
+                                                           aliases={"pd_served": "pd", "qd_served": "qd"}), dtype=torch.float32)
 
 
 def _process_edges_hdf5(hdata: HeteroData, grid, solution):
