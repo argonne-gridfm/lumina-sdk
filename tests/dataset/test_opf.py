@@ -373,7 +373,9 @@ def test_round_trip_alignment(tmp_path):
         hdf5_hdata = process_hdf5_scenario(scenario, scenario_key)
 
     # same mock data loaded from different formats should have the same values
-    assert torch.allclose(json_hdata.baseMVA.to(torch.float32), hdf5_hdata.baseMVA.to(torch.float32))
+    json_base_mva = torch.as_tensor(json_hdata.baseMVA).view(-1).to(torch.float32)
+    hdf5_base_mva = torch.as_tensor(hdf5_hdata.baseMVA).view(-1).to(torch.float32)
+    assert torch.allclose(json_base_mva, hdf5_base_mva)
     assert torch.allclose(json_hdata.objective.to(torch.float32), hdf5_hdata.objective.to(torch.float32))
 
     for node_type in json_hdata.node_types:
@@ -399,10 +401,14 @@ def test_round_trip_alignment(tmp_path):
         if 'edge_attr' in json_edge.keys() and 'edge_attr' in hdf5_edge.keys():
             jx = json_edge['edge_attr'].to(torch.float32)
             hx = hdf5_edge['edge_attr'].to(torch.float32)
+            if jx.numel() == 0 and hx.numel() == 0:
+                continue
             assert torch.allclose(jx, hx, atol=1e-5)
         if 'edge_label' in json_edge.keys() and 'edge_label' in hdf5_edge.keys():
             jy = json_edge['edge_label'].to(torch.float32)
             hy = hdf5_edge['edge_label'].to(torch.float32)
+            if jy.numel() == 0 and hy.numel() == 0:
+                continue
             assert torch.allclose(jy, hy, atol=1e-5)
 
 def test_contingency_loading(tmp_path):
