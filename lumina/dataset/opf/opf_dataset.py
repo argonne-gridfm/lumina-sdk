@@ -654,9 +654,21 @@ def process_json_file(json_file):
             print(f"Error decoding JSON from file: {json_file}")
             return None
 
-    grid = obj['grid']
-    solution = obj['solution']
-    metadata = obj['metadata']
+    return build_heterodata_from_grid(obj['grid'], obj['metadata'], obj['solution'])
+
+
+def build_heterodata_from_grid(grid: Dict, metadata: Dict, solution: Optional[Dict] = None):
+    r"""Build a single HeteroData graph from OPFData grid and metadata.
+
+    Args:
+        grid (Dict): Grid payload from an OPFData object.
+        metadata (Dict): Metadata payload from an OPFData object.
+        solution (Dict, optional): Solution payload from an OPFData object.
+
+    Returns:
+        data (HeteroData): Processed single data object.
+    """
+    obj = {'grid': grid}
 
     # Graph-level properties:
     hdata = HeteroData()
@@ -676,14 +688,16 @@ def process_json_file(json_file):
     # x: `base_kv, vmin, vmax, pg, pv, ref, isolated`
     bus_x_final = np.concatenate([bus_x_wo_type, bus_type_onehot], axis=1)
     hdata['bus'].x = torch.tensor(bus_x_final)
-    # y: `va, vm`
-    hdata['bus'].y = torch.tensor(solution['nodes']['bus'])
+    if solution is not None:
+        # y: `va, vm`
+        hdata['bus'].y = torch.tensor(solution['nodes']['bus'])
 
     # ! generator (only some have a target):
     # x: `mbase, pg, pmin, pmax, qg, qmin, qmax, vg, cost_squared, cost_linear, cost_offset`
     hdata['generator'].x = torch.tensor(grid['nodes']['generator'])
-    # y: `pg, qg`
-    hdata['generator'].y = torch.tensor(solution['nodes']['generator'])
+    if solution is not None:
+        # y: `pg, qg`
+        hdata['generator'].y = torch.tensor(solution['nodes']['generator'])
 
     # ! load (only some have a target):
     # x: `pd, qd`
@@ -697,15 +711,17 @@ def process_json_file(json_file):
     hdata['bus', 'ac_line', 'bus'].edge_index = extract_edge_index(obj, 'ac_line')
     # edge_attr: `angmin, angmax, b_fr, b_to, br_r, br_x, rate_a, rate_b, rate_c`
     hdata['bus', 'ac_line', 'bus'].edge_attr = torch.tensor(grid['edges']['ac_line']['features'])
-    # edge_label: `pt, qt, pf, qf`
-    hdata['bus', 'ac_line', 'bus'].edge_label = torch.tensor(solution['edges']['ac_line']['features'])
+    if solution is not None:
+        # edge_label: `pt, qt, pf, qf`
+        hdata['bus', 'ac_line', 'bus'].edge_label = torch.tensor(solution['edges']['ac_line']['features'])
 
     # ! transformer (only ac lines and transformers have features):
     hdata['bus', 'transformer', 'bus'].edge_index = extract_edge_index(obj, 'transformer')
     # edge_attr: `angmin, angmax, br_r, br_x, rate_a, rate_b, rate_c, tap, shift, b_fr, b_to`
     hdata['bus', 'transformer', 'bus'].edge_attr = torch.tensor(grid['edges']['transformer']['features'])
-    # edge_label: `pt, qt, pf, qf`
-    hdata['bus', 'transformer', 'bus'].edge_label = torch.tensor(solution['edges']['transformer']['features'])
+    if solution is not None:
+        # edge_label: `pt, qt, pf, qf`
+        hdata['bus', 'transformer', 'bus'].edge_label = torch.tensor(solution['edges']['transformer']['features'])
 
     # ! virtual links:
     # bus-generator
@@ -1107,5 +1123,4 @@ def _process_virtual_links_hdf5(hdata: HeteroData, edges):
         else:
             hdata['shunt', 'shunt_link', 'bus'].edge_index = torch.empty((2, 0), dtype=torch.long)
             hdata['bus', 'shunt_link', 'shunt'].edge_index = torch.empty((2, 0), dtype=torch.long)
-
 
