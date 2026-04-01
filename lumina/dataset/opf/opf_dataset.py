@@ -230,7 +230,7 @@ class OPFDataset(InMemoryDataset):
     def process(self) -> None:
         r""" Process the raw files into a single file. """
         h5_files = [f for f in self.raw_paths if f.endswith('.h5')]
-
+        
         if h5_files:
             print(f"HDF5 files detected: {h5_files}")
             try:
@@ -265,7 +265,7 @@ class OPFDataset(InMemoryDataset):
                 flattened_list.extend(item)
             else:
                 flattened_list.append(item)
-
+        
         data_list = flattened_list
 
         if self.pre_filter is not None or self.pre_transform is not None:
@@ -389,7 +389,7 @@ class OPFDataset(InMemoryDataset):
             delayed(_process_hdf5_scenario_from_path)(fn, key)
             for fn, key in tqdm.tqdm(tasks, desc=f"Group {group_id} HDF5")
         )
-
+        
         self._post_process_and_save(data_list, group_id)
     def __repr__(self) -> str:
         r""" Returns the string representation of the dataset. """
@@ -638,6 +638,25 @@ class OPFMultiDataset(ConcatDataset):
 
 
 
+def process_json_file(json_file):
+    r"""Process a single json file.
+
+    Args:
+        json_file (str): Path to the json file.
+
+    Returns:
+        data (HeteroData): Processed single data object.
+    """
+    with open(json_file) as f:
+        try:
+            obj = json.load(f)
+        except json.JSONDecodeError:
+            print(f"Error decoding JSON from file: {json_file}")
+            return None
+
+    return build_heterodata_from_grid(obj['grid'], obj['metadata'], obj['solution'])
+
+
 def build_heterodata_from_grid(grid: Dict, metadata: Dict, solution: Optional[Dict] = None):
     r"""Build a single HeteroData graph from OPFData grid and metadata.
 
@@ -716,25 +735,6 @@ def build_heterodata_from_grid(grid: Dict, metadata: Dict, solution: Optional[Di
     hdata['bus', 'shunt_link', 'shunt'].edge_index = extract_edge_index_rev(obj, 'shunt_link')
 
     return hdata
-
-
-def process_json_file(json_file):
-    r"""Process a single json file.
-
-    Args:
-        json_file (str): Path to the json file.
-
-    Returns:
-        data (HeteroData): Processed single data object.
-    """
-    with open(json_file) as f:
-        try:
-            obj = json.load(f)
-        except json.JSONDecodeError:
-            print(f"Error decoding JSON from file: {json_file}")
-            return None
-
-    return build_heterodata_from_grid(obj['grid'], obj['metadata'], obj['solution'])
 
 
 def process_hdf5_scenario(scenario, scenario_key: str) -> Union[Optional[HeteroData], List[HeteroData]]:
@@ -902,12 +902,12 @@ def _process_nodes_hdf5(hdata: HeteroData, grid, solution):
     bus_data = nodes['bus'][()]
     if bus_data.shape[0] == 5:
         bus_data = bus_data.T
-
+    
     if bus_data.shape[1] >= 5:
         # HDF5 bus: vmin, vmax, zone, area, bus_type
         # JSON bus: base_kv, bus_type, vmin, vmax
         aligned_bus = _align_features(bus_data, H5Bus, JSONBus)
-
+        
         # augment hdf5 data with base_kv if missing
         json_indices = JSONBus.get_field_indices()
         if 'base_kv' in json_indices and np.all(aligned_bus[:, json_indices['base_kv']] == 0):
@@ -929,7 +929,7 @@ def _process_nodes_hdf5(hdata: HeteroData, grid, solution):
     gen_data = nodes['generator'][()]
     if gen_data.shape[0] == 10: # H5 format from PowerModels.jl is column-major
         gen_data = gen_data.T
-
+    
     if gen_data.shape[1] >= 10:
         gen_x_final = _align_features(gen_data, H5Generator, JSONGenerator)
     else:
@@ -955,7 +955,7 @@ def _process_nodes_hdf5(hdata: HeteroData, grid, solution):
         shunt_data = nodes['shunt'][()]
         if shunt_data.shape[0] == 2:
             shunt_data = shunt_data.T
-
+            
         if shunt_data.shape[1] == 2:
             shunt_x_final = _align_features(shunt_data, H5Shunt, JSONShunt)
         else:
@@ -989,7 +989,7 @@ def _process_edges_hdf5(hdata: HeteroData, grid, solution):
     """Process edge data from HDF5 format."""
     if 'edges' not in grid:
         return
-
+    
     edges = grid['edges']
 
     # solution might not have edges in some structures (e.g. contingency)
@@ -1007,14 +1007,14 @@ def _process_edges_hdf5(hdata: HeteroData, grid, solution):
         ac_features = ac_edge['features'][()]
         if ac_features.shape[0] == 9 or ac_features.shape[0] == 10:
             ac_features = ac_features.T
-
+            
         if ac_features.shape[0] > 0 and ac_features.shape[1] >= 9:
             ac_x_final = _align_features(ac_features, H5ACLine, JSONACLine)
         elif ac_features.shape[0] > 0:
             ac_x_final = ac_features
         else:
             ac_x_final = np.zeros((0, len(JSONACLine.get_feature_names())))
-
+            
         hdata['bus', 'ac_line', 'bus'].edge_attr = torch.tensor(ac_x_final, dtype=torch.float32)
 
         # group-based and single scenario solution edges
@@ -1026,7 +1026,7 @@ def _process_edges_hdf5(hdata: HeteroData, grid, solution):
                 ac_sol = ac_sol_obj['features'][()]
             else:
                 ac_sol = None
-
+            
             if ac_sol is not None:
                 if ac_sol.shape[0] == 4:
                     ac_sol = ac_sol.T
@@ -1055,7 +1055,7 @@ def _process_edges_hdf5(hdata: HeteroData, grid, solution):
             trans_x_final = trans_features
         else:
             trans_x_final = np.zeros((0, len(JSONTransformer.get_feature_names())))
-
+            
         hdata['bus', 'transformer', 'bus'].edge_attr = torch.tensor(trans_x_final, dtype=torch.float32)
 
         if 'transformer' in sol_edges:
@@ -1123,3 +1123,4 @@ def _process_virtual_links_hdf5(hdata: HeteroData, edges):
         else:
             hdata['shunt', 'shunt_link', 'bus'].edge_index = torch.empty((2, 0), dtype=torch.long)
             hdata['bus', 'shunt_link', 'shunt'].edge_index = torch.empty((2, 0), dtype=torch.long)
+
