@@ -62,12 +62,12 @@ class JSONBus(OPFSchemaModel):
 class JSONGenerator(OPFSchemaModel):
     """Generator features in JSON format."""
     mbase: float = Field(..., description="Machine base power (MVA)")
-    pg: float = Field(..., description="Active power generation (MW)")
-    pmin: float = Field(..., description="Minimum active power output (MW)")
-    pmax: float = Field(..., description="Maximum active power output (MW)")
-    qg: float = Field(..., description="Reactive power generation (MVAr)")
-    qmin: float = Field(..., description="Minimum reactive power output (MVAr)")
-    qmax: float = Field(..., description="Maximum reactive power output (MVAr)")
+    pg: float = Field(..., description="Active power generation (p.u.)")
+    pmin: float = Field(..., description="Minimum active power output (p.u.)")
+    pmax: float = Field(..., description="Maximum active power output (p.u.)")
+    qg: float = Field(..., description="Reactive power generation (p.u.)")
+    qmin: float = Field(..., description="Minimum reactive power output (p.u.)")
+    qmax: float = Field(..., description="Maximum reactive power output (p.u.)")
     vg: float = Field(..., description="Voltage setpoint (p.u.)")
     cost_c2: float = Field(..., description="Quadratic cost coefficient ($/MW²/h)")
     cost_c1: float = Field(..., description="Linear cost coefficient ($/MW/h)")
@@ -75,8 +75,8 @@ class JSONGenerator(OPFSchemaModel):
 
 class JSONLoad(OPFSchemaModel):
     """Load features in JSON format."""
-    pd: float = Field(..., description="Active power demand (MW)")
-    qd: float = Field(..., description="Reactive power demand (MVAr)")
+    pd: float = Field(..., description="Active power demand (p.u.)")
+    qd: float = Field(..., description="Reactive power demand (p.u.)")
 
 class JSONShunt(OPFSchemaModel):
     """Shunt features in JSON format."""
@@ -116,15 +116,15 @@ class JSONBusSolution(OPFSchemaModel):
 
 class JSONGeneratorSolution(OPFSchemaModel):
     """Generator solution features in JSON format."""
-    pg: float = Field(..., description="Active power generation (MW)")
-    qg: float = Field(..., description="Reactive power generation (MVAr)")
+    pg: float = Field(..., description="Active power generation (p.u.)")
+    qg: float = Field(..., description="Reactive power generation (p.u.)")
 
 class JSONEdgeSolution(OPFSchemaModel):
     """Edge solution (AC Line/Transformer) features in JSON format."""
-    pt: float = Field(..., description="Active power flow (to side) (MW)")
-    qt: float = Field(..., description="Reactive power flow (to side) (MVAr)")
-    pf: float = Field(..., description="Active power flow (from side) (MW)")
-    qf: float = Field(..., description="Reactive power flow (from side) (MVAr)")
+    pt: float = Field(..., description="Active power flow (to side) (p.u.)")
+    qt: float = Field(..., description="Reactive power flow (to side) (p.u.)")
+    pf: float = Field(..., description="Active power flow (from side) (p.u.)")
+    qf: float = Field(..., description="Reactive power flow (from side) (p.u.)")
 
 class H5Bus(OPFSchemaModel):
     """Bus features in HDF5 format."""
@@ -136,10 +136,10 @@ class H5Bus(OPFSchemaModel):
 
 class H5Generator(OPFSchemaModel):
     """Generator features in HDF5 format."""
-    pmax: float = Field(..., description="Maximum active power output (MW)")
-    pmin: float = Field(..., description="Minimum active power output (MW)")
-    qmax: float = Field(..., description="Maximum reactive power output (MVAr)")
-    qmin: float = Field(..., description="Minimum reactive power output (MVAr)")
+    pmax: float = Field(..., description="Maximum active power output (p.u.)")
+    pmin: float = Field(..., description="Minimum active power output (p.u.)")
+    qmax: float = Field(..., description="Maximum reactive power output (p.u.)")
+    qmin: float = Field(..., description="Minimum reactive power output (p.u.)")
     cost_c2: float = Field(..., description="Quadratic cost coefficient ($/MW²/h)")
     cost_c1: float = Field(..., description="Linear cost coefficient ($/MW/h)")
     cost_c0: float = Field(..., description="Constant cost coefficient ($/h)")
@@ -149,8 +149,8 @@ class H5Generator(OPFSchemaModel):
 
 class H5Load(OPFSchemaModel):
     """Load features in HDF5 format."""
-    pd: float = Field(..., description="Active power demand (MW)")
-    qd: float = Field(..., description="Reactive power demand (MVAr)")
+    pd: float = Field(..., description="Active power demand (p.u.)")
+    qd: float = Field(..., description="Reactive power demand (p.u.)")
 
 class H5Shunt(OPFSchemaModel):
     """Shunt features in HDF5 format."""
@@ -192,25 +192,25 @@ class H5BusSolution(OPFSchemaModel):
 
 class H5GeneratorSolution(OPFSchemaModel):
     """Generator solution features in HDF5 format."""
-    pg: float = Field(..., description="Active power generation (MW)")
-    qg: float = Field(..., description="Reactive power generation (MVAr)")
+    pg: float = Field(..., description="Active power generation (p.u.)")
+    qg: float = Field(..., description="Reactive power generation (p.u.)")
 
 class H5EdgeSolution(OPFSchemaModel):
     """Edge solution (AC Line/Transformer) features in HDF5 format."""
-    pf: float = Field(..., description="Active power flow (from → to) (MW)")
-    qf: float = Field(..., description="Reactive power flow (from → to) (MVAr)")
-    pt: float = Field(..., description="Active power flow (to → from) (MW)")
-    qt: float = Field(..., description="Reactive power flow (to → from) (MVAr)")
+    pf: float = Field(..., description="Active power flow (from → to) (p.u.)")
+    qf: float = Field(..., description="Reactive power flow (from → to) (p.u.)")
+    pt: float = Field(..., description="Active power flow (to → from) (p.u.)")
+    qt: float = Field(..., description="Reactive power flow (to → from) (p.u.)")
 
 
 class ContingencyH5Load(OPFSchemaModel):
     """Load features in Contingency HDF5 format."""
-    pd: float = Field(..., description="Active power demand (MW)")
-    qd: float = Field(..., description="Reactive power demand (MVAr)")
+    pd: float = Field(..., description="Active power demand (p.u.)")
+    qd: float = Field(..., description="Reactive power demand (p.u.)")
     weight_p: float = Field(..., description="Load shedding priority weight (P)")
     weight_q: float = Field(..., description="Load shedding priority weight (Q)")
 
 class ContingencyH5LoadSolution(OPFSchemaModel):
     """Load solution features in Contingency HDF5 format."""
-    pd_served: float = Field(..., description="Active power actually served (MW)")
-    qd_served: float = Field(..., description="Reactive power actually served (MVAr)")
+    pd_served: float = Field(..., description="Active power actually served (p.u.)")
+    qd_served: float = Field(..., description="Reactive power actually served (p.u.)")

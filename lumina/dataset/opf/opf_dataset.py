@@ -382,7 +382,8 @@ class OPFDataset(InMemoryDataset):
         for h5_file in h5_files:
             with h5py.File(h5_file, 'r') as f:
                 for scenario_key in f.keys():
-                    tasks.append((h5_file, scenario_key))
+                    if 'grid' not in scenario_key:
+                        tasks.append((h5_file, scenario_key))
 
         data_list = Parallel(n_jobs=self.n_jobs, backend="threading")(
             delayed(_process_hdf5_scenario_from_path)(fn, key)
@@ -727,7 +728,7 @@ def process_hdf5_scenario(scenario, scenario_key: str) -> Union[Optional[HeteroD
         if 'base_solution' in scenario:
             return process_contingency_scenario(scenario, scenario_key)
 
-        grid = scenario['grid']
+        grid = scenario['grid'] if 'grid' in scenario else scenario.file['grid']
         solution = scenario['solution']
         metadata = scenario['metadata']
 
