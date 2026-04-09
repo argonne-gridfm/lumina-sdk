@@ -30,7 +30,8 @@ lagrangian:
   max_mu: 100.0
   
   # Whether to normalize constraints
-  normalize_constraints: true
+  normalize_by_rms: false
+  normalize_by_size: true
   
   # Verbose logging
   verbose: false

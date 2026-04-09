@@ -3,7 +3,22 @@ import json
 import torch
 import torch.distributed as dist
 
+from lumina.model.opf.hetero_model import HEAT, HGT, RGAT, OPFHeteroGNN
+
 HETERO_MODEL_TYPES = {"HeteroGNN", "RGAT", "HEAT", "HGT"}
+HETERO_MODEL_CLASSES = {
+    "HeteroGNN": OPFHeteroGNN,
+    "RGAT": RGAT,
+    "HEAT": HEAT,
+    "HGT": HGT,
+}
+_HETERO_MODEL_TYPE_LOOKUP = {
+    "heterognn": "HeteroGNN",
+    "opfheterognn": "HeteroGNN",
+    "rgat": "RGAT",
+    "heat": "HEAT",
+    "hgt": "HGT",
+}
 
 _CASE_NAME_MAPPING = {
     "case14": "pglib_opf_case14_ieee",
@@ -58,6 +73,86 @@ def parse_cases_arg(cases_arg):
         else:
             expanded.append(entry)
     return expanded
+
+
+def _canonical_hetero_model_type(model_type):
+    if not isinstance(model_type, str):
+        return None
+    return _HETERO_MODEL_TYPE_LOOKUP.get(model_type.strip().lower())
+
+
+def resolve_hetero_model_type(model_type=None, model_class_path=None, default="HeteroGNN"):
+    if isinstance(model_class_path, str) and model_class_path.strip():
+        class_name = model_class_path.rsplit(".", 1)[-1]
+        normalized = _canonical_hetero_model_type(class_name)
+        if normalized is not None:
+            return normalized
+        raise ValueError(
+            f"Unsupported hetero model class path '{model_class_path}'. "
+            f"Supported classes: {sorted(HETERO_MODEL_CLASSES.keys()) + ['OPFHeteroGNN']}"
+        )
+
+    if isinstance(model_type, str) and model_type.strip():
+        normalized = _canonical_hetero_model_type(model_type)
+        if normalized is not None:
+            return normalized
+        raise ValueError(
+            f"Unsupported hetero model type '{model_type}'. Supported types: {sorted(HETERO_MODEL_TYPES)}"
+        )
+
+    normalized_default = _canonical_hetero_model_type(default)
+    if normalized_default is not None:
+        return normalized_default
+
+    supported = ", ".join(sorted(HETERO_MODEL_TYPES))
+    raise ValueError(
+        f"Unable to resolve hetero model type from model_type='{model_type}' "
+        f"and model_class_path='{model_class_path}'. Supported types: {supported}"
+    )
+
+
+def build_hetero_model_spec(
+    model_type,
+    metadata,
+    input_channels,
+    models_config,
+    out_channels=2,
+):
+    normalized_type = resolve_hetero_model_type(model_type=model_type, default=None)
+    if normalized_type not in HETERO_MODEL_CLASSES:
+        supported = ", ".join(sorted(HETERO_MODEL_CLASSES.keys()))
+        raise ValueError(f"Unsupported hetero model type '{normalized_type}'. Supported types: {supported}")
+
+    if not isinstance(models_config, dict):
+        models_config = {}
+
+    model_config = models_config.get(normalized_type)
+    used_fallback = False
+    if not isinstance(model_config, dict):
+        fallback = models_config.get("HeteroGNN")
+        if isinstance(fallback, dict):
+            model_config = fallback
+            used_fallback = normalized_type != "HeteroGNN"
+        else:
+            model_config = {}
+
+    model_kwargs = {
+        "metadata": metadata,
+        "input_channels": input_channels,
+    }
+    model_kwargs.update(model_config)
+    model_kwargs["out_channels"] = int(out_channels)
+
+    model_kwargs.setdefault("hidden_channels", 64)
+    model_kwargs.setdefault("num_layers", 3)
+    model_kwargs.setdefault("backend", "sage")
+
+    if normalized_type in {"RGAT", "HGT"}:
+        model_kwargs.setdefault("num_heads", 1)
+    if normalized_type == "HEAT":
+        model_kwargs.setdefault("attention_heads", 1)
+
+    return HETERO_MODEL_CLASSES[normalized_type], model_kwargs, model_config, used_fallback
 
 
 def apply_nested(target_dict, dotted_key, value):

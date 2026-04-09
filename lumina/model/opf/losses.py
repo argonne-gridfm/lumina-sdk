@@ -2172,6 +2172,10 @@ class OPFLossManager(nn.Module):
                 info['lagrangian_warmup_epochs'] = self.lagrangian.warmup_epochs
             if hasattr(self.lagrangian, 'ema_beta'):
                 info['lagrangian_ema_beta'] = self.lagrangian.ema_beta
+            if hasattr(self.lagrangian, 'normalize_by_rms'):
+                info['lagrangian_normalize_by_rms'] = self.lagrangian.normalize_by_rms
+            if hasattr(self.lagrangian, 'normalize_by_size'):
+                info['lagrangian_normalize_by_size'] = self.lagrangian.normalize_by_size
 
         if hasattr(self.base_loss, 'get_loss_info'):
             info.update(self.base_loss.get_loss_info())

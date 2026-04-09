@@ -57,6 +57,15 @@ parameters:
       - 6000
       - 12000
       - 24000
+  # Constraint normalization knobs shared by power-balance and line-limit constraints.
+  # size normalization improves cross-topology comparability; RMS normalizes per-batch magnitude.
+  lagrangian.normalize_by_rms:
+    values:
+      - false
+      - true
+  lagrangian.normalize_by_size:
+    values:
+      - true
 early_terminate:
   type: hyperband
   max_iter: 20

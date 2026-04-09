@@ -20,4 +20,5 @@ models:
     hidden_channels: 2048
     num_layers: 8
     num_heads: 4
+    # Active regularization in HGT forward pass (after input projection + each HGT layer).
     dropout: 0.0

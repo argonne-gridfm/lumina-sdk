@@ -41,10 +41,13 @@ from lumina.dataset.opf.staging import (
     stage_sharded_case,
 )
 from lumina.model.base.utils import describe_model
-from lumina.model.opf.hetero_model import HEAT, HGT, RGAT, OPFHeteroGNN
 from lumina.model.opf.homo_model import get_gnnNets
 from lumina.model.opf.losses import OPFLossManager
-from lumina.trainer.opf.utils import HETERO_MODEL_TYPES, initialize_model
+from lumina.trainer.opf.utils import (
+    HETERO_MODEL_TYPES,
+    build_hetero_model_spec,
+    initialize_model,
+)
 from lumina.utils.graph_utils import HomoOPFDataset, convert_opf_to_homo
 from lumina.utils.throughput import ThroughputTracker
 
@@ -75,6 +78,8 @@ class BaseOPFTrainer:
         "train/lagrangian/penalty_mu",
         "train/lagrangian/multiplier_norm",
         "train/perf/constraint_eval_ms",
+        "train/perf/nonfinite_loss_skips",
+        "train/perf/nonfinite_grad_skips",
     )
     VAL_METRIC_NAMES = (
         "val/loss/total",
@@ -131,7 +136,11 @@ class BaseOPFTrainer:
             "train/feas/line_limit_rmse_pu",
         ),
         ("train/lagrangian/penalty_mu", "train/lagrangian/multiplier_norm"),
-        ("train/perf/constraint_eval_ms",),
+        (
+            "train/perf/constraint_eval_ms",
+            "train/perf/nonfinite_loss_skips",
+            "train/perf/nonfinite_grad_skips",
+        ),
     )
     VAL_METRIC_GROUPS = (
         ("val/loss/total", "val/loss/objective", "val/score"),
@@ -246,6 +255,7 @@ class BaseOPFTrainer:
             case_mix_every = 0
         self.case_mix_every_n_steps = max(0, case_mix_every)
         self.log_every_n_steps = training_config.get("log_every_n_steps", 0)
+        self.fail_on_nonfinite = bool(training_config.get("fail_on_nonfinite", False))
         self.log_every_n_samples = int(training_config.get("log_every_n_samples", 512) or 0)
         val_every_n_epochs = training_config.get(
             "val_every_n_epochs",
@@ -307,6 +317,8 @@ class BaseOPFTrainer:
 
         self.wandb_run = None
         self.wandb_enabled = False
+        self.nonfinite_loss_skips = 0
+        self.nonfinite_grad_skips = 0
 
         self.train_metric_names = list(self.TRAIN_METRIC_NAMES)
         self.val_metric_names = list(self.VAL_METRIC_NAMES)
@@ -702,6 +714,15 @@ class BaseOPFTrainer:
                 if node_type in sample_data.x_dict:
                     input_channels[node_type] = sample_data[node_type].x.shape[1]
 
+            model_class, model_kwargs, model_config, used_fallback = build_hetero_model_spec(
+                model_type=self.model_type,
+                metadata=metadata_tuple,
+                input_channels=input_channels,
+                models_config=self.config.get("models", {}),
+                out_channels=per_node_output_size,
+            )
+            if used_fallback and self.global_rank == 0:
+                print(f"Warning: Config for {self.model_type} not found, using HeteroGNN config")
             if self.model_type in self.config["models"]:
                 model_config = self.config["models"][self.model_type]
             else:
@@ -729,13 +750,15 @@ class BaseOPFTrainer:
 
             if self.model_type in {"RGAT", "HGT"}:
                 kwargs["num_heads"] = model_config.get("num_heads", 1)
+            if self.model_type == "HGT":
+                kwargs["dropout"] = model_config.get("dropout", 0.0)
             if self.model_type == "HEAT":
                 kwargs["attention_heads"] = model_config.get("attention_heads", 1)
 
             self.model_class = f"{model_class.__module__}.{model_class.__name__}"
             self.model_kwargs = model_kwargs
 
-            model = model_class(**kwargs)
+            model = model_class(**model_kwargs)
 
             initialize_model(model, sample_data, self.device)
 
@@ -939,7 +962,55 @@ class BaseOPFTrainer:
         if self.grad_clip_algo == "value":
             torch.nn.utils.clip_grad_value_(parameters, self.grad_clip_val)
         else:
-            torch.nn.utils.clip_grad_norm_(parameters, self.grad_clip_val)
+            torch.nn.utils.clip_grad_norm_(
+                parameters,
+                self.grad_clip_val,
+                error_if_nonfinite=True,
+            )
+
+    def _handle_nonfinite_loss(self, loss, batch_idx, case_name=None):
+        if torch.isfinite(loss).all():
+            return False
+        context = f"rank={self.global_rank} step={self.global_step} batch={batch_idx}"
+        if case_name is not None:
+            context = f"{context} case={case_name}"
+        message = f"Non-finite loss detected ({context}); skipping optimizer step."
+        if self.fail_on_nonfinite:
+            raise RuntimeError(message)
+        print(f"Warning: {message}")
+        self.nonfinite_loss_skips += 1
+        self.optimizer.zero_grad()
+        return True
+
+    def _ensure_finite_gradients(self, batch_idx, case_name=None):
+        context = f"rank={self.global_rank} step={self.global_step} batch={batch_idx}"
+        if case_name is not None:
+            context = f"{context} case={case_name}"
+
+        try:
+            self._clip_gradients()
+        except RuntimeError as error:
+            message = f"Non-finite gradients detected during clipping ({context}): {error}"
+            if self.fail_on_nonfinite:
+                raise RuntimeError(message) from error
+            print(f"Warning: {message}")
+            self.nonfinite_grad_skips += 1
+            self.optimizer.zero_grad()
+            return False
+
+        if self.grad_clip_val is None or self.grad_clip_val <= 0:
+            for parameter in self.model.parameters():
+                if not parameter.requires_grad or parameter.grad is None:
+                    continue
+                if not torch.isfinite(parameter.grad).all():
+                    message = f"Non-finite gradients detected without clipping ({context})."
+                    if self.fail_on_nonfinite:
+                        raise RuntimeError(message)
+                    print(f"Warning: {message}")
+                    self.nonfinite_grad_skips += 1
+                    self.optimizer.zero_grad()
+                    return False
+        return True
 
     def _init_wandb(self):
         if self.wandb_requested is False:
@@ -1726,6 +1797,10 @@ class OPFTrainer(BaseOPFTrainer):
             if self.log_every_n_samples and self.log_every_n_samples > 0:
                 self._log_wandb_step(loss_value, loss_info)
             loss = loss / self.accumulate_grad_batches
+            if self._handle_nonfinite_loss(loss, batch_idx):
+                accum_batches = 0
+                self._add_metric(metric_sums, metric_counts, "train/perf/nonfinite_loss_skips", 1.0)
+                continue
 
             loss.backward()
 
@@ -1736,7 +1811,10 @@ class OPFTrainer(BaseOPFTrainer):
             if should_step:
                 if tracker and tracker.measure_active():
                     tracker.accelerator_synchronize()
-                self._clip_gradients()
+                if not self._ensure_finite_gradients(batch_idx):
+                    accum_batches = 0
+                    self._add_metric(metric_sums, metric_counts, "train/perf/nonfinite_grad_skips", 1.0)
+                    continue
                 self.optimizer.step()
                 if self.scheduler is not None:
                     self.scheduler.step()
@@ -2341,6 +2419,11 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
             if self.log_every_n_samples and self.log_every_n_samples > 0:
                 self._log_wandb_step(loss_value, loss_info)
             loss = loss / self.accumulate_grad_batches
+            case_name = self.case_names[case_idx] if include_case_name else None
+            if self._handle_nonfinite_loss(loss, batch_idx, case_name=case_name):
+                accum_batches = 0
+                self._add_metric(metric_sums, metric_counts, "train/perf/nonfinite_loss_skips", 1.0)
+                return
             loss.backward()
 
             should_step = ((batch_idx + 1) % self.accumulate_grad_batches == 0) or ((batch_idx + 1) == total_steps)
@@ -2348,7 +2431,10 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
             if should_step:
                 if tracker and tracker.measure_active():
                     tracker.accelerator_synchronize()
-                self._clip_gradients()
+                if not self._ensure_finite_gradients(batch_idx, case_name=case_name):
+                    accum_batches = 0
+                    self._add_metric(metric_sums, metric_counts, "train/perf/nonfinite_grad_skips", 1.0)
+                    return
                 self.optimizer.step()
                 if self.scheduler is not None:
                     self.scheduler.step()

@@ -32,7 +32,8 @@ lagrangian:
   multiplier_improve_ratio: 0.9  # <= 0 keeps current always-update behavior
   multiplier_check_interval: 1
   multiplier_min_improve: 0.0
-  normalize_constraints: true
+  normalize_by_rms: false
+  normalize_by_size: true
   verbose: false
   warmup_samples: 12000
   penalty_check_samples: 12000
@@ -51,6 +52,9 @@ training:
   score_alpha: 1.0
   gradient_clip_val: 1.0
   gradient_clip_algorithm: "norm"
+  # When false, non-finite loss/gradient steps are skipped and tracked by train/perf/* metrics.
+  # When true, training raises immediately on non-finite loss/gradients for strict debugging.
+  fail_on_nonfinite: false
   accumulate_grad_batches: 1
   log_every_n_steps: 0
   log_every_n_samples: 8192

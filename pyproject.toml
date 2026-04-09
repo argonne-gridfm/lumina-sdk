@@ -19,14 +19,16 @@ classifiers = [
 ]
 dependencies = [
     # core dependencies
-    "torch",
-    "torch-geometric",
+    "torch>=2.9.1",
+    "torch-geometric>=2.7.0",
     "numpy",
     "pandas",
     "scipy",
     "networkx",
     "joblib",
-    "pyyaml"
+    "pyyaml",
+    "h5py",
+    "pydantic"
 ]
 
 [project.urls]
