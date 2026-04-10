@@ -13,6 +13,7 @@ All rights reserved.
 
 import torch
 import torch.nn as nn
+import warnings
 from typing import Dict, List, Optional, Tuple, Union
 
 
@@ -194,11 +195,19 @@ class ACOPFConstraintEvaluator(nn.Module):
                     if vm.numel() != n_bus:
                         # If vm length is a multiple of n_bus, repeat per sample
                         if vm.numel() % n_bus == 0:
+                            warnings.warn(
+                                "Repeated voltage limits across samples because bus vector length does not match base limit length. "
+                                "If this batch contains variable-size cases, VM bounds may be assigned to wrong buses."
+                            )
                             batch_size = vm.numel() // n_bus
                             vmin_cat = vmin.to(self.device).repeat(batch_size)
                             vmax_cat = vmax.to(self.device).repeat(batch_size)
                         else:
                             # Fallback: broadcast where possible
+                            warnings.warn(
+                                "Broadcasted voltage limits by repetition/truncation because bus vector length is not a multiple "
+                                "of base limit length; this can hide mixed-topology misalignment."
+                            )
                             vmin_cat = vmin.to(self.device).reshape(-1).repeat(vm.numel() //
                                                                                vmin.numel() + 1)[:vm.numel()]
                             vmax_cat = vmax.to(self.device).reshape(-1).repeat(vm.numel() //
@@ -236,10 +245,18 @@ class ACOPFConstraintEvaluator(nn.Module):
                     if pg.numel() != n_gen:
                         # Repeat per sample if sizes align
                         if pg.numel() % n_gen == 0:
+                            warnings.warn(
+                                "Repeated active-power limits across samples because generator vector length does not match base limit length. "
+                                "If this batch contains variable-size cases, PG bounds may be assigned to wrong generators."
+                            )
                             batch_size_g = pg.numel() // n_gen
                             pmin_cat = pmin.to(self.device).repeat(batch_size_g)
                             pmax_cat = pmax.to(self.device).repeat(batch_size_g)
                         else:
+                            warnings.warn(
+                                "Broadcasted active-power limits by repetition/truncation because generator vector length is not a multiple "
+                                "of base limit length; this can hide mixed-topology misalignment."
+                            )
                             pmin_cat = pmin.to(self.device).reshape(-1).repeat(pg.numel() //
                                                                                pmin.numel() + 1)[:pg.numel()]
                             pmax_cat = pmax.to(self.device).reshape(-1).repeat(pg.numel() //
@@ -270,10 +287,18 @@ class ACOPFConstraintEvaluator(nn.Module):
                     n_genq = int(qmin.numel())
                     if qg.numel() != n_genq:
                         if qg.numel() % n_genq == 0:
+                            warnings.warn(
+                                "Repeated reactive-power limits across samples because generator vector length does not match base limit length. "
+                                "If this batch contains variable-size cases, QG bounds may be assigned to wrong generators."
+                            )
                             batch_size_q = qg.numel() // n_genq
                             qmin_cat = qmin.to(self.device).repeat(batch_size_q)
                             qmax_cat = qmax.to(self.device).repeat(batch_size_q)
                         else:
+                            warnings.warn(
+                                "Broadcasted reactive-power limits by repetition/truncation because generator vector length is not a multiple "
+                                "of base limit length; this can hide mixed-topology misalignment."
+                            )
                             qmin_cat = qmin.to(self.device).reshape(-1).repeat(qg.numel() //
                                                                                qmin.numel() + 1)[:qg.numel()]
                             qmax_cat = qmax.to(self.device).reshape(-1).repeat(qg.numel() //
