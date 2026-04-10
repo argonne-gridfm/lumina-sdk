@@ -11,6 +11,7 @@ All rights reserved.
 import argparse
 import json
 import os
+import warnings
 from pathlib import Path
 from typing import List, Optional
 
@@ -339,6 +340,11 @@ def evaluate_case(
 ) -> dict:
     """Evaluate model on a single test case."""
     print(f"Evaluating case: {case_name}")
+    if constraint_backend is None:
+        warnings.warn(
+            "No constraint_backend supplied to evaluate_case; "
+            "constraint violations will only include bound terms and omit power-balance/thermal-flow checks."
+        )
 
     print("Running predictions")
     pred_batch_pairs = []

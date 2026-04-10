@@ -812,6 +812,12 @@ class Modeler:
         Example:
             >>> stats = modeler.evaluate_from_predictions(pred_batch_pairs, cache_key="case14")
         """
+        if constraint_backend is None:
+            warnings.warn(
+                "No constraint_backend supplied to evaluate_from_predictions; "
+                "the evaluator will only report bound violations and skip power-balance/thermal-flow violations."
+            )
+
         if len(pred_batch_pairs) == 0:
             raise ValueError("No predictions provided for evaluation.")
 

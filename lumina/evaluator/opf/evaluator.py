@@ -324,6 +324,13 @@ class ACOPFConstraintEvaluator(nn.Module):
             Dictionary containing all constraint violations
         """
         all_violations = {}
+        if constraint_backend is None:
+            import warnings
+
+            warnings.warn(
+                "No constraint_backend supplied to evaluate_all_constraints; "
+                "the evaluator will only report bound violations and skip power-balance/thermal-flow checks."
+            )
 
         # Evaluate bound constraints
         bound_violations = self.evaluate_bound_constraints(predictions, batch_data, return_individual)
