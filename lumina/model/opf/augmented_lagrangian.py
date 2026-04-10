@@ -1032,15 +1032,9 @@ class AugmentedLagrangianACOPF(nn.Module):
             self._last_p_balance_rms = None
             self._last_q_balance_rms = None
 
-        # Combine P and Q constraints: [P_1, P_2, ..., P_n, Q_1, Q_2, ..., Q_n]
-        constraints = torch.cat([p_balance, q_balance], dim=-1)  # Shape: [batch_size, 2*n_bus]
-
-        if single_sample:
-            constraints = constraints.squeeze(0)
-
-        # For batch processing, we take the mean across batch dimension
-        if constraints.dim() > 1:
-            constraints = constraints.mean(dim=0)
+        p_rms = torch.sqrt((p_balance**2).mean(dim=0) + 1e-8) # [n_bus]
+        q_rms = torch.sqrt((q_balance**2).mean(dim=0) + 1e-8) # [n_bus]
+        constraints = torch.cat([p_rms, q_rms], dim=-1) #[2 * n_bus]
 
         return self._normalize_constraint_vector(constraints)
 
