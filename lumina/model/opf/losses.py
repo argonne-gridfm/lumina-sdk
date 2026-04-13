@@ -510,6 +510,14 @@ class OPFLossManager(nn.Module):
         # Track whether Lagrangian network parameters have been initialized
         self._lagrangian_initialized = False
 
+    def _raise_if_unsupported_homo_contingencies(self, batch):
+        if self._is_homo_batch(batch) and getattr(batch, "n_contingencies", None) is not None:
+            raise ValueError(
+                "Homogeneous OPF batches with contingency samples are not supported. "
+                "The homo constraint path builds network parameters from graph 0 only, "
+                "which is incorrect for contingency batches. Use a hetero model or disable contingency data."
+            )
+
     def compute_loss(
         self,
         predictions: Dict[str, torch.Tensor],
@@ -533,6 +541,7 @@ class OPFLossManager(nn.Module):
         """
         # Extract targets from batch
         targets = self._extract_targets(predictions, batch)
+        self._raise_if_unsupported_homo_contingencies(batch)
 
         if self._is_homo_batch(batch) and hasattr(batch, "y_mask"):
             predictions, targets = self._apply_homo_target_mask(
@@ -666,6 +675,7 @@ class OPFLossManager(nn.Module):
             return {}
         if 'bus' not in predictions or 'generator' not in predictions:
             return {}
+        self._raise_if_unsupported_homo_contingencies(batch)
 
         timing_start = self._start_constraint_timing()
         try:
@@ -741,6 +751,7 @@ class OPFLossManager(nn.Module):
             return {}
         if 'bus' not in predictions or 'generator' not in predictions:
             return {}
+        self._raise_if_unsupported_homo_contingencies(batch)
 
         timing_start = self._start_constraint_timing()
         device = predictions['bus'].device
@@ -1976,6 +1987,7 @@ class OPFLossManager(nn.Module):
             return
 
         if self._is_homo_batch(batch):
+            self._raise_if_unsupported_homo_contingencies(batch)
             node_type = getattr(batch, 'node_type', None)
             if node_type is None:
                 return
