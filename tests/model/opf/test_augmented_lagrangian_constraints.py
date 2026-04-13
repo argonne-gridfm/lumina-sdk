@@ -1,4 +1,5 @@
 import torch
+import pytest
 from types import MethodType
 from torch_geometric.data import HeteroData
 
@@ -107,3 +108,14 @@ def test_augmented_lagrangian_state_accumulates():
     lambda_after_second = manager.lagrangian.lambda_k
 
     assert torch.any(lambda_after_second != lambda_after_first)
+
+
+def test_homo_contingency_batches_raise_error():
+    device = torch.device("cpu")
+    manager = OPFLossManager(loss_type='augmented_lagrangian')
+    batch = _build_dummy_batch(device)
+    batch.n_contingencies = 1
+    homo_batch = batch.to_homogeneous()
+
+    with pytest.raises(ValueError, match="Homogeneous OPF batches with contingency samples are not supported"):
+        manager._ensure_network_parameters(homo_batch, device)

@@ -788,6 +788,7 @@ class Modeler:
         pred_batch_pairs: List[Tuple[dict, object]],
         normalize: bool = True,
         cache_key: Optional[str] = None,
+        constraint_backend=None,
     ):
         """
         Evaluate constraints using previously computed predictions and their corresponding batches.
@@ -797,6 +798,7 @@ class Modeler:
                 produced by `run_predictions`.
             normalize (bool, optional): Whether to normalize violations in the evaluator. Defaults to True.
             cache_key (Optional[str], optional): Cache key to pass to `derive_line_params` for reusing line matrices.
+            constraint_backend (optional): Backend to compute training-aligned constraint metrics.
 
         Returns:
             dict: Aggregated statistics keyed by violation name. Each value is a dict with keys:
@@ -810,6 +812,12 @@ class Modeler:
         Example:
             >>> stats = modeler.evaluate_from_predictions(pred_batch_pairs, cache_key="case14")
         """
+        if constraint_backend is None:
+            warnings.warn(
+                "No constraint_backend supplied to evaluate_from_predictions; "
+                "the evaluator will only report bound violations and skip power-balance/thermal-flow violations."
+            )
+
         if len(pred_batch_pairs) == 0:
             raise ValueError("No predictions provided for evaluation.")
 
@@ -835,6 +843,7 @@ class Modeler:
                 batch_data=batch,
                 normalize=normalize,
                 return_individual=False,
+                constraint_backend=constraint_backend,
             )
             summary = evaluator.get_violation_summary(violations)
 
