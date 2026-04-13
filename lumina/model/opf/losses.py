@@ -1873,6 +1873,8 @@ class OPFLossManager(nn.Module):
         return y_real_sparse, y_imag_sparse
 
     def _resolve_case_id(self, batch):
+        if getattr(batch, "n_contingencies", None) is not None:
+            return None
         case_id = getattr(batch, "case_id", None)
         if case_id is None:
             return None

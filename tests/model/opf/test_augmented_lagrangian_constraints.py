@@ -107,3 +107,13 @@ def test_augmented_lagrangian_state_accumulates():
     lambda_after_second = manager.lagrangian.lambda_k
 
     assert torch.any(lambda_after_second != lambda_after_first)
+
+
+def test_contingency_batches_skip_case_y_cache():
+    device = torch.device("cpu")
+    manager = OPFLossManager(loss_type='augmented_lagrangian')
+    batch = _build_dummy_batch(device)
+    batch.case_id = torch.tensor(7)
+    batch.n_contingencies = 1
+
+    assert manager._resolve_case_id(batch) is None
