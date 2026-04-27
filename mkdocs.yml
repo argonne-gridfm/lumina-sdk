@@ -1,7 +1,7 @@
 site_name: LUMINA Documentation
 site_description: Large-scale Unified Model for Intelligent Grid Applications
-site_url: https://argonne-gridfm.github.io/lumina-core/
-repo_url: https://github.com/argonne-gridfm/lumina-core
+site_url: https://cshjin.github.io/lumina-sdk/
+repo_url: https://github.com/cshjin/lumina-sdk
 repo_name: argonne-gridfm/lumina-core
 
 theme:
