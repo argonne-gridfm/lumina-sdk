@@ -335,15 +335,9 @@ def evaluate_case(
     modeler: Modeler,
     max_batches: Optional[int],
     normalize: bool,
-    constraint_backend=None,
 ) -> dict:
     """Evaluate model on a single test case."""
     print(f"Evaluating case: {case_name}")
-    if constraint_backend is None:
-        warnings.warn(
-            "No constraint_backend supplied to evaluate_case; "
-            "constraint violations will only include bound terms and omit power-balance/thermal-flow checks."
-        )
 
     print("Running predictions")
     pred_batch_pairs = []
@@ -374,7 +368,6 @@ def evaluate_case(
             pred_batch_pairs,
             normalize=normalize,
             cache_key=case_name,
-            constraint_backend=constraint_backend,
         )
 
     print("Computing prediction errors")
@@ -774,12 +767,6 @@ def main():
         base_mva=args.base_mva,
         slack_bus_indices=args.slack_bus_indices
     )
-    constraint_backend = OPFLossManager(
-        loss_type="mse",
-        device=device,
-    )
-    constraint_backend.eval()
-
     if args.checkpoint_dir:
         model, config = load_model_from_checkpoint(args.checkpoint_dir, modeler)
     elif args.checkpoint_file:
@@ -827,7 +814,6 @@ def main():
                 modeler,
                 args.max_batches,
                 args.normalize,
-                constraint_backend=constraint_backend,
             )
             results.append(result)
         except Exception as e:

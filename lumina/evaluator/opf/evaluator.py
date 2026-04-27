@@ -333,7 +333,6 @@ class ACOPFConstraintEvaluator(nn.Module):
         batch_data,
         normalize: bool = True,
         return_individual: bool = True,
-        constraint_backend=None,
     ) -> Dict[str, Union[torch.Tensor, Dict[str, torch.Tensor]]]:
         """
         Evaluate all constraint violations comprehensively.
@@ -343,32 +342,15 @@ class ACOPFConstraintEvaluator(nn.Module):
             batch_data: Batch data containing network information
             normalize: Whether to normalize violations
             return_individual: Whether to return individual violation components
-            constraint_backend: Optional backend providing training-aligned constraint metrics
 
         Returns:
             Dictionary containing all constraint violations
         """
         all_violations = {}
-        if constraint_backend is None:
-            import warnings
-
-            warnings.warn(
-                "No constraint_backend supplied to evaluate_all_constraints; "
-                "the evaluator will only report bound violations and skip power-balance/thermal-flow checks."
-            )
 
         # Evaluate bound constraints
         bound_violations = self.evaluate_bound_constraints(predictions, batch_data, return_individual)
         all_violations.update({f"bound_{k}": v for k, v in bound_violations.items()})
-
-        if constraint_backend is not None:
-            backend_info = constraint_backend.compute_constraint_metrics(
-                predictions,
-                batch_data,
-                return_components=return_individual,
-            )
-            for key, value in backend_info.items():
-                all_violations[f"backend_{key}"] = value
 
         # Compute total constraint violation
         # violation_keys = ['bound_total_bound_violations', 'real_power_flow_violations', 'reactive_power_flow_violations', 'line_flow_violations']

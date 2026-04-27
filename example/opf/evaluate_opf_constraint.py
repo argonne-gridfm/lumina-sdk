@@ -243,11 +243,9 @@ def main():
                 batch_data=batch,
                 normalize=True,
                 return_individual=False,
-                constraint_backend=loss_manager,
             )
             summary = evaluator.get_violation_summary(violations)
 
-            backend_info = {k[len("backend_"):]: v for k, v in summary.items() if k.startswith("backend_")}
             bound_info = {k: v for k, v in summary.items() if k.startswith("bound_")}
 
             for info_key, metric_name in metric_map:

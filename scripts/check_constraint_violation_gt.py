@@ -123,16 +123,10 @@ def main() -> None:
                 predictions,
                 batch,
                 return_info=True,
-                collect_constraints=True,
             )
 
             metrics = {
                 "loss": loss,
-                "raw_constraint_violation": info.get("raw_constraint_violation"),
-                "raw_constraint_violation_norm": info.get("raw_constraint_violation_norm"),
-                "p_balance_rmse": info.get("p_balance_rmse"),
-                "q_balance_rmse": info.get("q_balance_rmse"),
-                "line_limit_rmse": info.get("line_limit_rmse"),
             }
 
             pretty_parts = []
