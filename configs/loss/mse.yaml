@@ -4,8 +4,6 @@
 
 loss_type: mse
 
-# No lagrangian configuration needed for standard ML losses
-
 # Note: You can also use other standard loss types:
 # - rmse: Root Mean Squared Error
 # - mae: Mean Absolute Error  

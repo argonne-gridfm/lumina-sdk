@@ -24,22 +24,6 @@ def set_seed(seed):
         torch.backends.cudnn.benchmark = False
 
 
-def LagM_generate(vio_lag, device):
-    """ Lagrangian multipliers for multi-topology
-
-    Args:
-        vil_lag (dict):
-        device (torch.device):
-
-    Returns:
-        (tuple): inequality line, equality active power, equality reactive power Lagrangian multipliers
-    """
-    ineq_LagM_line = torch.ones(1, 2 * vio_lag.nl).to(device=device)
-    eq_LagM_active = torch.ones(1, vio_lag.nbus).to(device=device)
-    eq_LagM_reactive = torch.ones(1, vio_lag.nbus).to(device=device)
-    return ineq_LagM_line, eq_LagM_active, eq_LagM_reactive
-
-
 def dict_agg(stats, key, value, op='concat'):
     """ Aggregate or update a dictionary entry by summing or concatenating values in place
 

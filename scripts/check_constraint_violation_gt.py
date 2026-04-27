@@ -94,16 +94,9 @@ def main() -> None:
     dataset = OPFDataset(root=args.root, case_name=case_name, group_id=args.group_id)
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
 
-    lag_config = {
-        "normalize_by_rms": bool(args.normalize_by_rms),
-        "normalize_by_size": not bool(args.no_normalize_by_size),
-        "angles_in_degrees": bool(args.angles_in_degrees),
-    }
     loss_manager = OPFLossManager(
         loss_type="mse",
         device=device,
-        lagrangian_config=lag_config,
-        log_normalized_violation=bool(args.log_normalized_violation),
     )
     loss_manager.eval()
 

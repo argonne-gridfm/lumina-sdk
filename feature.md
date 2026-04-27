@@ -27,10 +27,6 @@
 | M5 | **Homogeneous GNNs** | GCN, GAT, GIN, Transformer for homogeneous graphs |
 | M6 | **Model Factory** | `ModelFactory` for config-driven model instantiation |
 | M7 | **Standard Losses** | MSE, RMSE, MAE, MAPE, SmoothL1 with per-node-type weighting |
-| M8 | **Augmented Lagrangian** | Physics-informed loss with dual variables, adaptive penalty, warmup, EMA smoothing |
-| M9 | **Violated Lagrangian** | Violation-based penalty using absolute constraint violations |
-| M10 | **Y-Bus Caching** | Sparse admittance matrix caching with CPU/GPU fallback for constraint computation |
-| M11 | **Constraint Normalization** | RMS-based and size-based normalization for balanced constraint handling |
 | M12 | **Physics-Informed Loss** | `PhysicsInformedLoss` with quadratic/absolute/log-barrier penalty methods |
 
 ## Training
@@ -49,7 +45,6 @@
 | T10 | **Early Stopping** | Patience-based stopping on validation loss |
 | T11 | **Throughput Tracking** | `ThroughputTracker` — samples/sec measurement with warmup phase and metadata |
 | T12 | **Validation Subset Sampling** | Seeded subset of validation set for faster evaluation |
-| T13 | **Lagrangian Multiplier Sync** | Weighted all-reduce of constraint violations across DDP ranks |
 
 ## Evaluation
 
