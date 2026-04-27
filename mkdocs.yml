@@ -1,0 +1,79 @@
+site_name: LUMINA Documentation
+site_description: Large-scale Unified Model for Intelligent Grid Applications
+site_url: https://argonne-gridfm.github.io/lumina-core/
+repo_url: https://github.com/argonne-gridfm/lumina-core
+repo_name: argonne-gridfm/lumina-core
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - content.code.copy
+    - content.code.annotate
+    - search.suggest
+    - search.highlight
+    - toc.follow
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [.]
+          options:
+            show_source: true
+            show_root_heading: true
+            show_root_full_path: false
+            docstring_style: google
+            members_order: source
+            show_signature_annotations: true
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+  - attr_list
+  - md_in_html
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quickstart: getting-started/quickstart.md
+  - Tutorials:
+    - Training Your First Model: tutorials/training.md
+    - Multi-Case Training: tutorials/multi-case.md
+    - Evaluation: tutorials/evaluation.md
+    - Custom Models: tutorials/custom-models.md
+    - HPC Training: tutorials/hpc.md
+  - API Reference:
+    - Dataset: api/dataset.md
+    - Model: api/model.md
+    - Trainer: api/trainer.md
+    - Evaluator: api/evaluator.md
+    - Loader: api/loader.md
+    - Utilities: api/utils.md
+  - Configuration: configuration.md
