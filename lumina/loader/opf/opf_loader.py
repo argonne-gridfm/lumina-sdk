@@ -15,6 +15,20 @@ from torch_geometric.typing import TensorFrame, torch_frame
 
 
 class Collater:
+    """Custom collation function for PyG data objects.
+
+    Handles batching of ``BaseData`` objects via ``Batch.from_data_list``,
+    as well as tensors, ``TensorFrame`` instances, and nested Python
+    collections (dicts, named tuples, lists).
+
+    Args:
+        dataset (Dataset | Sequence[BaseData] | DatasetAdapter): Source
+            dataset (used for type inference; not indexed during collation).
+        follow_batch (list[str], optional): Keys for which to create
+            assignment batch vectors.
+        exclude_keys (list[str], optional): Keys to exclude from batching.
+    """
+
     def __init__(
         self,
         dataset: Union[Dataset, Sequence[BaseData], DatasetAdapter],
@@ -26,6 +40,17 @@ class Collater:
         self.exclude_keys = exclude_keys
 
     def __call__(self, batch: List[Any]) -> Any:
+        """Collate a list of data elements into a batch.
+
+        Args:
+            batch (list[Any]): List of individual data elements.
+
+        Returns:
+            Any: Batched data, whose type depends on the element type.
+
+        Raises:
+            TypeError: If the element type is not supported.
+        """
         elem = batch[0]
         if isinstance(elem, BaseData):
             return Batch.from_data_list(

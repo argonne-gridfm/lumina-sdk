@@ -247,7 +247,15 @@ class OPFDataset(InMemoryDataset):
             shutil.rmtree(osp.join(self.raw_dir, 'gridopt-dataset-tmp'))
 
     def _post_process_and_save(self, data_list: List[Optional[Union[HeteroData, List[HeteroData]]]], group_id: int):
-        """Helper to filter, transform, collate and save processed data."""
+        """Filter, transform, collate, and save processed data to disk.
+
+        Args:
+            data_list (List[Optional[Union[HeteroData, List[HeteroData]]]]): Raw
+                processed samples, which may contain ``None`` entries or nested
+                lists. These are flattened, filtered, and transformed before
+                collation.
+            group_id (int): Group identifier used for the output filename.
+        """
         flattened_list = []
         for item in data_list:
             if item is None:
@@ -389,7 +397,30 @@ class OPFDataset(InMemoryDataset):
 
 
 class OPFHomogeneousDataset(OPFDataset):
-    r"""OPFDataset variant that stores homogeneous graphs during preprocessing."""
+    r"""OPFDataset variant that converts heterogeneous graphs to homogeneous during preprocessing.
+
+    Wraps each HeteroData sample through :class:`OPFHomoWrapper` before saving,
+    producing homogeneous ``Data`` objects with optional one-hot node/edge type
+    indicators. Non-finite target values are sanitized and a ``y_mask`` is stored.
+
+    Args:
+        *args: Positional arguments forwarded to :class:`OPFDataset`.
+        add_node_type (bool): Append one-hot node type features to ``x``.
+            (default: :obj:`True`)
+        add_edge_type (bool): Append one-hot edge type features to ``edge_attr``.
+            (default: :obj:`True`)
+        attach_full_edge_attr (bool): Attach the full concatenated edge attribute
+            tensor as ``edge_attr_full``. (default: :obj:`False`)
+        sanitize_targets (bool): Replace non-finite target values with zero.
+            (default: :obj:`True`)
+        log_bad_targets (bool): Log a warning when non-finite targets are found.
+            (default: :obj:`True`)
+        max_bad_target_logs (int): Maximum number of bad-target warnings to emit.
+            (default: :obj:`1`)
+        processed_suffix (str): Suffix appended to the release name for the
+            processed directory. (default: :obj:`"homo"`)
+        **kwargs: Additional keyword arguments forwarded to :class:`OPFDataset`.
+    """
 
     def __init__(
         self,
@@ -728,7 +759,17 @@ def build_heterodata_from_grid(grid: Dict, metadata: Dict, solution: Optional[Di
 
 
 def process_hdf5_scenario(scenario, scenario_key: str) -> Union[Optional[HeteroData], List[HeteroData]]:
-    """Process a single scenario from HDF5 format to HeteroData."""
+    """Process a single HDF5 scenario group into a HeteroData graph.
+
+    Args:
+        scenario: An open HDF5 group containing ``grid``, ``solution``, and
+            ``metadata`` subgroups for one OPF scenario.
+        scenario_key (str): Key identifying the scenario within the HDF5 file.
+
+    Returns:
+        Union[Optional[HeteroData], List[HeteroData]]: The constructed
+            HeteroData object, or ``None`` if processing fails.
+    """
     try:
         grid = scenario['grid'] if 'grid' in scenario else scenario.file['grid']
         solution = scenario['solution']
@@ -749,17 +790,43 @@ def process_hdf5_scenario(scenario, scenario_key: str) -> Union[Optional[HeteroD
 
 
 def _process_hdf5_scenario_from_path(h5_file_path, scenario_key):
+    """Open an HDF5 file and process a single scenario by key.
+
+    This is a convenience wrapper around :func:`process_hdf5_scenario` that
+    handles file I/O, making it safe for use with joblib parallelism.
+
+    Args:
+        h5_file_path (str): Path to the HDF5 file on disk.
+        scenario_key (str): Key identifying the scenario within the HDF5 file.
+
+    Returns:
+        Union[Optional[HeteroData], List[HeteroData]]: The constructed
+            HeteroData object, or ``None`` if processing fails.
+    """
     with h5py.File(h5_file_path, 'r') as f:
         scenario = f[scenario_key]
         return process_hdf5_scenario(scenario, scenario_key)
 
 
 def _align_features(data: np.ndarray, src_schema, dst_schema, aliases: dict = None) -> np.ndarray:
-    """feature indices are different between hdf5 acopf and json acopf and must be aligned.
+    """Reorder feature columns from one OPF schema to another.
+
+    Feature indices differ between HDF5 and JSON OPF formats. This function
+    maps columns from ``src_schema`` ordering into ``dst_schema`` ordering,
+    filling unmatched columns with zeros.
 
     Args:
-        aliases: optional mapping of src field names to dst field names for fields that are
-            semantically equivalent but have different names (e.g. {"pd_served": "pd"}).
+        data (np.ndarray): Input feature array of shape ``(N, F_src)``.
+        src_schema: Source :class:`OPFSchemaModel` subclass defining the
+            input column ordering.
+        dst_schema: Destination :class:`OPFSchemaModel` subclass defining the
+            desired output column ordering.
+        aliases (dict, optional): Mapping of source field names to destination
+            field names for semantically equivalent fields with different names,
+            e.g. ``{"pd_served": "pd"}``.
+
+    Returns:
+        np.ndarray: Aligned feature array of shape ``(N, F_dst)``.
     """
     mapping = src_schema.get_alignment_map(dst_schema)
     if aliases:
@@ -775,7 +842,22 @@ def _align_features(data: np.ndarray, src_schema, dst_schema, aliases: dict = No
 
 
 def _process_nodes_hdf5(hdata: HeteroData, grid, solution):
-    """Process node data from HDF5 format aligned with JSON schema."""
+    """Populate node features and targets on a HeteroData graph from HDF5 data.
+
+    Reads bus, generator, load, and shunt node arrays from the HDF5 ``grid``
+    and ``solution`` groups, aligns them to the canonical JSON schema column
+    ordering, and stores them as ``x`` and ``y`` tensors on *hdata*.
+
+    Args:
+        hdata (HeteroData): Target graph object to populate in place.
+        grid: HDF5 group containing ``nodes`` with bus, generator, load, and
+            shunt datasets.
+        solution: HDF5 group containing ``nodes`` with solution datasets.
+
+    Raises:
+        Exception: If required node types (bus, load, generator) are missing
+            from the grid.
+    """
     nodes = grid['nodes']
     sol_nodes = solution['nodes']
 
@@ -869,7 +951,19 @@ def _process_nodes_hdf5(hdata: HeteroData, grid, solution):
 
 
 def _process_edges_hdf5(hdata: HeteroData, grid, solution):
-    """Process edge data from HDF5 format."""
+    """Populate edge indices, attributes, and labels on a HeteroData graph from HDF5 data.
+
+    Reads ac_line and transformer edge data from the HDF5 ``grid`` and
+    ``solution`` groups, aligns features to the JSON schema ordering, and
+    delegates virtual link construction to :func:`_process_virtual_links_hdf5`.
+
+    Args:
+        hdata (HeteroData): Target graph object to populate in place.
+        grid: HDF5 group containing an ``edges`` subgroup with ac_line,
+            transformer, and virtual link datasets.
+        solution: HDF5 group containing an ``edges`` subgroup with edge
+            solution datasets.
+    """
     if 'edges' not in grid:
         return
     
@@ -963,7 +1057,16 @@ def _process_edges_hdf5(hdata: HeteroData, grid, solution):
 
 
 def _process_virtual_links_hdf5(hdata: HeteroData, edges):
-    """Process virtual links from HDF5 format."""
+    """Populate virtual link edge indices on a HeteroData graph from HDF5 data.
+
+    Creates bidirectional edges for generator_link, load_link, and shunt_link
+    connecting device nodes to their associated bus nodes.
+
+    Args:
+        hdata (HeteroData): Target graph object to populate in place.
+        edges: HDF5 group containing virtual link datasets with ``senders``
+            and ``receivers`` arrays.
+    """
     if 'generator_link' in edges:
         gen_link = edges['generator_link']
         senders = gen_link['senders'][()]

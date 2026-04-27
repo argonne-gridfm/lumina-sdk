@@ -22,6 +22,20 @@ def _expand_path(path: Optional[str]) -> Optional[str]:
 
 
 def resolve_stage_root(staging_config: Optional[dict]) -> Optional[str]:
+    """Determine the staging root directory from config or environment variables.
+
+    Checks the ``staging_config["root"]`` key first, then falls back to
+    ``LUMINA_STAGE_ROOT``, ``SLURM_TMPDIR``, and ``TMPDIR`` environment
+    variables (in that order), appending ``lumina_stage`` as a subdirectory.
+
+    Args:
+        staging_config (Optional[dict]): Configuration dictionary that may
+            contain a ``"root"`` key with an explicit staging path.
+
+    Returns:
+        Optional[str]: Resolved staging root path, or ``None`` if no valid
+            path could be determined.
+    """
     root = None
     if isinstance(staging_config, dict):
         root = staging_config.get("root")
@@ -36,6 +50,15 @@ def resolve_stage_root(staging_config: Optional[dict]) -> Optional[str]:
 
 
 def opf_release(processed_suffix: Optional[str] = None) -> str:
+    """Build the release directory name, optionally appending a suffix.
+
+    Args:
+        processed_suffix (Optional[str]): Suffix to append (e.g. ``"homo"``).
+
+    Returns:
+        str: Release string such as ``"dataset_release_1"`` or
+            ``"dataset_release_1_homo"``.
+    """
     release = "dataset_release_1"
     if processed_suffix:
         release += f"_{processed_suffix}"
@@ -47,6 +70,16 @@ def on_disk_processed_dir(
     case_name: str,
     processed_suffix: Optional[str] = None,
 ) -> str:
+    """Return the on-disk processed directory path for a given case.
+
+    Args:
+        root (str): Dataset root directory.
+        case_name (str): Name of the pglib-opf case.
+        processed_suffix (Optional[str]): Release directory suffix.
+
+    Returns:
+        str: Absolute path to the on-disk processed directory.
+    """
     return osp.join(
         root,
         "OPFData",
@@ -57,6 +90,15 @@ def on_disk_processed_dir(
 
 
 def on_disk_db_name(group_id: int, backend: str) -> str:
+    """Return the database filename for a group and backend.
+
+    Args:
+        group_id (int): Group identifier.
+        backend (str): Database backend (``"sqlite"`` or ``"rocksdb"``).
+
+    Returns:
+        str: Filename such as ``"group_0.sqlite.db"`` or ``"group_0.rocksdb"``.
+    """
     if backend == "rocksdb":
         return f"group_{group_id}.rocksdb"
     return f"group_{group_id}.{backend}.db"
@@ -69,6 +111,18 @@ def get_on_disk_db_path(
     backend: str,
     processed_suffix: Optional[str] = None,
 ) -> str:
+    """Return the full path to an on-disk database file.
+
+    Args:
+        root (str): Dataset root directory.
+        case_name (str): Name of the pglib-opf case.
+        group_id (int): Group identifier.
+        backend (str): Database backend (``"sqlite"`` or ``"rocksdb"``).
+        processed_suffix (Optional[str]): Release directory suffix.
+
+    Returns:
+        str: Absolute path to the database file.
+    """
     processed_dir = on_disk_processed_dir(root, case_name, processed_suffix)
     return osp.join(processed_dir, on_disk_db_name(group_id, backend))
 
@@ -80,6 +134,18 @@ def get_on_disk_lock_path(
     backend: str,
     processed_suffix: Optional[str] = None,
 ) -> str:
+    """Return the lock file path for an on-disk database.
+
+    Args:
+        root (str): Dataset root directory.
+        case_name (str): Name of the pglib-opf case.
+        group_id (int): Group identifier.
+        backend (str): Database backend (``"sqlite"`` or ``"rocksdb"``).
+        processed_suffix (Optional[str]): Release directory suffix.
+
+    Returns:
+        str: Absolute path to the ``.lock`` file.
+    """
     return (
         get_on_disk_db_path(
             root,
@@ -97,6 +163,16 @@ def sharded_processed_dir(
     case_name: str,
     processed_suffix: Optional[str] = None,
 ) -> str:
+    """Return the sharded processed directory path for a given case.
+
+    Args:
+        root (str): Dataset root directory.
+        case_name (str): Name of the pglib-opf case.
+        processed_suffix (Optional[str]): Release directory suffix.
+
+    Returns:
+        str: Absolute path to the sharded processed directory.
+    """
     return osp.join(
         root,
         "OPFData",
@@ -112,6 +188,17 @@ def get_sharded_manifest_path(
     processed_suffix: Optional[str] = None,
     manifest_name: str = "manifest.json",
 ) -> str:
+    """Return the path to the shard manifest JSON file.
+
+    Args:
+        root (str): Dataset root directory.
+        case_name (str): Name of the pglib-opf case.
+        processed_suffix (Optional[str]): Release directory suffix.
+        manifest_name (str): Manifest filename. (default: :obj:`"manifest.json"`)
+
+    Returns:
+        str: Absolute path to the manifest file.
+    """
     return osp.join(
         sharded_processed_dir(root, case_name, processed_suffix),
         manifest_name,
@@ -124,6 +211,17 @@ def get_sharded_lock_path(
     processed_suffix: Optional[str] = None,
     manifest_name: str = "manifest.json",
 ) -> str:
+    """Return the lock file path for the shard manifest.
+
+    Args:
+        root (str): Dataset root directory.
+        case_name (str): Name of the pglib-opf case.
+        processed_suffix (Optional[str]): Release directory suffix.
+        manifest_name (str): Manifest filename. (default: :obj:`"manifest.json"`)
+
+    Returns:
+        str: Absolute path to the ``.lock`` file for the manifest.
+    """
     return (
         get_sharded_manifest_path(
             root,
@@ -137,6 +235,22 @@ def get_sharded_lock_path(
 
 @contextmanager
 def file_lock(path: str, timeout_sec: Optional[int] = 3600):
+    """Context manager that acquires an exclusive file lock using ``fcntl``.
+
+    Creates the lock file's parent directory if needed. On platforms where
+    ``fcntl`` is unavailable (e.g. Windows), the lock is a no-op.
+
+    Args:
+        path (str): Path to the lock file.
+        timeout_sec (Optional[int]): Maximum seconds to wait for the lock.
+            ``None`` waits indefinitely. (default: :obj:`3600`)
+
+    Yields:
+        None
+
+    Raises:
+        TimeoutError: If the lock cannot be acquired within *timeout_sec*.
+    """
     if fcntl is None:
         yield
         return
@@ -192,6 +306,28 @@ def stage_on_disk_group(
     processed_suffix: Optional[str] = None,
     log: bool = True,
 ) -> str:
+    """Copy an on-disk database from the source root to a local staging root.
+
+    Skips the copy if source and destination are the same path or if the
+    destination already exists with the same file size. Also copies SQLite
+    sidecar files (WAL, SHM, journal) when present.
+
+    Args:
+        source_root (str): Root directory containing the source database.
+        stage_root (str): Local staging root to copy into.
+        case_name (str): Name of the pglib-opf case.
+        group_id (int): Group identifier.
+        backend (str): Database backend (``"sqlite"`` or ``"rocksdb"``).
+        processed_suffix (Optional[str]): Release directory suffix.
+        log (bool): Enable copy logging. (default: :obj:`True`)
+
+    Returns:
+        str: The effective root directory to use (either *stage_root* or
+            *source_root* if staging was skipped).
+
+    Raises:
+        FileNotFoundError: If the source database does not exist.
+    """
     source_root = _expand_path(source_root) or source_root
     stage_root = _expand_path(stage_root) or stage_root
 
@@ -245,6 +381,27 @@ def stage_sharded_case(
     manifest_name: str = "manifest.json",
     log: bool = True,
 ) -> str:
+    """Copy an entire sharded case directory from source to a staging root.
+
+    Skips the copy if source and destination are the same path or if the
+    destination manifest already exists with the same file size.
+
+    Args:
+        source_root (str): Root directory containing the source sharded data.
+        stage_root (str): Local staging root to copy into.
+        case_name (str): Name of the pglib-opf case.
+        processed_suffix (Optional[str]): Release directory suffix.
+        manifest_name (str): Manifest filename.
+            (default: :obj:`"manifest.json"`)
+        log (bool): Enable copy logging. (default: :obj:`True`)
+
+    Returns:
+        str: The effective root directory to use (either *stage_root* or
+            *source_root* if staging was skipped).
+
+    Raises:
+        FileNotFoundError: If the source sharded directory does not exist.
+    """
     source_root = _expand_path(source_root) or source_root
     stage_root = _expand_path(stage_root) or stage_root
 
