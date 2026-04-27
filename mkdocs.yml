@@ -21,14 +21,19 @@ theme:
         name: Switch to light mode
   features:
     - navigation.tabs
+    - navigation.tabs.sticky
     - navigation.sections
     - navigation.expand
+    - navigation.indexes
     - navigation.top
+    - navigation.instant
+    - navigation.instant.progress
     - content.code.copy
     - content.code.annotate
     - search.suggest
     - search.highlight
     - toc.follow
+    - toc.integrate
 
 plugins:
   - search
@@ -61,15 +66,18 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting Started:
+    - getting-started/index.md
     - Installation: getting-started/installation.md
     - Quickstart: getting-started/quickstart.md
   - Tutorials:
+    - tutorials/index.md
     - Training Your First Model: tutorials/training.md
     - Multi-Case Training: tutorials/multi-case.md
     - Evaluation: tutorials/evaluation.md
     - Custom Models: tutorials/custom-models.md
     - HPC Training: tutorials/hpc.md
   - API Reference:
+    - api/index.md
     - Dataset: api/dataset.md
     - Model: api/model.md
     - Trainer: api/trainer.md
@@ -77,3 +85,8 @@ nav:
     - Loader: api/loader.md
     - Utilities: api/utils.md
   - Configuration: configuration.md
+  - Resources:
+    - HuggingFace Integration: huggingface.md
+    - Polaris Setup: polaris.md
+    - Perlmutter Setup: perlmutter.md
+    - W&B Sweeps on Perlmutter: wandb_sweep_perlmutter.md
