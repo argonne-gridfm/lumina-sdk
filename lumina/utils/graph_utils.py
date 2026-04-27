@@ -23,9 +23,21 @@ from torch_geometric.transforms import ToUndirected
 
 
 class OPFHomoWrapper:
-    """
-    Simple wrapper that uses PyTorch Geometric's native to_homogeneous() method
-    to convert OPF heterogeneous data for homogeneous GNN training.
+    """Wrapper using PyG's ``to_homogeneous()`` for OPF hetero-to-homo conversion.
+
+    Converts ``HeteroData`` objects into ``Data`` objects suitable for
+    homogeneous GNN training, preserving node/edge type indicators and
+    optionally storing padded edge attributes.
+
+    Args:
+        add_node_type (bool): Whether to add ``node_type`` tensor to the
+            converted data.
+        add_edge_type (bool): Whether to add ``edge_type`` tensor to the
+            converted data.
+        dummy_values (bool): Whether to fill missing attributes with zeros.
+        attach_full_edge_attr (bool): Whether to compute and store
+            ``edge_attr_full`` (all edge attributes padded to a uniform
+            width).
     """
 
     def __init__(self,
@@ -33,27 +45,20 @@ class OPFHomoWrapper:
                  add_edge_type: bool = True,
                  dummy_values: bool = True,
                  attach_full_edge_attr: bool = False):
-        """
-        Args:
-            add_node_type: Whether to add node type information to converted data
-            add_edge_type: Whether to add edge type information to converted data
-            dummy_values: Whether to fill missing attributes with dummy values
-            attach_full_edge_attr: Whether to store padded edge_attr_full for all edges
-        """
         self.add_node_type = add_node_type
         self.add_edge_type = add_edge_type
         self.dummy_values = dummy_values
         self.attach_full_edge_attr = attach_full_edge_attr
 
     def convert(self, hetero_data: HeteroData) -> Data:
-        """
-        Convert heterogeneous OPF data to homogeneous format using PyG's native method.
+        """Convert heterogeneous OPF data to homogeneous format via PyG.
 
         Args:
-            hetero_data: Input heterogeneous graph
+            hetero_data (HeteroData): Input heterogeneous graph.
 
         Returns:
-            Homogeneous graph data object
+            Data: Homogeneous graph with ``node_type_names`` and
+                ``edge_type_names`` attributes attached.
         """
         homo_data = hetero_data.to_homogeneous(
             add_node_type=self.add_node_type,
@@ -130,18 +135,21 @@ class OPFHomoWrapper:
 
 
 class OPFHeteroWrapper:
-    """
-    Wrapper that converts homogeneous GNN models to work with heterogeneous OPF data
-    without using to_hetero() to avoid compatibility issues.
+    """Wrapper that runs a homogeneous GNN on heterogeneous OPF inputs.
+
+    Instead of using ``to_hetero()`` (which can cause ``torch.fx`` issues),
+    this wrapper converts heterogeneous inputs to a simplified homogeneous
+    format, runs the underlying model, and returns outputs keyed by node
+    type.
+
+    Args:
+        model (torch.nn.Module): Homogeneous GNN model instance.
+        metadata (tuple): Graph metadata ``(node_types, edge_types)``.
+        aggr (str): Aggregation method for combining embeddings from
+            different relations (currently unused; reserved for future use).
     """
 
     def __init__(self, model, metadata, aggr: str = 'sum'):
-        """
-        Args:
-            model: Homogeneous GNN model to convert
-            metadata: Graph metadata (node_types, edge_types)
-            aggr: Aggregation method for combining embeddings from different relations
-        """
         self.homo_model = model
         self.metadata = metadata
         self.aggr = aggr
@@ -150,9 +158,17 @@ class OPFHeteroWrapper:
         # This is more stable and avoids torch.fx issues
 
     def __call__(self, x_dict, edge_index_dict, edge_attr_dict=None):
-        """
-        Forward pass that converts hetero input to homo format, runs the model,
-        and converts back to hetero format.
+        """Forward pass: converts hetero inputs to homo, runs model, returns per-type dict.
+
+        Args:
+            x_dict (dict[str, torch.Tensor]): Per-node-type feature tensors.
+            edge_index_dict (dict[tuple, torch.Tensor]): Per-edge-type
+                connectivity tensors.
+            edge_attr_dict (dict[tuple, torch.Tensor], optional): Per-edge-type
+                attribute tensors.
+
+        Returns:
+            dict[str, torch.Tensor]: Model output keyed by the primary node type.
         """
         # Convert heterogeneous input to homogeneous format
         # This is a simplified version that works with OPF data structure
@@ -218,8 +234,22 @@ class OPFHeteroWrapper:
 
 
 class HomoOPFDataset:
-    """
-    Dataset wrapper that converts OPF heterogeneous data to homogeneous on-the-fly.
+    """Dataset wrapper that converts OPF hetero graphs to homogeneous on-the-fly.
+
+    Wraps an existing OPF dataset and applies ``OPFHomoWrapper.convert()``
+    to each sample at access time. Non-finite targets are optionally
+    sanitized (replaced with zeros) and flagged via a ``y_mask`` attribute.
+
+    Args:
+        opf_dataset: Original OPFDataset or ``Subset`` instance.
+        add_node_type (bool): Whether to include node type information.
+        add_edge_type (bool): Whether to include edge type information.
+        sanitize_targets (bool): If ``True``, replace non-finite target values
+            with zeros and attach a ``y_mask`` boolean tensor.
+        log_bad_targets (bool): If ``True``, print a warning when non-finite
+            targets are detected (rank-0 only).
+        max_bad_target_logs (int): Maximum number of bad-target warnings to
+            emit per dataset instance.
     """
 
     def __init__(
@@ -231,15 +261,6 @@ class HomoOPFDataset:
         log_bad_targets: bool = True,
         max_bad_target_logs: int = 1,
     ):
-        """
-        Args:
-            opf_dataset: Original OPFDataset instance
-            add_node_type: Whether to include node type information
-            add_edge_type: Whether to include edge type information
-            sanitize_targets: Replace non-finite targets with zeros and attach y_mask
-            log_bad_targets: Log when non-finite targets are detected
-            max_bad_target_logs: Maximum number of log messages per dataset instance
-        """
         self.opf_dataset = opf_dataset
         self.converter = OPFHomoWrapper(
             add_node_type=add_node_type,
@@ -334,18 +355,24 @@ def prepare_opf_training_data(dataset,
                               val_ratio: float = 0.1,
                               test_ratio: float = 0.1,
                               use_homogeneous: bool = True):
-    """
-    Prepare OPF dataset for training with proper train/val/test splits.
+    """Split an OPF dataset into train/val/test subsets.
+
+    Creates random index-based subsets and optionally wraps each in
+    ``HomoOPFDataset`` for homogeneous model training.
 
     Args:
-        dataset: OPFDataset instance
-        train_ratio: Fraction of data for training
-        val_ratio: Fraction of data for validation
-        test_ratio: Fraction of data for testing
-        use_homogeneous: Whether to convert to homogeneous format
+        dataset: OPFDataset instance with ``__len__`` support.
+        train_ratio (float): Fraction of data for training.
+        val_ratio (float): Fraction of data for validation.
+        test_ratio (float): Fraction of data for testing.
+        use_homogeneous (bool): If ``True``, wrap each subset in
+            ``HomoOPFDataset`` for on-the-fly hetero-to-homo conversion.
 
     Returns:
-        train_dataset, val_dataset, test_dataset
+        tuple: ``(train_dataset, val_dataset, test_dataset)`` subsets.
+
+    Raises:
+        AssertionError: If ratios do not sum to 1.0.
     """
     assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6, "Ratios must sum to 1.0"
 
@@ -379,14 +406,17 @@ def prepare_opf_training_data(dataset,
 
 
 def get_opf_metadata(dataset):
-    """
-    Extract metadata (node types, edge types) from OPF dataset for to_hetero conversion.
+    """Extract graph metadata from an OPF dataset.
+
+    Retrieves the ``(node_types, edge_types)`` tuple needed by
+    ``to_hetero()`` and other heterogeneous model utilities.
 
     Args:
-        dataset: OPFDataset instance
+        dataset: OPFDataset instance supporting indexing.
 
     Returns:
-        metadata: Tuple of (node_types, edge_types) for to_hetero()
+        tuple: ``(node_types, edge_types)`` where each element is a list
+            of strings or tuples respectively.
     """
     # Get a sample to extract metadata
     sample = dataset[0]
@@ -400,14 +430,26 @@ def get_opf_metadata(dataset):
 
 
 class HeteroToHomoConverter:
-    """
-    Converts heterogeneous OPF graphs to homogeneous graphs.
+    """Converts heterogeneous OPF graphs to homogeneous format with feature projection.
 
-    The conversion strategy:
-    1. Create a unified node feature space by projecting all node types to the same dimension
-    2. Add node type indicators to preserve type information
-    3. Convert all edge types to a single edge type with edge type indicators
-    4. Preserve target information for appropriate node/edge types
+    Unlike ``OPFHomoWrapper`` (which delegates to PyG's ``to_homogeneous``),
+    this class manually projects node and edge features to fixed-width
+    unified feature spaces, builds global node/edge indices, and preserves
+    type indicators.
+
+    Conversion strategy:
+        1. Project or pad/truncate all node features to ``node_dim``.
+        2. Add integer ``node_type`` indicators.
+        3. Convert all edge types to a single type with ``edge_type`` indicators.
+        4. Preserve targets for appropriate node/edge types.
+
+    Args:
+        node_dim (int): Target dimension for unified node features.
+        edge_dim (int): Target dimension for unified edge features.
+        use_node_type_embedding (bool): Whether to add learnable node type
+            embeddings (reserved for future use).
+        use_edge_type_embedding (bool): Whether to add learnable edge type
+            embeddings (reserved for future use).
     """
 
     def __init__(self,
@@ -415,13 +457,6 @@ class HeteroToHomoConverter:
                  edge_dim: int = 32,
                  use_node_type_embedding: bool = True,
                  use_edge_type_embedding: bool = True):
-        """
-        Args:
-            node_dim: Target dimension for unified node features
-            edge_dim: Target dimension for unified edge features
-            use_node_type_embedding: Whether to add learnable node type embeddings
-            use_edge_type_embedding: Whether to add learnable edge type embeddings
-        """
         self.node_dim = node_dim
         self.edge_dim = edge_dim
         self.use_node_type_embedding = use_node_type_embedding
@@ -439,14 +474,16 @@ class HeteroToHomoConverter:
         self.num_edge_types = len(self.edge_types)
 
     def convert(self, hetero_data: HeteroData) -> Data:
-        """
-        Convert heterogeneous graph to homogeneous graph.
+        """Convert a heterogeneous graph to a homogeneous graph.
 
         Args:
-            hetero_data: Input heterogeneous graph
+            hetero_data (HeteroData): Input heterogeneous graph with
+                per-type node/edge features and targets.
 
         Returns:
-            Homogeneous graph data object
+            Data: Homogeneous graph with unified ``x``, ``edge_index``,
+                ``edge_attr``, ``node_type``, ``edge_type``, and optional
+                ``y`` / ``edge_label`` attributes.
         """
         # Step 1: Build unified node features and mapping
         node_features, node_types, node_targets, node_mapping = self._unify_nodes(hetero_data)
@@ -690,31 +727,36 @@ class HeteroToHomoConverter:
 def convert_opf_to_homo(hetero_data: HeteroData,
                         node_dim: int = 64,
                         edge_dim: int = 32) -> Data:
-    """
-    Convenience function to convert OPF heterogeneous data to homogeneous format.
+    """Convert OPF heterogeneous data to homogeneous format.
+
+    Convenience function that creates a ``HeteroToHomoConverter`` and calls
+    its ``convert`` method.
 
     Args:
-        hetero_data: Input heterogeneous OPF data
-        node_dim: Target node feature dimension
-        edge_dim: Target edge feature dimension
+        hetero_data (HeteroData): Input heterogeneous OPF graph.
+        node_dim (int): Target unified node feature dimension.
+        edge_dim (int): Target unified edge feature dimension.
 
     Returns:
-        Homogeneous graph data
+        Data: Homogeneous graph data object.
     """
     converter = HeteroToHomoConverter(node_dim=node_dim, edge_dim=edge_dim)
     return converter.convert(hetero_data)
 
 
 def from_adj_to_edge_index_torch(adj):
-    r""" Convert a dense adjacency matrix to a sparse edge index and edge attribute tensor.
-    The edge attribute tensor is the non-zero values (weights) of the adjacency matrix.
+    """Convert a dense adjacency matrix to sparse edge index and edge attributes.
+
+    Non-zero entries of the adjacency matrix become edges; their values
+    become edge attributes.
 
     Args:
-        adj (torch.Tensor): Dense adjacency matrix.
+        adj (torch.Tensor): Dense adjacency matrix of shape ``[N, N]``.
 
     Returns:
-        edge_index (torch.Tensor): Sparse edge index tensor.
-        edge_attr (torch.Tensor): Edge attribute tensor
+        tuple[torch.Tensor, torch.Tensor]: ``(edge_index, edge_attr)`` where
+            ``edge_index`` has shape ``[2, E]`` (``torch.long``) and
+            ``edge_attr`` has shape ``[E]``.
     """
     adj_sparse = adj.to_sparse()
     edge_index = adj_sparse.indices().to(dtype=torch.long)

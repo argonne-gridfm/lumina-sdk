@@ -35,10 +35,30 @@ _CASE_NAME_MAPPING = {
 
 
 def get_case_name_mapping():
+    """Return a copy of the short-name to full PGLib case name mapping.
+
+    Returns:
+        dict: Mapping from short names (e.g. ``"case14"``) to full PGLib names
+            (e.g. ``"pglib_opf_case14_ieee"``).
+    """
     return dict(_CASE_NAME_MAPPING)
 
 
 def parse_case_name(case_input: str) -> str:
+    """Resolve a user-provided case identifier to its full PGLib name.
+
+    Accepts short names (``"case14"``), numeric-only strings (``"14"``), or
+    already-qualified PGLib names (``"pglib_opf_case14_ieee"``).
+
+    Args:
+        case_input (str): Case identifier to resolve.
+
+    Returns:
+        str: Fully-qualified PGLib case name.
+
+    Raises:
+        ValueError: If *case_input* cannot be mapped to a known case.
+    """
     case_mapping = get_case_name_mapping()
 
     if case_input.startswith("pglib_opf_"):
@@ -61,6 +81,17 @@ def parse_case_name(case_input: str) -> str:
 
 
 def parse_cases_arg(cases_arg):
+    """Expand a list of case arguments into individual case name strings.
+
+    Handles JSON-encoded lists (``"[case14,case30]"``), comma-separated
+    entries (``"case14,case30"``), and plain strings.
+
+    Args:
+        cases_arg (list[str]): Raw case arguments, typically from CLI.
+
+    Returns:
+        list[str]: Flat list of individual case name strings.
+    """
     expanded = []
     for entry in cases_arg:
         entry = entry.strip()
@@ -82,6 +113,24 @@ def _canonical_hetero_model_type(model_type):
 
 
 def resolve_hetero_model_type(model_type=None, model_class_path=None, default="HeteroGNN"):
+    """Resolve a heterogeneous model type string to its canonical form.
+
+    Accepts a ``model_type`` name, a fully-qualified ``model_class_path``,
+    or falls back to *default*. Resolution is case-insensitive.
+
+    Args:
+        model_type (str, optional): Short model type name (e.g. ``"HeteroGNN"``).
+        model_class_path (str, optional): Dotted class path
+            (e.g. ``"lumina.model.opf.hetero_model.OPFHeteroGNN"``).
+        default (str): Fallback model type when both arguments are absent.
+
+    Returns:
+        str: Canonical model type string (one of ``HETERO_MODEL_TYPES``).
+
+    Raises:
+        ValueError: If the provided identifiers cannot be mapped to a
+            supported model type.
+    """
     if isinstance(model_class_path, str) and model_class_path.strip():
         class_name = model_class_path.rsplit(".", 1)[-1]
         normalized = _canonical_hetero_model_type(class_name)
@@ -118,6 +167,30 @@ def build_hetero_model_spec(
     models_config,
     out_channels=2,
 ):
+    """Build the class, keyword arguments, and config for a heterogeneous GNN.
+
+    Looks up architecture-specific hyper-parameters from *models_config*,
+    falling back to the ``HeteroGNN`` section when the requested type has no
+    dedicated entry.  Sensible defaults are applied for ``hidden_channels``,
+    ``num_layers``, ``backend``, and attention heads.
+
+    Args:
+        model_type (str): Canonical model type (e.g. ``"HeteroGNN"``, ``"HGT"``).
+        metadata (tuple): Graph metadata ``(node_types, edge_types)``.
+        input_channels (dict): Per-node-type input feature dimensions.
+        models_config (dict): Model hyper-parameter sections from the YAML config.
+        out_channels (int): Per-node output dimension.
+
+    Returns:
+        tuple: ``(model_class, model_kwargs, model_config, used_fallback)`` where
+            *model_class* is the ``nn.Module`` subclass, *model_kwargs* are
+            ready-to-pass constructor arguments, *model_config* is the raw
+            config dict used, and *used_fallback* indicates whether the
+            ``HeteroGNN`` config was used as a substitute.
+
+    Raises:
+        ValueError: If *model_type* is not a supported hetero model.
+    """
     normalized_type = resolve_hetero_model_type(model_type=model_type, default=None)
     if normalized_type not in HETERO_MODEL_CLASSES:
         supported = ", ".join(sorted(HETERO_MODEL_CLASSES.keys()))
@@ -156,6 +229,16 @@ def build_hetero_model_spec(
 
 
 def apply_nested(target_dict, dotted_key, value):
+    """Set a value in a nested dictionary using a dot-separated key path.
+
+    Intermediate dictionaries are created automatically when they do not
+    already exist.
+
+    Args:
+        target_dict (dict): Dictionary to update in place.
+        dotted_key (str): Dot-separated key path (e.g. ``"training.max_epochs"``).
+        value: Value to assign at the leaf key.
+    """
     if not isinstance(target_dict, dict):
         return
     if not isinstance(dotted_key, str):
@@ -171,6 +254,20 @@ def apply_nested(target_dict, dotted_key, value):
 
 
 def initialize_model(model, sample_data, device):
+    """Perform a lazy-initialization forward pass on *model*.
+
+    Moves the model and a sample data point to *device*, then runs a
+    ``torch.no_grad()`` forward pass so that any lazily-initialized
+    parameters are materialized.
+
+    Args:
+        model (torch.nn.Module): Model to initialize.
+        sample_data: A single graph sample (hetero or homo) from the dataset.
+        device (torch.device): Target device.
+
+    Returns:
+        torch.nn.Module: The initialized model (same object, moved to *device*).
+    """
     if dist.get_rank() == 0:
         print("Initializing model parameters...")
 

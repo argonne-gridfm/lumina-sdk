@@ -265,14 +265,24 @@ class ACOPFLossFunction(nn.Module):
 
 
 class PhysicsInformedLoss(ACOPFLossFunction):
-    """
-    Physics-informed loss function that combines standard ML losses with physics constraints.
+    """Physics-informed loss combining standard ML loss with physics constraint penalties.
+
+    Extends ``ACOPFLossFunction`` by adding a penalty term computed from
+    power system constraint violations (e.g. power flow, line limits).
+    The total loss is ``ML_loss + physics_weight * physics_penalty``.
 
     Args:
-        base_loss_config (dict): Configuration for base ML loss
-        physics_weight (float): Weight for physics constraint penalty. Default: 1.0
-        constraint_types (list): Types of constraints to include.
-        penalty_method (str): How to penalize constraint violations.
+        base_loss_config (dict, optional): Configuration dict forwarded to
+            ``ACOPFLossFunction`` (must contain at least ``'loss_type'``).
+            Defaults to ``{'loss_type': 'mse'}``.
+        physics_weight (float): Scalar weight for the physics penalty term.
+            Defaults to 1.0.
+        constraint_types (list, optional): Which constraint families to
+            penalize, e.g. ``['power_flow', 'line_limits']``.
+        penalty_method (str): Penalty formulation. One of ``'quadratic'``,
+            ``'absolute'``, or ``'log_barrier'``. Defaults to ``'quadratic'``.
+        **kwargs: Additional keyword arguments forwarded to
+            ``ACOPFLossFunction``.
     """
 
     def __init__(
@@ -292,6 +302,13 @@ class PhysicsInformedLoss(ACOPFLossFunction):
         self.constraint_computer = None
 
     def set_constraint_computer(self, constraint_computer):
+        """Attach a constraint violation computer for physics penalty evaluation.
+
+        Args:
+            constraint_computer: Object with a ``compute_violations`` method
+                that accepts predictions and returns a dict of violation
+                tensors keyed by constraint type.
+        """
         self.constraint_computer = constraint_computer
 
     def _compute_physics_penalty(self, predictions: Dict[str, torch.Tensor]) -> torch.Tensor:
@@ -332,14 +349,19 @@ class PhysicsInformedLoss(ACOPFLossFunction):
 
 
 class OPFLossManager(nn.Module):
-    """
-    Unified loss manager for standard ML loss types.
+    """Unified loss manager that wraps ACOPFLossFunction for the training loop.
+
+    Provides target extraction from both heterogeneous and homogeneous batches,
+    optional y_mask filtering for homogeneous data, and a standardized
+    ``compute_loss`` interface returning both the scalar loss and an info dict.
 
     Args:
-        loss_type (str): Type of loss to use. Options:
-            - 'mse', 'rmse', 'mae', 'mape', 'smooth_l1': Standard ML losses
-        device (torch.device, optional): Device for computations
-        **kwargs: Additional arguments passed to the loss function
+        loss_type (str): Type of loss to use. One of 'mse', 'rmse', 'mae',
+            'mape', or 'smooth_l1'.
+        device (torch.device, optional): Device for computations.
+            Defaults to CPU.
+        **kwargs: Additional arguments forwarded to ``ACOPFLossFunction``
+            (e.g. ``node_weights``, ``reduction``, ``epsilon``, ``beta``).
     """
 
     def __init__(
@@ -361,6 +383,26 @@ class OPFLossManager(nn.Module):
         return_info: bool = True,
         **kwargs,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict]]:
+        """Compute the loss given model predictions and a data batch.
+
+        Extracts targets from the batch, applies y_mask filtering for
+        homogeneous batches, and delegates to the underlying ACOPFLossFunction.
+
+        Args:
+            predictions (Dict[str, torch.Tensor]): Model outputs keyed by
+                node type (e.g. ``{'bus': ..., 'generator': ...}``).
+            batch: A PyG ``Batch`` or ``HeteroData`` object containing
+                target labels.
+            return_info (bool): If True, return ``(loss, info_dict)``;
+                otherwise return the scalar loss only. Defaults to True.
+            **kwargs: Reserved for future use.
+
+        Returns:
+            Union[torch.Tensor, Tuple[torch.Tensor, Dict]]: The scalar loss,
+                or a tuple of ``(loss, info_dict)`` when ``return_info=True``.
+                The info dict contains per-node-type losses and an
+                ``'objective'`` key.
+        """
         targets = self._extract_targets(predictions, batch)
 
         masked_predictions = predictions
@@ -436,6 +478,12 @@ class OPFLossManager(nn.Module):
         return masked_predictions, masked_targets
 
     def get_loss_info(self) -> Dict:
+        """Return a dictionary describing the current loss configuration.
+
+        Returns:
+            Dict: Loss metadata including ``loss_type`` and any additional
+                info from the underlying ``ACOPFLossFunction``.
+        """
         info = {
             'loss_type': self.loss_type,
         }
@@ -445,23 +493,69 @@ class OPFLossManager(nn.Module):
 
 
 # Convenience functions for common loss configurations
+
+
 def create_mse_loss(**kwargs) -> ACOPFLossFunction:
+    """Create an ACOPFLossFunction configured with MSE loss.
+
+    Args:
+        **kwargs: Additional arguments forwarded to ``ACOPFLossFunction``
+            (e.g. ``node_weights``, ``reduction``).
+
+    Returns:
+        ACOPFLossFunction: A loss function instance using MSE.
+    """
     return ACOPFLossFunction(loss_type='mse', **kwargs)
 
 
 def create_rmse_loss(**kwargs) -> ACOPFLossFunction:
+    """Create an ACOPFLossFunction configured with RMSE loss.
+
+    Args:
+        **kwargs: Additional arguments forwarded to ``ACOPFLossFunction``.
+
+    Returns:
+        ACOPFLossFunction: A loss function instance using RMSE.
+    """
     return ACOPFLossFunction(loss_type='rmse', **kwargs)
 
 
 def create_mape_loss(**kwargs) -> ACOPFLossFunction:
+    """Create an ACOPFLossFunction configured with MAPE loss.
+
+    Args:
+        **kwargs: Additional arguments forwarded to ``ACOPFLossFunction``.
+
+    Returns:
+        ACOPFLossFunction: A loss function instance using MAPE.
+    """
     return ACOPFLossFunction(loss_type='mape', **kwargs)
 
 
 def create_combined_loss(weights: Dict[str, float], **kwargs) -> ACOPFLossFunction:
+    """Create an ACOPFLossFunction with a weighted combination of loss types.
+
+    Args:
+        weights (Dict[str, float]): Mapping of loss type names to their
+            weights, e.g. ``{'mse': 0.5, 'mae': 0.5}``.
+        **kwargs: Additional arguments forwarded to ``ACOPFLossFunction``.
+
+    Returns:
+        ACOPFLossFunction: A loss function instance using the specified
+            weighted combination.
+    """
     return ACOPFLossFunction(loss_type=weights, **kwargs)
 
 
 def create_robust_loss(**kwargs) -> ACOPFLossFunction:
+    """Create an ACOPFLossFunction with a robust loss blend (70% MSE + 30% SmoothL1).
+
+    Args:
+        **kwargs: Additional arguments forwarded to ``ACOPFLossFunction``.
+
+    Returns:
+        ACOPFLossFunction: A loss function instance using the robust blend.
+    """
     return ACOPFLossFunction(
         loss_type={'mse': 0.7, 'smooth_l1': 0.3},
         **kwargs

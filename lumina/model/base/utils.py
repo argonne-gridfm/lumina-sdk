@@ -6,15 +6,16 @@ except Exception:
 
 
 def from_adj_to_edge_index_torch(adj):
-    """ Convert a dense adjacency matrix to a sparse edge index and edge attribute tensor.
-    The edge attribute tensor is the non-zero values (weights) of the adjacency matrix.
+    """Convert a dense adjacency matrix to sparse edge index and edge weights.
 
     Args:
-        adj (torch.Tensor): Dense adjacency matrix.
+        adj (torch.Tensor): Dense adjacency matrix of shape ``(N, N)``.
 
     Returns:
-        edge_index (torch.Tensor): Sparse edge index tensor.
-        edge_attr (torch.Tensor): Edge attribute tensor
+        tuple[torch.Tensor, torch.Tensor]: A pair of
+            ``(edge_index, edge_attr)`` where ``edge_index`` has shape
+            ``(2, E)`` (long) and ``edge_attr`` has shape ``(E,)``
+            containing the non-zero matrix values.
     """
     adj_sparse = adj.to_sparse()
     edge_index = adj_sparse.indices().to(dtype=torch.long)
@@ -23,7 +24,26 @@ def from_adj_to_edge_index_torch(adj):
 
 
 def describe_model(model, model_type=None, model_config=None, print_fn=print):
-    """Format and optionally print a short model summary."""
+    """Format and optionally print a short model summary.
+
+    Counts total, trainable, and uninitialized parameters and estimates
+    parameter memory usage. If ``model_config`` is provided, relevant
+    hyperparameters are included in the output.
+
+    Args:
+        model (torch.nn.Module): The model to describe. If wrapped in
+            ``DistributedDataParallel``, the inner ``.module`` is used.
+        model_type (str, optional): Display name for the model. Defaults
+            to the class name.
+        model_config (dict, optional): Hyperparameter dict; recognized keys
+            include ``'hidden_channels'``, ``'num_layers'``, ``'backend'``,
+            ``'dropout'``, etc.
+        print_fn (callable, optional): Function used to print the summary.
+            Pass ``None`` to suppress printing. Defaults to ``print``.
+
+    Returns:
+        str: Multi-line summary string.
+    """
     base_model = model.module if hasattr(model, "module") else model
     model_name = model_type or base_model.__class__.__name__
     total_params = 0

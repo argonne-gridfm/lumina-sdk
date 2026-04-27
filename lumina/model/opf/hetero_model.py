@@ -12,6 +12,16 @@ from torch_geometric.nn import (MLP, GATConv, GCNConv, GINConv, GraphConv,
 
 
 class OPFHeteroGNN(torch.nn.Module):
+    """OPF-specific Heterogeneous GNN with configurable message-passing backend.
+
+    Wraps ``HeteroConv`` with a selectable backend (SAGE, GCN, GIN, or GAT)
+    to operate on the heterogeneous power grid graph. Produces per-node
+    predictions for ``bus`` (va, vm) and ``generator`` (pg, qg).
+
+    Input shape per node type: ``(N_type, input_channels[type])``.
+    Output shape: ``{'bus': (N_bus, out_channels), 'generator': (N_gen, out_channels)}``.
+    """
+
     def __init__(
             self,
             metadata,
@@ -191,6 +201,14 @@ class OPFHeteroGNN(torch.nn.Module):
 
 
 class RGAT(torch.nn.Module):
+    """Relational Graph Attention Network for heterogeneous OPF graphs.
+
+    Uses ``HeteroConv`` wrapping per-relation ``GATConv`` layers with
+    multi-head attention. Each edge type gets its own GATConv parameters.
+
+    Input shape per node type: ``(N_type, input_channels[type])``.
+    Output shape: ``{'bus': (N_bus, out_channels), 'generator': (N_gen, out_channels)}``.
+    """
 
     def __init__(self,
                  metadata,
@@ -330,6 +348,17 @@ class RGAT(torch.nn.Module):
 
 
 class HEAT(torch.nn.Module):
+    """Heterogeneous Edge-Attributed Transformer for OPF graphs.
+
+    Uses ``HEATConv`` on a homogeneous view of the heterogeneous graph.
+    Node and edge features are projected to ``hidden_channels`` before
+    being passed through HEATConv layers that incorporate edge type and
+    edge attribute embeddings.
+
+    Input shape per node type: ``(N_type, input_channels[type])``.
+    Output shape: ``{'bus': (N_bus, out_channels), 'generator': (N_gen, out_channels)}``.
+    """
+
     def __init__(
             self,
             metadata,
@@ -343,7 +372,7 @@ class HEAT(torch.nn.Module):
             backend="sage",
             edge_attr_dim=None,
             **kwargs):
-        """Heterogeneous Edge-Attributed Transformer (HEAT) model.
+        """Initialize the HEAT model.
 
         Notes:
           - Externally, this model keeps the "hetero" forward signature:
@@ -421,6 +450,22 @@ class HEAT(torch.nn.Module):
             out.reset_parameters()
 
     def forward(self, x_dict, edge_index_dict, edge_attr_dict=None, minmax_scaling=False, **kwargs):
+        """Forward pass of the HEAT model.
+
+        Converts the heterogeneous graph to a homogeneous view internally
+        for HEATConv message passing, then maps outputs back to node types.
+
+        Args:
+            x_dict (dict): Node features for each node type.
+            edge_index_dict (dict): Edge indices for each edge type.
+            edge_attr_dict (dict, optional): Edge attributes for each edge
+                type. Zero-padded if not provided. Defaults to None.
+            minmax_scaling (bool): Whether to apply min-max scaling to
+                outputs. Defaults to False.
+
+        Returns:
+            dict: Output predictions ``{'bus': Tensor, 'generator': Tensor}``.
+        """
         if minmax_scaling:
             _vmin = x_dict['bus'][:, 1].clone()
             _vmax = x_dict['bus'][:, 2].clone()
@@ -513,6 +558,16 @@ class HEAT(torch.nn.Module):
 
 
 class HEAT_v2(torch.nn.Module):
+    """Improved HEAT model with per-edge-type linear projections.
+
+    Extends the HEAT approach by adding learnable edge attribute projections
+    for every edge type and using ``concat=True`` in HEATConv for richer
+    multi-head representations.
+
+    Input shape per node type: ``(N_type, input_channels[type])``.
+    Output shape: ``{'bus': (N_bus, out_channels), 'generator': (N_gen, out_channels)}``.
+    """
+
     def __init__(
             self,
             metadata,
@@ -672,6 +727,15 @@ class HEAT_v2(torch.nn.Module):
 
 
 class HGT(torch.nn.Module):
+    """Heterogeneous Graph Transformer for OPF graphs.
+
+    Uses ``HGTConv`` layers with multi-head attention and optional dropout.
+    Each node type and edge type receives type-specific attention weights
+    following the HGT architecture.
+
+    Input shape per node type: ``(N_type, input_channels[type])``.
+    Output shape: ``{'bus': (N_bus, out_channels), 'generator': (N_gen, out_channels)}``.
+    """
 
     def __init__(self,
                  metadata,

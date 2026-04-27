@@ -17,6 +17,24 @@ except ImportError:
 
 
 class ThroughputTracker:
+    """Measures training throughput (samples/sec) over a configurable window.
+
+    After a configurable warmup period, records per-step timing for a fixed
+    number of measurement steps, then computes and logs the mean throughput
+    across all DDP ranks.  Results are optionally logged to W&B and written
+    as JSON metadata.
+
+    Args:
+        config (dict): Full training configuration. Throughput settings are
+            read from ``config["training"]``: ``throughput_enabled``,
+            ``throughput_warmup_steps``, ``throughput_measure_steps``.
+        world_size (int): Total number of DDP processes.
+        global_rank (int): Rank of the current process.
+        get_global_step (callable): Zero-argument callable returning the
+            current global step count (used as W&B x-axis).
+        wandb_enabled (bool): Whether to log metrics to W&B.
+    """
+
     def __init__(self, config, world_size, global_rank, get_global_step, wandb_enabled=False):
         self.config = config or {}
         self.world_size = world_size
@@ -40,6 +58,12 @@ class ThroughputTracker:
         self.loader_config = self.config.get("loader", {})
 
     def set_wandb_enabled(self, enabled):
+        """Enable or disable W&B logging for throughput metrics.
+
+        Args:
+            enabled (bool): ``True`` to enable W&B logging (only effective
+                if ``wandb`` is installed).
+        """
         self.wandb_enabled = bool(enabled) and WANDB_AVAILABLE
 
     def _global_step(self):
@@ -62,6 +86,7 @@ class ThroughputTracker:
             return None
 
     def write_metadata(self):
+        """Write environment and configuration metadata to a JSON file (rank-0 only)."""
         if not self.enabled:
             return
         if self.metadata_written or self.global_rank != 0:
@@ -93,6 +118,11 @@ class ThroughputTracker:
             wandb.log({"throughput/metadata_path": metadata_path}, step=self._global_step())
 
     def maybe_start_measurement(self):
+        """Begin measurement if warmup is complete and measurement has not yet run.
+
+        Returns:
+            bool: ``True`` if measurement is now active, ``False`` otherwise.
+        """
         if not self.enabled or self.has_run:
             return False
         if self.measure_started:
@@ -112,13 +142,27 @@ class ThroughputTracker:
         return True
 
     def measure_active(self):
+        """Return whether throughput measurement is currently in progress.
+
+        Returns:
+            bool: ``True`` when actively measuring.
+        """
         return self.measure_started and not self.has_run
 
     def accelerator_synchronize(self):
+        """Synchronize the current accelerator device for accurate timing."""
         if hasattr(torch, "accelerator") and hasattr(torch.accelerator, "synchronize"):
             torch.accelerator.synchronize()
 
     def get_batch_samples(self, batch):
+        """Determine the number of samples in a batch.
+
+        Args:
+            batch: PyG batch object or plain tensor.
+
+        Returns:
+            int: Number of samples in the batch.
+        """
         if hasattr(batch, "num_graphs"):
             return int(batch.num_graphs)
         if torch.is_tensor(batch):
@@ -126,11 +170,24 @@ class ThroughputTracker:
         return int(self.loader_config.get("batch_size", 1))
 
     def record_step(self, step_metrics):
+        """Record a single step's throughput metrics.
+
+        Args:
+            step_metrics (dict): Metrics for the step, must include
+                ``'throughput/samples_per_sec'``.
+        """
         self.samples.append(step_metrics)
         if self.wandb_enabled:
             wandb.log(step_metrics, step=self._global_step())
 
     def on_step_end(self, step_metrics=None):
+        """Called at the end of each training step to record metrics and check completion.
+
+        Automatically calls ``finalize`` once the measurement window is filled.
+
+        Args:
+            step_metrics (dict, optional): Throughput metrics for this step.
+        """
         if not self.enabled or self.has_run:
             return
         self.step_index += 1
@@ -144,6 +201,15 @@ class ThroughputTracker:
             self.finalize()
 
     def finalize(self, partial=False):
+        """Compute and log the final throughput summary across all ranks.
+
+        Gathers per-step samples/sec from all DDP ranks, computes the global
+        mean, and logs to W&B if enabled.
+
+        Args:
+            partial (bool): If ``True``, indicates the measurement window
+                was not fully completed.
+        """
         if not self.measure_started:
             return
         if self.has_run:

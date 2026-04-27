@@ -13,7 +13,17 @@ except Exception:  # pragma: no cover - distributed optional
 
 
 def attach_case_id(sample, case_id):
-    """Attach a case_id tensor to a PyG Data/HeteroData sample."""
+    """Attach a ``case_id`` tensor to a PyG Data or HeteroData sample.
+
+    Args:
+        sample: A PyG data object (or ``None``).
+        case_id: Integer case identifier to store as a scalar ``torch.long``
+            tensor on the sample.
+
+    Returns:
+        The input sample with ``case_id`` attribute set, or the unmodified
+        sample if it is ``None`` or *case_id* cannot be converted to int.
+    """
     if sample is None:
         return sample
     try:
@@ -24,7 +34,15 @@ def attach_case_id(sample, case_id):
 
 
 class CaseTaggedDataset(Dataset):
-    """Dataset wrapper that stamps each sample with a case_id."""
+    """Map-style dataset wrapper that attaches a ``case_id`` to every sample.
+
+    Delegates all attribute access to the wrapped dataset, adding only the
+    ``case_id`` tensor to each retrieved sample.
+
+    Args:
+        dataset: Underlying map-style dataset.
+        case_id: Integer case identifier attached to every sample.
+    """
 
     def __init__(self, dataset, case_id):
         self.dataset = dataset
@@ -44,7 +62,15 @@ class CaseTaggedDataset(Dataset):
 
 
 class CaseTaggedIterableDataset(IterableDataset):
-    """Iterable dataset wrapper that stamps each sample with a case_id."""
+    """Iterable dataset wrapper that attaches a ``case_id`` to every yielded sample.
+
+    Delegates attribute access to the wrapped dataset and passes through
+    ``__len__`` when available.
+
+    Args:
+        dataset (Iterable): Underlying iterable dataset.
+        case_id (int): Integer case identifier attached to every sample.
+    """
 
     def __init__(self, dataset: Iterable, case_id: int):
         super().__init__()
@@ -67,7 +93,16 @@ class CaseTaggedIterableDataset(IterableDataset):
 
 
 class LimitedIterableDataset(IterableDataset):
-    """Iterable dataset wrapper that yields at most max_samples across workers."""
+    """Iterable dataset wrapper that caps total yielded samples across all workers.
+
+    The global ``max_samples`` budget is divided evenly across DDP ranks and
+    DataLoader workers so that each worker yields its proportional share.
+
+    Args:
+        dataset (Iterable): Underlying iterable dataset to wrap.
+        max_samples (int): Maximum total samples to yield. If ``<= 0``, no
+            limit is applied.
+    """
 
     def __init__(self, dataset: Iterable, max_samples: int):
         super().__init__()
