@@ -35,10 +35,8 @@ def resolve_stage_root(staging_config: Optional[dict]) -> Optional[str]:
     return None
 
 
-def opf_release(topological_perturbations: bool, processed_suffix: Optional[str] = None) -> str:
+def opf_release(processed_suffix: Optional[str] = None) -> str:
     release = "dataset_release_1"
-    if topological_perturbations:
-        release += "_nminusone"
     if processed_suffix:
         release += f"_{processed_suffix}"
     return release
@@ -47,14 +45,13 @@ def opf_release(topological_perturbations: bool, processed_suffix: Optional[str]
 def on_disk_processed_dir(
     root: str,
     case_name: str,
-    topological_perturbations: bool,
     processed_suffix: Optional[str] = None,
 ) -> str:
     return osp.join(
         root,
         "OPFData",
         "on_disk",
-        opf_release(topological_perturbations, processed_suffix),
+        opf_release(processed_suffix),
         case_name,
     )
 
@@ -70,10 +67,9 @@ def get_on_disk_db_path(
     case_name: str,
     group_id: int,
     backend: str,
-    topological_perturbations: bool,
     processed_suffix: Optional[str] = None,
 ) -> str:
-    processed_dir = on_disk_processed_dir(root, case_name, topological_perturbations, processed_suffix)
+    processed_dir = on_disk_processed_dir(root, case_name, processed_suffix)
     return osp.join(processed_dir, on_disk_db_name(group_id, backend))
 
 
@@ -82,7 +78,6 @@ def get_on_disk_lock_path(
     case_name: str,
     group_id: int,
     backend: str,
-    topological_perturbations: bool,
     processed_suffix: Optional[str] = None,
 ) -> str:
     return (
@@ -91,7 +86,6 @@ def get_on_disk_lock_path(
             case_name,
             group_id,
             backend,
-            topological_perturbations,
             processed_suffix,
         )
         + ".lock"
@@ -101,14 +95,13 @@ def get_on_disk_lock_path(
 def sharded_processed_dir(
     root: str,
     case_name: str,
-    topological_perturbations: bool,
     processed_suffix: Optional[str] = None,
 ) -> str:
     return osp.join(
         root,
         "OPFData",
         "sharded",
-        opf_release(topological_perturbations, processed_suffix),
+        opf_release(processed_suffix),
         case_name,
     )
 
@@ -116,12 +109,11 @@ def sharded_processed_dir(
 def get_sharded_manifest_path(
     root: str,
     case_name: str,
-    topological_perturbations: bool,
     processed_suffix: Optional[str] = None,
     manifest_name: str = "manifest.json",
 ) -> str:
     return osp.join(
-        sharded_processed_dir(root, case_name, topological_perturbations, processed_suffix),
+        sharded_processed_dir(root, case_name, processed_suffix),
         manifest_name,
     )
 
@@ -129,7 +121,6 @@ def get_sharded_manifest_path(
 def get_sharded_lock_path(
     root: str,
     case_name: str,
-    topological_perturbations: bool,
     processed_suffix: Optional[str] = None,
     manifest_name: str = "manifest.json",
 ) -> str:
@@ -137,7 +128,6 @@ def get_sharded_lock_path(
         get_sharded_manifest_path(
             root,
             case_name,
-            topological_perturbations,
             processed_suffix,
             manifest_name,
         )
@@ -199,7 +189,6 @@ def stage_on_disk_group(
     case_name: str,
     group_id: int,
     backend: str,
-    topological_perturbations: bool,
     processed_suffix: Optional[str] = None,
     log: bool = True,
 ) -> str:
@@ -217,7 +206,6 @@ def stage_on_disk_group(
         case_name,
         group_id,
         backend,
-        topological_perturbations,
         processed_suffix,
     )
     dst_path = get_on_disk_db_path(
@@ -225,7 +213,6 @@ def stage_on_disk_group(
         case_name,
         group_id,
         backend,
-        topological_perturbations,
         processed_suffix,
     )
 
@@ -254,7 +241,6 @@ def stage_sharded_case(
     source_root: str,
     stage_root: str,
     case_name: str,
-    topological_perturbations: bool,
     processed_suffix: Optional[str] = None,
     manifest_name: str = "manifest.json",
     log: bool = True,
@@ -268,19 +254,17 @@ def stage_sharded_case(
     if osp.abspath(stage_root) == osp.abspath(source_root):
         return source_root
 
-    src_dir = sharded_processed_dir(source_root, case_name, topological_perturbations, processed_suffix)
-    dst_dir = sharded_processed_dir(stage_root, case_name, topological_perturbations, processed_suffix)
+    src_dir = sharded_processed_dir(source_root, case_name, processed_suffix)
+    dst_dir = sharded_processed_dir(stage_root, case_name, processed_suffix)
     src_manifest = get_sharded_manifest_path(
         source_root,
         case_name,
-        topological_perturbations,
         processed_suffix,
         manifest_name,
     )
     dst_manifest = get_sharded_manifest_path(
         stage_root,
         case_name,
-        topological_perturbations,
         processed_suffix,
         manifest_name,
     )

@@ -1,7 +1,6 @@
 ---
 root: "/lus/eagle/projects/GridFM/datasets/acopf/"
 url: "https://storage.googleapis.com/gridopt-dataset"
-topological_perturbations: false
 local_raw_folder: "/lus/eagle/projects/GridFM/datasets/acopf/OPFData/"
 single_case:
   case_name: "pglib_opf_case14_ieee"

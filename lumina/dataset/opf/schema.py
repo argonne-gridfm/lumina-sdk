@@ -7,7 +7,7 @@ Data sources differ in feature ordering, so instead of hardcoding the feature or
 we define the following schemas in pydantic and then align everything within the OPFDataset class during preprocessing
  
 The canonical feature ordering is the following JSON schema from pglib-opf,
-contingency and hdf5 acopf data from exagrid needs to be aligned.
+hdf5 acopf data from exagrid needs to be aligned.
 
 Complete schema documentation is available at: 
 https://github.com/argonne-gridfm/GridAI-documentation/blob/main/data_generation/opfdata_schema_documentation.md
@@ -201,16 +201,3 @@ class H5EdgeSolution(OPFSchemaModel):
     qf: float = Field(..., description="Reactive power flow (from → to) (p.u.)")
     pt: float = Field(..., description="Active power flow (to → from) (p.u.)")
     qt: float = Field(..., description="Reactive power flow (to → from) (p.u.)")
-
-
-class ContingencyH5Load(OPFSchemaModel):
-    """Load features in Contingency HDF5 format."""
-    pd: float = Field(..., description="Active power demand (p.u.)")
-    qd: float = Field(..., description="Reactive power demand (p.u.)")
-    weight_p: float = Field(..., description="Load shedding priority weight (P)")
-    weight_q: float = Field(..., description="Load shedding priority weight (Q)")
-
-class ContingencyH5LoadSolution(OPFSchemaModel):
-    """Load solution features in Contingency HDF5 format."""
-    pd_served: float = Field(..., description="Active power actually served (p.u.)")
-    qd_served: float = Field(..., description="Reactive power actually served (p.u.)")

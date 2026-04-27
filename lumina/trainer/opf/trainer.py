@@ -210,7 +210,6 @@ class BaseOPFTrainer:
         )
         self.on_disk_sqlite_journal_mode = data_config.get("on_disk_sqlite_journal_mode", "WAL")
         self.on_disk_sqlite_synchronous = data_config.get("on_disk_sqlite_synchronous", "NORMAL")
-        self.topological_perturbations = bool(data_config.get("topological_perturbations", False))
         self.data_staging = data_config.get("staging", {}) if isinstance(data_config.get("staging"), dict) else {}
         self.data_staging_lock_timeout = int(self.data_staging.get("lock_timeout_sec", 7200))
         self.on_disk_homo_suffix = str(data_config.get("on_disk_homo_suffix", "homo"))
@@ -397,7 +396,6 @@ class BaseOPFTrainer:
                 case_name,
                 group_id,
                 self.on_disk_backend,
-                self.topological_perturbations,
                 processed_suffix,
             )
             lock_path = get_on_disk_lock_path(
@@ -405,7 +403,6 @@ class BaseOPFTrainer:
                 case_name,
                 group_id,
                 self.on_disk_backend,
-                self.topological_perturbations,
                 processed_suffix,
             )
             if self.global_rank == 0:
@@ -425,7 +422,6 @@ class BaseOPFTrainer:
                         case_name=case_name,
                         group_id=group_id,
                         backend=self.on_disk_backend,
-                        topological_perturbations=self.topological_perturbations,
                         processed_suffix=processed_suffix,
                         log=self.global_rank == 0,
                     )
@@ -454,14 +450,12 @@ class BaseOPFTrainer:
         manifest_path = get_sharded_manifest_path(
             source_root,
             case_name,
-            self.topological_perturbations,
             processed_suffix,
             self.sharded_manifest_name,
         )
         lock_path = get_sharded_lock_path(
             source_root,
             case_name,
-            self.topological_perturbations,
             processed_suffix,
             self.sharded_manifest_name,
         )
@@ -482,7 +476,6 @@ class BaseOPFTrainer:
                     source_root=source_root,
                     stage_root=stage_root,
                     case_name=case_name,
-                    topological_perturbations=self.topological_perturbations,
                     processed_suffix=processed_suffix,
                     manifest_name=self.sharded_manifest_name,
                     log=self.global_rank == 0,
@@ -502,7 +495,6 @@ class BaseOPFTrainer:
         dataset_kwargs = dict(
             root=root,
             case_name=case_name,
-            topological_perturbations=self.topological_perturbations,
             local_raw_folder=self.config.get("local_raw_folder"),
             force_reload=False,
         )
@@ -511,7 +503,6 @@ class BaseOPFTrainer:
             dataset_kwargs.update(
                 {
                     "backend": self.on_disk_backend,
-                    "topological_perturbations": self.topological_perturbations,
                     "write_batch_size": self.on_disk_write_batch_size,
                     "sqlite_timeout_sec": self.on_disk_sqlite_timeout_sec,
                     "sqlite_busy_timeout_ms": self.on_disk_sqlite_busy_timeout_ms,
@@ -568,7 +559,6 @@ class BaseOPFTrainer:
         manifest_path = get_sharded_manifest_path(
             dataset_root,
             case_name,
-            self.topological_perturbations,
             processed_suffix,
             self.sharded_manifest_name,
         )

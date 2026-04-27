@@ -115,7 +115,6 @@ def parse_args():
     parser.add_argument("--root", type=str, required=True, help="Dataset root (same as training config root).")
     parser.add_argument("--case-name", type=str, required=True, help="Case name (pglib_opf_*).")
     parser.add_argument("--group-ids", type=int, nargs="+", required=True, help="Group IDs to shard.")
-    parser.add_argument("--topological-perturbations", action="store_true", help="Use n-1 release.")
     parser.add_argument(
         "--processed-suffix",
         type=str,
@@ -170,7 +169,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    release = opf_release(args.topological_perturbations, args.processed_suffix)
+    release = opf_release(args.processed_suffix)
     processed_dir = osp.join(args.root, "OPFData", "processed", release, args.case_name)
     output_root = args.output_root or args.root
     sharded_dir = osp.join(output_root, "OPFData", "sharded", release, args.case_name)
@@ -257,7 +256,6 @@ def main():
         "format": "pt_inmemory_v1",
         "case_name": args.case_name,
         "release": release,
-        "topological_perturbations": bool(args.topological_perturbations),
         "processed_suffix": args.processed_suffix,
         "shard_size": shard_size if shard_size > 0 else None,
         "num_samples": total_samples,

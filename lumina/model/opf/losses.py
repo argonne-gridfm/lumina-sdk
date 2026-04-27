@@ -510,14 +510,6 @@ class OPFLossManager(nn.Module):
         # Track whether Lagrangian network parameters have been initialized
         self._lagrangian_initialized = False
 
-    def _raise_if_unsupported_homo_contingencies(self, batch):
-        if self._is_homo_batch(batch) and getattr(batch, "n_contingencies", None) is not None:
-            raise ValueError(
-                "Homogeneous OPF batches with contingency samples are not supported. "
-                "The homo constraint path builds network parameters from graph 0 only, "
-                "which is incorrect for contingency batches. Use a hetero model or disable contingency data."
-            )
-
     def compute_loss(
         self,
         predictions: Dict[str, torch.Tensor],
@@ -541,52 +533,35 @@ class OPFLossManager(nn.Module):
         """
         # Extract targets from batch
         targets = self._extract_targets(predictions, batch)
-        self._raise_if_unsupported_homo_contingencies(batch)
 
+
+        masked_predictions = predictions
+        masked_targets = targets
         if self._is_homo_batch(batch) and hasattr(batch, "y_mask"):
-            predictions, targets = self._apply_homo_target_mask(
+            masked_predictions, masked_targets = self._apply_homo_target_mask(
                 predictions,
                 targets,
                 batch,
             )
 
         if self.loss_type in ['augmented_lagrangian', 'violated_lagrangian']:
-            is_homo = self._is_homo_batch(batch)
-            
+            # Compute base MSE loss
             base_results = self.base_loss(predictions, targets)
-            mse_loss = base_results["total_loss"]
+            mse_loss = base_results['total_loss']
 
-            if is_homo:
-                n_bus = predictions["bus"].size(0)
-            else:
-                n_bus = batch["bus"].x.size(0)
-            device = predictions["bus"].device
-            
-            stored_ybus = getattr(self.lagrangian, "Y_real_sparse", None)
+            # Compute Lagrangian loss using shared constraint pipeline
+            current_n_bus = batch['bus'].x.size(0)
+            stored_ybus = getattr(self.lagrangian, 'Y_real_sparse', None)
             need_init = (
                 not self._lagrangian_initialized
                 or stored_ybus is None
-                or stored_ybus.size(0) != n_bus
+                or stored_ybus.size(0) != current_n_bus
             )
-            
             if need_init:
-                self._ensure_network_parameters(batch, device, target=self.lagrangian)
-            
-            if constraint_data is not None:
-                constraint_batch = constraint_data
-            else:
-                constraint_batch = (
-                    self._create_constraint_batch_homo(batch, predictions)
-                    if is_homo
-                    else self._create_constraint_batch(batch, predictions)
-                )
-            
-            lag_loss, info = self.lagrangian(
-                mse_loss,
-                predictions,
-                constraint_batch,
-            )            
-            
+                self._ensure_network_parameters(batch, predictions['bus'].device, target=self.lagrangian)
+            constraint_batch = constraint_data or self._create_constraint_batch(batch, predictions)
+            lag_loss, info = self.lagrangian(mse_loss, predictions, constraint_batch)
+
             if return_info:
                 if self.log_normalized_violation:
                     self._add_normalized_violation_metrics(info)
@@ -597,7 +572,7 @@ class OPFLossManager(nn.Module):
                 return lag_loss
         else:
             # Standard ML loss
-            results = self.base_loss(predictions, targets)
+            results = self.base_loss(masked_predictions, masked_targets)
             loss = results['total_loss']
             results.setdefault('objective', loss)
 
@@ -675,7 +650,7 @@ class OPFLossManager(nn.Module):
             return {}
         if 'bus' not in predictions or 'generator' not in predictions:
             return {}
-        self._raise_if_unsupported_homo_contingencies(batch)
+
 
         timing_start = self._start_constraint_timing()
         try:
@@ -751,7 +726,7 @@ class OPFLossManager(nn.Module):
             return {}
         if 'bus' not in predictions or 'generator' not in predictions:
             return {}
-        self._raise_if_unsupported_homo_contingencies(batch)
+
 
         timing_start = self._start_constraint_timing()
         device = predictions['bus'].device
@@ -1884,8 +1859,6 @@ class OPFLossManager(nn.Module):
         return y_real_sparse, y_imag_sparse
 
     def _resolve_case_id(self, batch):
-        if getattr(batch, "n_contingencies", None) is not None:
-            return None
         case_id = getattr(batch, "case_id", None)
         if case_id is None:
             return None
@@ -1987,7 +1960,7 @@ class OPFLossManager(nn.Module):
             return
 
         if self._is_homo_batch(batch):
-            self._raise_if_unsupported_homo_contingencies(batch)
+    
             node_type = getattr(batch, 'node_type', None)
             if node_type is None:
                 return
