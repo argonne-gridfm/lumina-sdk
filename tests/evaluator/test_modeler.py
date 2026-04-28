@@ -178,42 +178,6 @@ def test_build_constraint_evaluator_returns_evaluator():
     assert "vmin" in evaluator.voltage_limits and "vmax" in evaluator.voltage_limits
 
 
-def test_constraint_evaluator_accepts_backend():
-    """Ensure ACOPFConstraintEvaluator can consume a backend for constraint metrics."""
-    device = torch.device("cpu")
-
-    class DummyBackend:
-        def compute_constraint_metrics(self, predictions, batch, constraint_data=None, return_components=False):
-            return {"raw_constraint_violation": torch.tensor(1.0)}
-
-    evaluator = ACOPFConstraintEvaluator(
-        voltage_limits={"vmin": torch.tensor([0.9]), "vmax": torch.tensor([1.1])},
-        generation_limits={
-            "pmin": torch.tensor([0.0]),
-            "pmax": torch.tensor([1.0]),
-            "qmin": torch.tensor([-1.0]),
-            "qmax": torch.tensor([1.0]),
-        },
-        device=device,
-    )
-
-    predictions = {
-        "bus": torch.tensor([[0.0, 1.0]], dtype=torch.float32),
-        "generator": torch.tensor([[0.5, 0.0]], dtype=torch.float32),
-    }
-
-    violations = evaluator.evaluate_all_constraints(
-        predictions=predictions,
-        batch_data=None,
-        normalize=True,
-        return_individual=False,
-        constraint_backend=DummyBackend(),
-    )
-
-    assert "bound_total_bound_violations" in violations
-    assert "backend_raw_constraint_violation" in violations
-
-
 def test_resolve_hetero_model_type_prefers_model_class_path():
     """Model class path should take precedence over model type when both are present."""
     resolved = resolve_hetero_model_type(

@@ -16,7 +16,7 @@ Advanced usage:
     python example/opf/tune_opf_optuna.py \\
         --case case30 \\
         --model_type RGAT \\
-        --loss_type augmented_lagrangian \\
+        --loss_type mse \\
         --n_trials 100 \\
         --max_epochs 100 \\
         --pruning \\
@@ -511,7 +511,7 @@ def main():
                         choices=['HeteroGNN', 'GCN', 'GAT', 'GIN', 'Transformer', 'RGAT', 'HEAT', 'HGT'],
                         help='Model type to train (default: HeteroGNN)')
     parser.add_argument('--loss_type', type=str, default='mse',
-                        choices=['mse', 'rmse', 'mae', 'mape', 'smooth_l1', 'augmented_lagrangian', 'violated_lagrangian'],
+                        choices=['mse', 'rmse', 'mae', 'mape', 'smooth_l1'],
                         help='Loss function type (default: mse)')
     parser.add_argument('--n_trials', type=int, default=50,
                         help='Number of Optuna trials to run (default: 50)')

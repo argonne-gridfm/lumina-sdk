@@ -1,0 +1,36 @@
+name: Deploy Documentation
+
+on:
+  push:
+    branches:
+      - docs/mkdocs
+      - main
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'lumina/**'
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install mkdocs-material "mkdocstrings[python]" mkdocs-jupyter
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install torch-geometric
+          pip install -e .
+
+      - name: Build and deploy
+        run: mkdocs gh-deploy --force

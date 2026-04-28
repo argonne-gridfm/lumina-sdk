@@ -433,20 +433,26 @@ class Modeler:
             *,
             strict: bool = True,
     ) -> torch.nn.Module:
-        """
-        training checkpoint formats differ slightly from HF safetensor serialization
-        minimal checkpoint keys for self-contained checkpoints:
-          - model_class: str
-              Fully-qualified class name, e.g.:
-                "lumina.model.opf.hetero_model.HGT"
-          - model_kwargs: dict
-              Keyword arguments to reconstruct the model __init__(**model_kwargs)
-              (e.g., metadata/input_channels/hidden_channels/... for hetero models).
-          - model_state_dict: dict[str, Tensor]
-              Weights.
+        """Load a model from a training checkpoint file.
+
+        Training checkpoint formats differ from HuggingFace safetensor
+        serialization. This method expects a checkpoint with at least:
+        ``model_class`` (fully-qualified class name), ``model_kwargs``
+        (constructor arguments), and ``model_state_dict`` or ``model_state``
+        (weight tensors).
+
+        Args:
+            ckpt_path (str | os.PathLike): Path to the ``.pt`` checkpoint file.
+            strict (bool): Whether to enforce strict key matching in
+                ``load_state_dict``.
 
         Returns:
-          torch.nn.Module (not DDP wrapped), moved to `device` if provided.
+            torch.nn.Module: Reconstructed model (not DDP-wrapped), in eval mode,
+                moved to the instance's device.
+
+        Raises:
+            ValueError: If ``model_class`` in the checkpoint is not a valid
+                fully-qualified Python class path.
         """
         ckpt: Dict[str, Any] = torch.load(ckpt_path, map_location=self.device)
         class_path = ckpt.get("model_class")
@@ -788,7 +794,6 @@ class Modeler:
         pred_batch_pairs: List[Tuple[dict, object]],
         normalize: bool = True,
         cache_key: Optional[str] = None,
-        constraint_backend=None,
     ):
         """
         Evaluate constraints using previously computed predictions and their corresponding batches.
@@ -798,7 +803,6 @@ class Modeler:
                 produced by `run_predictions`.
             normalize (bool, optional): Whether to normalize violations in the evaluator. Defaults to True.
             cache_key (Optional[str], optional): Cache key to pass to `derive_line_params` for reusing line matrices.
-            constraint_backend (optional): Backend to compute training-aligned constraint metrics.
 
         Returns:
             dict: Aggregated statistics keyed by violation name. Each value is a dict with keys:
@@ -812,12 +816,6 @@ class Modeler:
         Example:
             >>> stats = modeler.evaluate_from_predictions(pred_batch_pairs, cache_key="case14")
         """
-        if constraint_backend is None:
-            warnings.warn(
-                "No constraint_backend supplied to evaluate_from_predictions; "
-                "the evaluator will only report bound violations and skip power-balance/thermal-flow violations."
-            )
-
         if len(pred_batch_pairs) == 0:
             raise ValueError("No predictions provided for evaluation.")
 
@@ -843,7 +841,6 @@ class Modeler:
                 batch_data=batch,
                 normalize=normalize,
                 return_individual=False,
-                constraint_backend=constraint_backend,
             )
             summary = evaluator.get_violation_summary(violations)
 

@@ -9,10 +9,14 @@ import torch
 
 
 def set_seed(seed):
-    """ Set random seeds for reproducibility.
+    """Set random seeds for reproducibility across all backends.
+
+    Configures Python ``random``, NumPy, PyTorch CPU, and (if available)
+    PyTorch CUDA random number generators. Also sets cuDNN to deterministic
+    mode.
 
     Args:
-        seed (int): Random seed.
+        seed (int): Random seed value.
     """
     random.seed(seed)
     np.random.seed(seed)
@@ -24,30 +28,22 @@ def set_seed(seed):
         torch.backends.cudnn.benchmark = False
 
 
-def LagM_generate(vio_lag, device):
-    """ Lagrangian multipliers for multi-topology
-
-    Args:
-        vil_lag (dict):
-        device (torch.device):
-
-    Returns:
-        (tuple): inequality line, equality active power, equality reactive power Lagrangian multipliers
-    """
-    ineq_LagM_line = torch.ones(1, 2 * vio_lag.nl).to(device=device)
-    eq_LagM_active = torch.ones(1, vio_lag.nbus).to(device=device)
-    eq_LagM_reactive = torch.ones(1, vio_lag.nbus).to(device=device)
-    return ineq_LagM_line, eq_LagM_active, eq_LagM_reactive
-
-
 def dict_agg(stats, key, value, op='concat'):
-    """ Aggregate or update a dictionary entry by summing or concatenating values in place
+    """Aggregate a value into a dictionary entry by summing or concatenating.
+
+    If *key* already exists in *stats*, the value is combined with the
+    existing entry using the specified operation.  Otherwise, the value is
+    stored directly.
 
     Args:
-        stats (dict): Dictionary to be updated.
+        stats (dict): Dictionary to update in place.
         key (str): Key in the dictionary.
-        value (np.ndarray): Value to be added or concatenated.
-        op (str): Operation type, either 'sum' or 'concat'.
+        value (numpy.ndarray): Value to add or concatenate.
+        op (str): Operation type -- ``'sum'`` for element-wise addition,
+            ``'concat'`` for ``numpy.concatenate`` along axis 0.
+
+    Raises:
+        NotImplementedError: If *op* is not ``'sum'`` or ``'concat'``.
     """
     # Modifies stats in place
     if key in stats.keys():

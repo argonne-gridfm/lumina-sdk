@@ -75,8 +75,6 @@ def build_parser():
             "mae",
             "mape",
             "smooth_l1",
-            "augmented_lagrangian",
-            "violated_lagrangian",
         ],
         help="Loss function type (default: mse)",
     )
@@ -236,11 +234,7 @@ def add_test_score(metric_avgs, score_alpha, log_normalized_violation):
     objective = metric_avgs.get("test/loss/objective")
     if objective is None:
         objective = 0.0
-    violation_key = "test/feas/total_violation_norm" if log_normalized_violation else "test/feas/total_violation"
-    violation = metric_avgs.get(violation_key)
-    if violation is None:
-        violation = 0.0
-    metric_avgs["test/score"] = objective + score_alpha * violation
+    metric_avgs["test/score"] = objective
 
 
 def iter_test_loaders(trainer):
@@ -348,19 +342,11 @@ def run_test(trainer):
                 if do_timing:
                     trainer._sync_for_timing()
                     timing_after_forward = time.perf_counter()
-                if loss_manager.lagrangian is None:
-                    loss, loss_info = loss_manager.compute_loss(
-                        predictions,
-                        batch,
-                        return_info=True,
-                        collect_constraints=True,
-                    )
-                else:
-                    loss, loss_info = loss_manager.compute_loss(
-                        predictions,
-                        batch,
-                        return_info=True,
-                    )
+                loss, loss_info = loss_manager.compute_loss(
+                    predictions,
+                    batch,
+                    return_info=True,
+                )
                 if do_timing:
                     trainer._sync_for_timing()
                     timing_after_loss = time.perf_counter()

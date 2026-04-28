@@ -135,7 +135,7 @@ def main():
         "--config",
         type=str,
         default=None,
-        help="Optional training config YAML to load lagrangian/log_normalized_violation settings.",
+        help="Optional training config YAML to load settings.",
     )
     parser.add_argument(
         "--loss-type",
@@ -147,8 +147,6 @@ def main():
             "mae",
             "mape",
             "smooth_l1",
-            "augmented_lagrangian",
-            "violated_lagrangian",
         ],
         help="Loss function type (default: mse).",
     )
@@ -179,20 +177,9 @@ def main():
     dataset = OPFDataset(root='./opf_data', case_name=args.case_name)
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
 
-    lag_config = {}
-    log_normalized_violation = False
-    if args.config:
-        with open(args.config, "r") as f:
-            config = yaml.safe_load(f)
-        lag_config = config.get("lagrangian", {}) or {}
-        training_config = config.get("training", {}) or {}
-        log_normalized_violation = bool(training_config.get("log_normalized_violation", False))
-
     loss_manager = OPFLossManager(
         loss_type=args.loss_type,
         device=device,
-        lagrangian_config=lag_config,
-        log_normalized_violation=log_normalized_violation,
     )
     loss_manager.eval()
 
@@ -236,19 +223,11 @@ def main():
                 minmax_scaling=True,
             )
 
-            if loss_manager.lagrangian is None:
-                _, loss_info = loss_manager.compute_loss(
-                    predictions,
-                    batch,
-                    return_info=True,
-                    collect_constraints=True,
-                )
-            else:
-                _, loss_info = loss_manager.compute_loss(
-                    predictions,
-                    batch,
-                    return_info=True,
-                )
+            _, loss_info = loss_manager.compute_loss(
+                predictions,
+                batch,
+                return_info=True,
+            )
 
             bus_x = batch['bus'].x if hasattr(batch['bus'], 'x') else None
             gen_x = batch['generator'].x if 'generator' in batch.node_types and hasattr(batch['generator'], 'x') else None
@@ -264,11 +243,9 @@ def main():
                 batch_data=batch,
                 normalize=True,
                 return_individual=False,
-                constraint_backend=loss_manager,
             )
             summary = evaluator.get_violation_summary(violations)
 
-            backend_info = {k[len("backend_"):]: v for k, v in summary.items() if k.startswith("backend_")}
             bound_info = {k: v for k, v in summary.items() if k.startswith("bound_")}
 
             for info_key, metric_name in metric_map:

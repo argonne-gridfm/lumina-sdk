@@ -74,9 +74,9 @@ hps = [
 
 # `pip install -e .[doc]`
 doc = [
-    "sphinx",
-    "sphinx-rtd-theme",
-    "sphinx-autodoc-typehints"
+    "mkdocs-material",
+    "mkdocstrings[python]",
+    "mkdocs-jupyter",
 ]
 
 # `pip install -e .[benchmark]`

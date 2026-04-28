@@ -18,13 +18,31 @@ from typing import Dict, List, Optional, Tuple, Union
 
 
 class ACOPFConstraintEvaluator(nn.Module):
-    """
-    Comprehensive constraint violation evaluator for ACOPF problems.
+    """Comprehensive constraint violation evaluator for ACOPF problems.
 
-    This class evaluates all types of constraint violations:
-    1. Bound constraints: VM, VA, PG, QG within specified limits
-    2. Power flow constraints: Active and reactive power balance at each bus
-    3. Line flow constraints: Thermal limits on transmission lines
+    Evaluates bound, power-flow, and line-flow constraint violations given
+    model predictions and network parameters (admittance matrix, limits).
+
+    Supported constraint categories:
+        - Bound constraints: voltage magnitude/angle, active/reactive generation.
+        - Power flow constraints: active and reactive power balance at each bus.
+        - Line flow constraints: thermal limits on transmission lines.
+
+    Args:
+        voltage_limits (dict[str, torch.Tensor], optional): Dict with ``'vmin'``,
+            ``'vmax'`` tensors of shape ``[n_bus]``.
+        generation_limits (dict[str, torch.Tensor], optional): Dict with
+            ``'pmin'``, ``'pmax'``, ``'qmin'``, ``'qmax'`` tensors of
+            shape ``[n_gen]``.
+        line_limits (torch.Tensor, optional): Line flow limits ``[n_lines]``.
+        Y_real (torch.Tensor, optional): Real part of admittance matrix
+            ``[n_bus, n_bus]``.
+        Y_imag (torch.Tensor, optional): Imaginary part of admittance matrix
+            ``[n_bus, n_bus]``.
+        edge_index (torch.Tensor, optional): Line connectivity ``[2, n_lines]``.
+        base_mva (float): Base MVA for power scaling.
+        slack_bus_indices (list[int], optional): Indices of slack buses.
+        device (torch.device, optional): Computation device.
     """
 
     def __init__(
@@ -142,7 +160,22 @@ class ACOPFConstraintEvaluator(nn.Module):
         Y_imag: Optional[torch.Tensor] = None,
         edge_index: Optional[torch.Tensor] = None
     ):
-        """Update network parameters for constraint evaluation."""
+        """Update network parameters for constraint evaluation.
+
+        Any argument that is not ``None`` replaces the corresponding stored
+        parameter.  All tensors are moved to the evaluator's device after
+        assignment.
+
+        Args:
+            voltage_limits (dict[str, torch.Tensor], optional): Updated voltage
+                limits.
+            generation_limits (dict[str, torch.Tensor], optional): Updated
+                generation limits.
+            line_limits (torch.Tensor, optional): Updated line flow limits.
+            Y_real (torch.Tensor, optional): Updated real admittance matrix.
+            Y_imag (torch.Tensor, optional): Updated imaginary admittance matrix.
+            edge_index (torch.Tensor, optional): Updated edge connectivity.
+        """
         if voltage_limits is not None:
             self.voltage_limits = voltage_limits
         if generation_limits is not None:
@@ -164,15 +197,25 @@ class ACOPFConstraintEvaluator(nn.Module):
         batch_data=None,
         return_individual: bool = True
     ) -> Dict[str, Union[torch.Tensor, Dict[str, torch.Tensor]]]:
-        """
-        Evaluate bound constraint violations.
+        """Evaluate bound constraint violations for voltage and generation.
+
+        Computes ReLU-based violation magnitudes for voltage magnitude
+        bounds, active power generation bounds, and reactive power generation
+        bounds.
 
         Args:
-            predictions: Model predictions with 'bus' and 'generator' keys
-            return_individual: Whether to return individual violation components
+            predictions (dict[str, torch.Tensor]): Model predictions with
+                ``'bus'`` ``[total_bus, 2]`` (VA, VM) and ``'generator'``
+                ``[total_gen, 2]`` (PG, QG) keys.
+            batch_data: Batch data (unused, reserved for future extensions).
+            return_individual (bool): If ``True``, include per-direction
+                violation components (e.g. ``vm_low_violations``,
+                ``vm_high_violations``).
 
         Returns:
-            Dictionary containing bound constraint violations
+            dict[str, torch.Tensor]: Violation metrics including
+                ``'total_bound_violations'`` and optionally individual
+                component violations.
         """
         violations = {}
 
@@ -333,42 +376,31 @@ class ACOPFConstraintEvaluator(nn.Module):
         batch_data,
         normalize: bool = True,
         return_individual: bool = True,
-        constraint_backend=None,
     ) -> Dict[str, Union[torch.Tensor, Dict[str, torch.Tensor]]]:
-        """
-        Evaluate all constraint violations comprehensively.
+        """Evaluate all constraint violations comprehensively.
+
+        Currently delegates to ``evaluate_bound_constraints`` and prefixes
+        results with ``bound_``.  Power-flow and line-flow evaluations are
+        planned but not yet active.
 
         Args:
-            predictions: Model predictions
-            batch_data: Batch data containing network information
-            normalize: Whether to normalize violations
-            return_individual: Whether to return individual violation components
-            constraint_backend: Optional backend providing training-aligned constraint metrics
+            predictions (dict[str, torch.Tensor]): Model predictions keyed
+                by node type.
+            batch_data: Batch data containing network information.
+            normalize (bool): Whether to normalize violations (reserved for
+                future use).
+            return_individual (bool): Whether to include individual violation
+                components.
 
         Returns:
-            Dictionary containing all constraint violations
+            dict[str, torch.Tensor]: All violation metrics, keyed with a
+                ``bound_`` prefix.
         """
         all_violations = {}
-        if constraint_backend is None:
-            import warnings
-
-            warnings.warn(
-                "No constraint_backend supplied to evaluate_all_constraints; "
-                "the evaluator will only report bound violations and skip power-balance/thermal-flow checks."
-            )
 
         # Evaluate bound constraints
         bound_violations = self.evaluate_bound_constraints(predictions, batch_data, return_individual)
         all_violations.update({f"bound_{k}": v for k, v in bound_violations.items()})
-
-        if constraint_backend is not None:
-            backend_info = constraint_backend.compute_constraint_metrics(
-                predictions,
-                batch_data,
-                return_components=return_individual,
-            )
-            for key, value in backend_info.items():
-                all_violations[f"backend_{key}"] = value
 
         # Compute total constraint violation
         # violation_keys = ['bound_total_bound_violations', 'real_power_flow_violations', 'reactive_power_flow_violations', 'line_flow_violations']
@@ -382,14 +414,17 @@ class ACOPFConstraintEvaluator(nn.Module):
         self,
         violations: Dict[str, torch.Tensor]
     ) -> Dict[str, float]:
-        """
-        Get a summary of constraint violations as float values.
+        """Convert violation tensors to a plain-float summary dictionary.
+
+        Scalar tensors are converted via ``.item()``; multi-element tensors
+        are reduced by mean.
 
         Args:
-            violations: Dictionary of violation tensors
+            violations (dict[str, torch.Tensor]): Dictionary of violation
+                tensors as returned by ``evaluate_all_constraints``.
 
         Returns:
-            Dictionary of violation values as floats
+            dict[str, float]: Violation values as Python floats.
         """
         summary = {}
 
@@ -407,15 +442,20 @@ def create_constraint_evaluator(
     case_data: Dict,
     device: Optional[torch.device] = None
 ) -> ACOPFConstraintEvaluator:
-    """
-    Create a constraint evaluator from case data.
+    """Create a constraint evaluator from a case-data dictionary.
+
+    Convenience factory that extracts ``voltage_limits``, ``generation_limits``,
+    ``line_limits``, ``Y_real``, ``Y_imag``, ``edge_index``, ``base_mva``, and
+    ``slack_bus_indices`` from *case_data* and passes them to
+    ``ACOPFConstraintEvaluator``.
 
     Args:
-        case_data: Dictionary containing network parameters
-        device: Computation device
+        case_data (dict): Dictionary containing network parameters. Expected
+            keys mirror the ``ACOPFConstraintEvaluator`` constructor arguments.
+        device (torch.device, optional): Computation device.
 
     Returns:
-        Configured ACOPFConstraintEvaluator
+        ACOPFConstraintEvaluator: Fully configured evaluator instance.
     """
     # Extract parameters from case data
     voltage_limits = case_data.get('voltage_limits')

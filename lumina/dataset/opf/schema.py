@@ -7,7 +7,7 @@ Data sources differ in feature ordering, so instead of hardcoding the feature or
 we define the following schemas in pydantic and then align everything within the OPFDataset class during preprocessing
  
 The canonical feature ordering is the following JSON schema from pglib-opf,
-contingency and hdf5 acopf data from exagrid needs to be aligned.
+hdf5 acopf data from exagrid needs to be aligned.
 
 Complete schema documentation is available at: 
 https://github.com/argonne-gridfm/GridAI-documentation/blob/main/data_generation/opfdata_schema_documentation.md
@@ -16,39 +16,73 @@ https://github.com/argonne-gridfm/GridAI-documentation/blob/main/data_generation
 
 
 class OPFSchemaModel(BaseModel):
+    """Base Pydantic model defining a column-ordered feature schema for OPF data.
+
+    Subclasses declare fields whose order defines the canonical column layout
+    of the corresponding numpy feature array. Provides utilities for schema
+    introspection, cross-schema alignment, and numpy conversion.
+    """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @classmethod
     def get_feature_names(cls) -> List[str]:
+        """Return the ordered list of feature field names.
+
+        Returns:
+            List[str]: Field names in declaration order.
+        """
         return list(cls.model_fields.keys())
-    
+
     @classmethod
     def get_field_indices(cls) -> Dict[str, int]:
-        """Return a dictionary mapping field names to their indices in the feature array."""
+        """Return a mapping from field names to their column indices.
+
+        Returns:
+            Dict[str, int]: ``{field_name: column_index}`` for every field.
+        """
         return {name: i for i, name in enumerate(cls.get_feature_names())}
-    
+
     @classmethod
     def get_alignment_map(cls, other: type["OPFSchemaModel"]) -> Dict[int, int]:
-        """
-        Return a mapping from indices in 'cls' to indices in 'other' for common fields.
-        Mapping: {index_in_cls: index_in_other}
+        """Compute a column index mapping from this schema to another.
+
+        Only fields present in both schemas are included.
+
+        Args:
+            other (type[OPFSchemaModel]): Target schema class.
+
+        Returns:
+            Dict[int, int]: ``{source_column: target_column}`` for shared fields.
         """
         cls_indices = cls.get_field_indices()
         other_indices = other.get_field_indices()
-        
+
         mapping = {}
         for name, idx in cls_indices.items():
             if name in other_indices:
                 mapping[idx] = other_indices[name]
         return mapping
-    
+
     @classmethod
     def from_numpy(cls, data: np.ndarray) -> "OPFSchemaModel":
-        """Create a model instance from a numpy array of features."""
+        """Create a model instance from a 1-D numpy array of feature values.
+
+        Args:
+            data (np.ndarray): Array whose elements correspond to schema fields
+                in declaration order.
+
+        Returns:
+            OPFSchemaModel: Populated model instance.
+        """
         return cls(**dict(zip(cls.get_feature_names(), data.tolist())))
-    
+
     def to_numpy(self) -> np.ndarray:
-        """Convert the model instance to a numpy array of features."""
+        """Convert this model instance to a 1-D numpy array of feature values.
+
+        Returns:
+            np.ndarray: Feature values in declaration order.
+        """
         return np.array([getattr(self, field) for field in self.get_feature_names()])
 
 
@@ -201,16 +235,3 @@ class H5EdgeSolution(OPFSchemaModel):
     qf: float = Field(..., description="Reactive power flow (from → to) (p.u.)")
     pt: float = Field(..., description="Active power flow (to → from) (p.u.)")
     qt: float = Field(..., description="Reactive power flow (to → from) (p.u.)")
-
-
-class ContingencyH5Load(OPFSchemaModel):
-    """Load features in Contingency HDF5 format."""
-    pd: float = Field(..., description="Active power demand (p.u.)")
-    qd: float = Field(..., description="Reactive power demand (p.u.)")
-    weight_p: float = Field(..., description="Load shedding priority weight (P)")
-    weight_q: float = Field(..., description="Load shedding priority weight (Q)")
-
-class ContingencyH5LoadSolution(OPFSchemaModel):
-    """Load solution features in Contingency HDF5 format."""
-    pd_served: float = Field(..., description="Active power actually served (p.u.)")
-    qd_served: float = Field(..., description="Reactive power actually served (p.u.)")

@@ -20,6 +20,15 @@ from torch_geometric.data import InMemoryDataset
 
 @dataclass(frozen=True)
 class ShardInfo:
+    """Metadata descriptor for a single dataset shard file.
+
+    Args:
+        path (str): Absolute or relative path to the ``.pt`` shard file.
+        num_samples (int): Number of samples contained in this shard.
+        group_id (Optional[int]): OPF group identifier, used for filtering.
+        name (Optional[str]): Human-readable shard name.
+    """
+
     path: str
     num_samples: int
     group_id: Optional[int] = None
@@ -46,6 +55,14 @@ def _infer_num_samples(path: str) -> int:
 
 
 def load_shard_manifest(path: str) -> Dict:
+    """Load a shard manifest JSON file and annotate it with its source path.
+
+    Args:
+        path (str): Path to the manifest JSON file.
+
+    Returns:
+        Dict: Parsed manifest dictionary with an added ``_manifest_path`` key.
+    """
     with open(path, "r") as f:
         manifest = json.load(f)
     manifest["_manifest_path"] = path
@@ -62,6 +79,21 @@ def _manifest_base_dir(manifest: Dict) -> str:
 
 
 def build_shard_infos(manifest: Dict) -> List[ShardInfo]:
+    """Build a list of ShardInfo objects from a parsed manifest dictionary.
+
+    Resolves relative shard paths against the manifest's base directory and
+    infers ``num_samples`` from the shard file when not specified.
+
+    Args:
+        manifest (Dict): Parsed shard manifest containing a ``"shards"`` list.
+
+    Returns:
+        List[ShardInfo]: Ordered list of shard descriptors.
+
+    Raises:
+        KeyError: If the manifest is missing the ``"shards"`` key or a shard
+            entry is missing the ``"path"`` key.
+    """
     if "shards" not in manifest:
         raise KeyError("Shard manifest missing 'shards' list.")
     base_dir = _manifest_base_dir(manifest)
@@ -90,6 +122,20 @@ def build_shard_infos(manifest: Dict) -> List[ShardInfo]:
 
 
 def filter_shards_by_group(shards: Iterable[ShardInfo], group_ids: Optional[Iterable[int]]):
+    """Filter shards to keep only those matching the given group identifiers.
+
+    Args:
+        shards (Iterable[ShardInfo]): Shard descriptors to filter.
+        group_ids (Optional[Iterable[int]]): Group IDs to retain. If ``None``
+            or empty, all shards are returned unfiltered.
+
+    Returns:
+        List[ShardInfo]: Filtered list of shard descriptors.
+
+    Raises:
+        ValueError: If filtering is requested but any shard lacks a
+            ``group_id``.
+    """
     shards = list(shards)
     if not group_ids:
         return shards
@@ -101,6 +147,23 @@ def filter_shards_by_group(shards: Iterable[ShardInfo], group_ids: Optional[Iter
 
 
 def resolve_split_shards(manifest: Dict, shards: List[ShardInfo], split: str) -> List[ShardInfo]:
+    """Select shards belonging to a named split defined in the manifest.
+
+    The manifest ``"splits"`` section may reference shards by integer index,
+    shard name, path, or basename.
+
+    Args:
+        manifest (Dict): Parsed shard manifest containing a ``"splits"`` section.
+        shards (List[ShardInfo]): Full ordered list of shard descriptors.
+        split (str): Name of the split (e.g. ``"train"``, ``"val"``, ``"test"``).
+
+    Returns:
+        List[ShardInfo]: Shards belonging to the requested split.
+
+    Raises:
+        KeyError: If the split name is not found in the manifest or a shard
+            reference cannot be resolved.
+    """
     splits = manifest.get("splits") or {}
     if split not in splits:
         raise KeyError(f"Split '{split}' not found in shard manifest.")
@@ -130,6 +193,22 @@ def split_shards_by_ratio(
     seed: int = 42,
     shuffle: bool = True,
 ):
+    """Partition shards into train/val/test splits by sample-count ratio.
+
+    Shards are optionally shuffled and then assigned to splits greedily until
+    each split's cumulative sample count reaches the target ratio.
+
+    Args:
+        shards (Iterable[ShardInfo]): Shard descriptors to partition.
+        train_ratio (float): Fraction of total samples for training.
+        val_ratio (float): Fraction of total samples for validation.
+        seed (int): Random seed for shuffling. (default: :obj:`42`)
+        shuffle (bool): Shuffle shards before splitting. (default: :obj:`True`)
+
+    Returns:
+        dict: Dictionary with ``"train"``, ``"val"``, and ``"test"`` keys,
+            each mapping to a list of :class:`ShardInfo`.
+    """
     shards = list(shards)
     splits = {"train": [], "val": [], "test": []}
     if not shards:
@@ -175,7 +254,21 @@ class _InMemoryShardAccessor:
 
 
 class OPFShardedIterableDataset(IterableDataset):
-    """Iterable dataset that streams samples from sharded .pt files."""
+    """Iterable dataset that streams OPF samples from sharded ``.pt`` files.
+
+    Shards are distributed across DDP ranks and DataLoader workers so that
+    each global worker processes a disjoint subset. Shard order can be
+    shuffled per epoch.
+
+    Args:
+        shards (Iterable[ShardInfo]): Shard descriptors to iterate over.
+        shuffle_shards (bool): Shuffle shard order each epoch.
+            (default: :obj:`False`)
+        seed (int): Base random seed for shard shuffling.
+            (default: :obj:`0`)
+        transform (Optional[Callable]): Per-sample transform applied on
+            iteration. (default: :obj:`None`)
+    """
 
     def __init__(
         self,
@@ -203,6 +296,11 @@ class OPFShardedIterableDataset(IterableDataset):
         return int(self._num_samples)
 
     def set_epoch(self, epoch: int) -> None:
+        """Set the current epoch for deterministic shard shuffling.
+
+        Args:
+            epoch (int): Current training epoch number.
+        """
         self.epoch = int(epoch)
 
     def _dist_info(self):
@@ -260,12 +358,26 @@ class OPFShardedIterableDataset(IterableDataset):
             yield from self._iter_shard(shard)
 
     def peek(self):
+        """Return the first sample from the first shard without iterating all data.
+
+        Returns:
+            The first data sample from the dataset.
+
+        Raises:
+            RuntimeError: If no shards are available.
+        """
         if not self.shards:
             raise RuntimeError("No shards available to sample from.")
         shard = self.shards[0]
         return next(self._iter_shard(shard))
 
     def metadata(self):
+        """Return node and edge feature dimensionality metadata from the first sample.
+
+        Returns:
+            dict: Dictionary with ``"nodes"`` and ``"edges"`` keys mapping
+                node types and edge types to their feature dimensions.
+        """
         sample = self.peek()
 
         def node_dim(node_type: str) -> int:

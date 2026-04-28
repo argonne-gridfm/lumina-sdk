@@ -93,13 +93,27 @@ def get_readout_layers(readout):
 
 
 class GNNPool(nn.Module):
-    r"""Graph pooling module for readout operations."""
+    """Graph pooling module that applies a named readout operation.
+
+    Args:
+        readout (str): Name of the readout strategy. One of ``'mean'``,
+            ``'sum'``, ``'max'``, ``'identity'``, or ``'cat_max_sum'``.
+    """
 
     def __init__(self, readout):
         super().__init__()
         self.readout = get_readout_layers(readout)
 
     def forward(self, x, batch):
+        """Apply the readout operation.
+
+        Args:
+            x (torch.Tensor): Node embeddings of shape ``(N, D)``.
+            batch (torch.Tensor): Batch assignment vector of shape ``(N,)``.
+
+        Returns:
+            torch.Tensor: Pooled representation.
+        """
         return self.readout(x, batch)
 
 
@@ -107,10 +121,11 @@ class GNNPool(nn.Module):
 # GNN models
 ##
 class GNNBase(nn.Module):
-    r""" Homogeneous GNN Base model for all GNN models.
+    """Abstract base class for homogeneous GNN models.
 
-    Attributes:
-        # TODO: add attr.
+    Provides ``_argsparse`` to flexibly accept graph data as positional
+    arguments, keyword arguments, or a PyG ``Batch`` / ``Data`` object.
+    Subclasses must define convolutional layers and a forward method.
     """
 
     def __init__(self):
@@ -246,6 +261,20 @@ class GNNBase(nn.Module):
 
 # Basic structure of GNNs
 class GNN_basic(GNNBase):
+    """Base homogeneous GNN with NNConv layers and an MLP head.
+
+    Provides the default ``get_layers``, ``forward``, ``get_emb``, and
+    ``loss`` methods. Subclasses (GAT, GCN, GIN, TRANSFORMER) override
+    ``get_layers`` and optionally ``get_emb`` to swap the convolution type.
+
+    Args:
+        input_dim (int): Number of input node features.
+        output_dim (int): Number of output features per node.
+        model_params (dict): Dictionary containing ``'edge_dim'``,
+            ``'num_layers'``, ``'hidden_dim'``, ``'dropout'``, and
+            ``'readout'`` keys.
+    """
+
     def __init__(self,
                  input_dim,
                  output_dim,
@@ -324,6 +353,17 @@ class GNN_basic(GNNBase):
 
 
 class GAT(GNN_basic):
+    """Homogeneous GNN using GATConv (Graph Attention Network) layers.
+
+    Replaces the default NNConv with ``GATConv`` and uses ``LeakyReLU``
+    activation in the MLP head.
+
+    Args:
+        input_dim (int): Number of input node features.
+        output_dim (int): Number of output features per node.
+        model_params (dict): Model hyperparameters (see ``GNN_basic``).
+    """
+
     def __init__(self, input_dim, output_dim, model_params):
         super().__init__(
             input_dim,
@@ -350,6 +390,17 @@ class GAT(GNN_basic):
 
 
 class GCN(GNN_basic):
+    """Homogeneous GNN using GCNConv (Graph Convolutional Network) layers.
+
+    Overrides ``get_layers`` to use ``GCNConv`` and ``get_emb`` to skip
+    edge attributes (GCNConv does not use them).
+
+    Args:
+        input_dim (int): Number of input node features.
+        output_dim (int): Number of output features per node.
+        model_params (dict): Model hyperparameters (see ``GNN_basic``).
+    """
+
     def __init__(self,
                  input_dim,
                  output_dim,
@@ -384,6 +435,17 @@ class GCN(GNN_basic):
 
 
 class GIN(GNN_basic):
+    """Homogeneous GNN using GINEConv (Graph Isomorphism Network) layers.
+
+    Uses ``GINEConv`` with edge attributes and a two-layer MLP with
+    ReLU/Sigmoid activations inside each convolution.
+
+    Args:
+        input_dim (int): Number of input node features.
+        output_dim (int): Number of output features per node.
+        model_params (dict): Model hyperparameters (see ``GNN_basic``).
+    """
+
     def __init__(
             self,
             input_dim,
@@ -422,6 +484,17 @@ class GIN(GNN_basic):
 
 
 class TRANSFORMER(GNN_basic):  # uppercase
+    """Homogeneous GNN using TransformerConv layers.
+
+    Applies multi-head graph transformer convolutions (4 heads, no
+    concatenation) with edge attribute support.
+
+    Args:
+        input_dim (int): Number of input node features.
+        output_dim (int): Number of output features per node.
+        model_params (dict): Model hyperparameters (see ``GNN_basic``).
+    """
+
     def __init__(
             self,
             input_dim,

@@ -18,6 +18,25 @@ from lumina.utils.graph_utils import OPFHomoWrapper
 
 
 class OPFSQLiteDatabase(SQLiteDatabase):
+    """SQLiteDatabase subclass with configurable timeout and PRAGMA settings.
+
+    Extends the PyG SQLiteDatabase to expose SQLite connection parameters
+    (busy timeout, journal mode, synchronous mode) that are important for
+    concurrent multi-process writes during dataset preprocessing.
+
+    Args:
+        path (str): Path to the SQLite database file.
+        name (str): Logical name for the database table.
+        schema (object): PyG schema object describing the stored data type.
+        timeout_sec (float): Connection timeout in seconds. (default: :obj:`600.0`)
+        busy_timeout_ms (Optional[int]): SQLite ``busy_timeout`` PRAGMA value
+            in milliseconds. Derived from *timeout_sec* if not set.
+        journal_mode (Optional[str]): SQLite ``journal_mode`` PRAGMA.
+            (default: :obj:`"WAL"`)
+        synchronous (Optional[str]): SQLite ``synchronous`` PRAGMA.
+            (default: :obj:`"NORMAL"`)
+    """
+
     def __init__(
         self,
         path: str,
@@ -37,6 +56,7 @@ class OPFSQLiteDatabase(SQLiteDatabase):
         super().__init__(path=path, name=name, schema=schema)
 
     def connect(self) -> None:
+        """Open the SQLite connection and apply configured PRAGMAs."""
         import sqlite3
 
         timeout = self._timeout_sec if self._timeout_sec is not None else 5.0
@@ -51,10 +71,45 @@ class OPFSQLiteDatabase(SQLiteDatabase):
 
 
 class OPFOnDiskDataset(OnDiskDataset):
-    r"""On-disk OPF dataset backed by SQLite/RocksDB.
+    r"""On-disk OPF dataset backed by SQLite or RocksDB.
 
-    Stores individual HeteroData samples in a database to avoid loading the
-    full dataset into CPU memory.
+    Stores individual HeteroData samples in a database so that the full
+    dataset need not reside in CPU memory. Supports the same cases and
+    group structure as :class:`OPFDataset`.
+
+    Args:
+        root (str): Root directory where the dataset should be saved.
+        case_name (str): Name of the pglib-opf case.
+            (default: :obj:`"pglib_opf_case14_ieee"`)
+        group_id (int): Group to load (each group has 15,000 samples).
+            (default: :obj:`0`)
+        transform (callable, optional): Per-access transform applied to each
+            sample. (default: :obj:`None`)
+        pre_transform (callable, optional): Transform applied once before
+            writing to the database. (default: :obj:`None`)
+        pre_filter (callable, optional): Predicate; samples that return
+            ``False`` are skipped. (default: :obj:`None`)
+        force_reload (bool): Re-process even if the database already exists.
+            (default: :obj:`False`)
+        keep_temp (bool): Keep extracted JSON temp files after processing.
+            (default: :obj:`False`)
+        n_jobs (int): Number of parallel workers for processing.
+            (default: :obj:`-1`)
+        local_raw_folder (str, optional): Local folder containing raw archives;
+            skips download when set. (default: :obj:`None`)
+        backend (str): Database backend, ``"sqlite"`` or ``"rocksdb"``.
+            (default: :obj:`"sqlite"`)
+        schema (object): PyG schema for the stored data type.
+        log (bool): Enable logging. (default: :obj:`True`)
+        write_batch_size (int): Number of samples to batch per DB write.
+            (default: :obj:`128`)
+        sqlite_timeout_sec (float): SQLite connection timeout in seconds.
+            (default: :obj:`600.0`)
+        sqlite_busy_timeout_ms (Optional[int]): SQLite busy timeout in ms.
+        sqlite_journal_mode (Optional[str]): SQLite journal mode PRAGMA.
+            (default: :obj:`"WAL"`)
+        sqlite_synchronous (Optional[str]): SQLite synchronous PRAGMA.
+            (default: :obj:`"NORMAL"`)
     """
 
     url = "https://storage.googleapis.com/gridopt-dataset"
@@ -75,7 +130,6 @@ class OPFOnDiskDataset(OnDiskDataset):
             "pglib_opf_case13659_pegase",
         ] = "pglib_opf_case14_ieee",
         group_id: int = 0,
-        topological_perturbations: bool = False,
         transform: Optional[Callable] = None,
         pre_transform: Optional[Callable] = None,
         pre_filter: Optional[Callable] = None,
@@ -105,13 +159,10 @@ class OPFOnDiskDataset(OnDiskDataset):
 
         self.case_name = case_name
         self.group_id = int(group_id)
-        self.topological_perturbations = topological_perturbations
 
         self._raw_root = osp.join(root, "OPFData/raw")
         self._processed_root = osp.join(root, "OPFData/on_disk")
         self._release = "dataset_release_1"
-        if topological_perturbations:
-            self._release += "_nminusone"
         self.n_jobs = n_jobs
         self.keep_temp = keep_temp
         self.local_raw_folder = local_raw_folder
@@ -192,9 +243,15 @@ class OPFOnDiskDataset(OnDiskDataset):
         return self._db
 
     def download(self) -> None:
+        """Download and extract the raw tar.gz archive for this group."""
         self.download_and_extract(self.raw_file_names[0])
 
     def download_and_extract(self, name: str) -> None:
+        """Download a tar.gz archive by name and extract it to the raw directory.
+
+        Args:
+            name (str): Filename of the archive to download.
+        """
         url = f"{self.url}/{self._release}/{name}"
         path = download_url(url, self.raw_dir)
         extract_tar(path, self.raw_dir)
@@ -212,6 +269,7 @@ class OPFOnDiskDataset(OnDiskDataset):
                     os.remove(sidecar)
 
     def process(self) -> None:
+        """Process raw JSON files and write samples into the on-disk database."""
         if osp.exists(self.processed_paths[0]):
             self._clear_processed()
 
@@ -228,6 +286,11 @@ class OPFOnDiskDataset(OnDiskDataset):
             shutil.rmtree(osp.join(self.raw_dir, "gridopt-dataset-tmp"))
 
     def process_json_group(self, group_id: int) -> None:
+        """Parse all JSON files for a group and insert them into the database.
+
+        Args:
+            group_id (int): Group identifier to process.
+        """
         group_json_files = glob(osp.join(self.tmp_dir, f"group_{group_id}", "*.json"))
         if len(group_json_files) < 15000:
             extract_tar(osp.join(self.raw_dir, self.raw_file_names[0]), self.raw_dir)
@@ -251,6 +314,12 @@ class OPFOnDiskDataset(OnDiskDataset):
             self.extend(batch)
 
     def metadata(self):
+        """Return node and edge feature dimensionality metadata from the first sample.
+
+        Returns:
+            dict: Dictionary with ``"nodes"`` and ``"edges"`` keys mapping node
+                types and edge types to their respective feature dimensions.
+        """
         sample = self.get(0)
 
         def node_dim(node_type: str) -> int:
@@ -293,13 +362,43 @@ class OPFOnDiskDataset(OnDiskDataset):
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__}({len(self)}, "
-            f"case_name={self.case_name}, "
-            f"topological_perturbations={self.topological_perturbations})"
+            f"case_name={self.case_name})"
         )
 
 
 class OPFOnDiskHomogeneousDataset(OPFOnDiskDataset):
-    r"""On-disk OPF dataset that precomputes homogeneous graphs."""
+    r"""On-disk OPF dataset that converts to homogeneous graphs before storing.
+
+    Each HeteroData sample is converted to a homogeneous ``Data`` object via
+    :class:`OPFHomoWrapper`, optionally pruned and cast to a compact dtype for
+    storage. On retrieval the data is restored to float32 if needed.
+
+    Args:
+        *args: Positional arguments forwarded to :class:`OPFOnDiskDataset`.
+        add_node_type (bool): Append one-hot node type features.
+            (default: :obj:`True`)
+        add_edge_type (bool): Append one-hot edge type features.
+            (default: :obj:`True`)
+        sanitize_targets (bool): Replace non-finite targets with zero.
+            (default: :obj:`True`)
+        log_bad_targets (bool): Log warnings for non-finite targets.
+            (default: :obj:`True`)
+        max_bad_target_logs (int): Maximum bad-target warnings to emit.
+            (default: :obj:`1`)
+        processed_suffix (str): Suffix for the processed directory name.
+            (default: :obj:`"homo"`)
+        attach_full_edge_attr (bool): Store full concatenated edge attributes
+            as ``edge_attr_full``. (default: :obj:`False`)
+        prune_homo (bool): Remove extraneous attributes from the homogeneous
+            data before writing. (default: :obj:`True`)
+        storage_dtype (Optional[str]): Dtype for on-disk storage of floating
+            point tensors, e.g. ``"float16"``. ``None`` keeps the original
+            dtype. (default: :obj:`"float16"`)
+        restore_fp32 (bool): Cast tensors back to float32 on retrieval.
+            (default: :obj:`True`)
+        **kwargs: Additional keyword arguments forwarded to
+            :class:`OPFOnDiskDataset`.
+    """
 
     def __init__(
         self,

@@ -4,7 +4,7 @@ command:
   - ./scripts/perlmutter.launch.ddp.sh
 method: bayes
 metric:
-  name: val/feas/total_violation
+  name: val/score
   goal: minimize
 parameters:
   wandb_project:
@@ -15,8 +15,6 @@ parameters:
   loss_type:
     values:
       - mse
-      - augmented_lagrangian
-      - violated_lagrangian
   optimizer.Adam.lr:
     distribution: log_uniform_values
     min: 0.00001
@@ -36,36 +34,6 @@ parameters:
       - 2
       - 4
       - 8
-  lagrangian.warmup_samples:
-    values:
-      - 6000
-      - 12000
-      - 24000
-      - 48000
-      - 96000
-  lagrangian.penalty_check_samples:
-    values:
-      - 1500
-      - 3000
-      - 6000
-      - 12000
-      - 24000
-  lagrangian.multiplier_check_samples:
-    values:
-      - 1500
-      - 3000
-      - 6000
-      - 12000
-      - 24000
-  # Constraint normalization knobs shared by power-balance and line-limit constraints.
-  # size normalization improves cross-topology comparability; RMS normalizes per-batch magnitude.
-  lagrangian.normalize_by_rms:
-    values:
-      - false
-      - true
-  lagrangian.normalize_by_size:
-    values:
-      - true
 early_terminate:
   type: hyperband
   max_iter: 20

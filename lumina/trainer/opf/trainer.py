@@ -63,33 +63,42 @@ def _normalize_group_ids(group_ids):
 
 
 class BaseOPFTrainer:
+    """Base trainer for AC Optimal Power Flow GNN models with DDP support.
+
+    Provides the shared training infrastructure used by both single-case and
+    multi-case trainers, including optimizer/scheduler initialization, gradient
+    clipping, non-finite loss handling, W&B logging, checkpoint management,
+    sample-based scheduling, and throughput measurement.
+
+    Subclasses must implement ``_load_data``, ``_create_dataloaders``,
+    ``_create_model``, ``_initialize_loss_managers``, ``_checkpoint_tag``,
+    ``train_epoch``, and ``validate``.
+
+    Args:
+        config (dict): Full training configuration (parsed YAML).
+        model_type (str): Model architecture identifier (e.g. ``"HeteroGNN"``).
+        loss_type (str): Loss function name (e.g. ``"mse"``, ``"rmse"``).
+        minmax_scaling (bool): Whether to apply min-max scaling in forward pass.
+        local_rank (int): Local GPU rank for DDP.
+        global_rank (int): Global process rank for DDP.
+        world_size (int): Total number of DDP processes.
+        wandb_run_name (str, optional): Custom W&B run name.
+        wandb_group_name (str, optional): W&B run group.
+        wandb_requested (bool): Whether W&B logging was requested.
+        wandb_project (str): W&B project name.
+        wandb_entity (str, optional): W&B entity/team name.
+        run_metadata (dict, optional): Extra metadata to log with the run.
+    """
+
     TRAIN_METRIC_NAMES = (
         "train/loss/total",
         "train/loss/objective",
-        "train/loss/lagrange_term",
-        "train/loss/penalty_term",
-        "train/feas/total_violation",
-        "train/feas/total_violation_ema",
-        "train/feas/total_violation_norm",
-        "train/feas/total_violation_ema_norm",
-        "train/feas/p_balance_rmse_pu",
-        "train/feas/q_balance_rmse_pu",
-        "train/feas/line_limit_rmse_pu",
-        "train/lagrangian/penalty_mu",
-        "train/lagrangian/multiplier_norm",
-        "train/perf/constraint_eval_ms",
         "train/perf/nonfinite_loss_skips",
         "train/perf/nonfinite_grad_skips",
     )
     VAL_METRIC_NAMES = (
         "val/loss/total",
         "val/loss/objective",
-        "val/feas/total_violation",
-        "val/feas/total_violation_norm",
-        "val/feas/p_balance_rmse_pu",
-        "val/feas/q_balance_rmse_pu",
-        "val/feas/line_limit_rmse_pu",
-        "val/perf/constraint_eval_ms",
         "val/perf/eval_batches",
         "val/perf/data_ms",
         "val/perf/forward_ms",
@@ -98,46 +107,15 @@ class BaseOPFTrainer:
     )
     TRAIN_METRIC_MAP = (
         ("objective", "train/loss/objective"),
-        ("lagrange_term", "train/loss/lagrange_term"),
-        ("penalty_term", "train/loss/penalty_term"),
-        ("raw_constraint_violation", "train/feas/total_violation"),
-        ("ema_constraint_violation", "train/feas/total_violation_ema"),
-        ("raw_constraint_violation_norm", "train/feas/total_violation_norm"),
-        ("ema_constraint_violation_norm", "train/feas/total_violation_ema_norm"),
-        ("p_balance_rmse", "train/feas/p_balance_rmse_pu"),
-        ("q_balance_rmse", "train/feas/q_balance_rmse_pu"),
-        ("line_limit_rmse", "train/feas/line_limit_rmse_pu"),
-        ("penalty_parameter", "train/lagrangian/penalty_mu"),
-        ("last_multiplier_norm", "train/lagrangian/multiplier_norm"),
-        ("constraint_eval_ms", "train/perf/constraint_eval_ms"),
     )
     VAL_METRIC_MAP = (
-        ("raw_constraint_violation", "val/feas/total_violation"),
-        ("raw_constraint_violation_norm", "val/feas/total_violation_norm"),
-        ("p_balance_rmse", "val/feas/p_balance_rmse_pu"),
-        ("q_balance_rmse", "val/feas/q_balance_rmse_pu"),
-        ("line_limit_rmse", "val/feas/line_limit_rmse_pu"),
-        ("constraint_eval_ms", "val/perf/constraint_eval_ms"),
     )
     TRAIN_METRIC_GROUPS = (
         (
             "train/loss/total",
             "train/loss/objective",
-            "train/loss/lagrange_term",
-            "train/loss/penalty_term",
         ),
         (
-            "train/feas/total_violation",
-            "train/feas/total_violation_ema",
-            "train/feas/total_violation_norm",
-            "train/feas/total_violation_ema_norm",
-            "train/feas/p_balance_rmse_pu",
-            "train/feas/q_balance_rmse_pu",
-            "train/feas/line_limit_rmse_pu",
-        ),
-        ("train/lagrangian/penalty_mu", "train/lagrangian/multiplier_norm"),
-        (
-            "train/perf/constraint_eval_ms",
             "train/perf/nonfinite_loss_skips",
             "train/perf/nonfinite_grad_skips",
         ),
@@ -145,14 +123,6 @@ class BaseOPFTrainer:
     VAL_METRIC_GROUPS = (
         ("val/loss/total", "val/loss/objective", "val/score"),
         (
-            "val/feas/total_violation",
-            "val/feas/total_violation_norm",
-            "val/feas/p_balance_rmse_pu",
-            "val/feas/q_balance_rmse_pu",
-            "val/feas/line_limit_rmse_pu",
-        ),
-        (
-            "val/perf/constraint_eval_ms",
             "val/perf/eval_batches",
             "val/perf/data_ms",
             "val/perf/forward_ms",
@@ -210,7 +180,6 @@ class BaseOPFTrainer:
         )
         self.on_disk_sqlite_journal_mode = data_config.get("on_disk_sqlite_journal_mode", "WAL")
         self.on_disk_sqlite_synchronous = data_config.get("on_disk_sqlite_synchronous", "NORMAL")
-        self.topological_perturbations = bool(data_config.get("topological_perturbations", False))
         self.data_staging = data_config.get("staging", {}) if isinstance(data_config.get("staging"), dict) else {}
         self.data_staging_lock_timeout = int(self.data_staging.get("lock_timeout_sec", 7200))
         self.on_disk_homo_suffix = str(data_config.get("on_disk_homo_suffix", "homo"))
@@ -397,7 +366,6 @@ class BaseOPFTrainer:
                 case_name,
                 group_id,
                 self.on_disk_backend,
-                self.topological_perturbations,
                 processed_suffix,
             )
             lock_path = get_on_disk_lock_path(
@@ -405,7 +373,6 @@ class BaseOPFTrainer:
                 case_name,
                 group_id,
                 self.on_disk_backend,
-                self.topological_perturbations,
                 processed_suffix,
             )
             if self.global_rank == 0:
@@ -425,7 +392,6 @@ class BaseOPFTrainer:
                         case_name=case_name,
                         group_id=group_id,
                         backend=self.on_disk_backend,
-                        topological_perturbations=self.topological_perturbations,
                         processed_suffix=processed_suffix,
                         log=self.global_rank == 0,
                     )
@@ -454,14 +420,12 @@ class BaseOPFTrainer:
         manifest_path = get_sharded_manifest_path(
             source_root,
             case_name,
-            self.topological_perturbations,
             processed_suffix,
             self.sharded_manifest_name,
         )
         lock_path = get_sharded_lock_path(
             source_root,
             case_name,
-            self.topological_perturbations,
             processed_suffix,
             self.sharded_manifest_name,
         )
@@ -482,7 +446,6 @@ class BaseOPFTrainer:
                     source_root=source_root,
                     stage_root=stage_root,
                     case_name=case_name,
-                    topological_perturbations=self.topological_perturbations,
                     processed_suffix=processed_suffix,
                     manifest_name=self.sharded_manifest_name,
                     log=self.global_rank == 0,
@@ -502,7 +465,6 @@ class BaseOPFTrainer:
         dataset_kwargs = dict(
             root=root,
             case_name=case_name,
-            topological_perturbations=self.topological_perturbations,
             local_raw_folder=self.config.get("local_raw_folder"),
             force_reload=False,
         )
@@ -511,7 +473,6 @@ class BaseOPFTrainer:
             dataset_kwargs.update(
                 {
                     "backend": self.on_disk_backend,
-                    "topological_perturbations": self.topological_perturbations,
                     "write_batch_size": self.on_disk_write_batch_size,
                     "sqlite_timeout_sec": self.on_disk_sqlite_timeout_sec,
                     "sqlite_busy_timeout_ms": self.on_disk_sqlite_busy_timeout_ms,
@@ -568,7 +529,6 @@ class BaseOPFTrainer:
         manifest_path = get_sharded_manifest_path(
             dataset_root,
             case_name,
-            self.topological_perturbations,
             processed_suffix,
             self.sharded_manifest_name,
         )
@@ -1331,38 +1291,6 @@ class BaseOPFTrainer:
         )
         self.save_checkpoint(checkpoint_path)
 
-    def _sync_lagrangian_inputs(self, constraint_violation, constraints, batch_samples=None, total_batch_samples=None):
-        if not dist.is_available() or not dist.is_initialized() or self.world_size <= 1:
-            return constraint_violation, constraints
-
-        synced_constraints = constraints
-        synced_violation = constraint_violation
-        weight = None
-        total_weight = float(self.world_size)
-        if batch_samples is not None and total_batch_samples:
-            weight = float(batch_samples)
-            total_weight = float(total_batch_samples)
-
-        with torch.no_grad():
-            if torch.is_tensor(synced_constraints) and synced_constraints.numel() > 0:
-                weighted_constraints = synced_constraints.detach()
-                if weight is not None:
-                    weighted_constraints = weighted_constraints * weight
-                dist.all_reduce(weighted_constraints, op=dist.ReduceOp.SUM)
-                synced_constraints = weighted_constraints / total_weight
-
-            if synced_violation is not None:
-                if torch.is_tensor(synced_violation):
-                    weighted_violation = synced_violation.detach()
-                else:
-                    weighted_violation = torch.tensor(float(synced_violation), device=self.device)
-                if weight is not None:
-                    weighted_violation = weighted_violation * weight
-                dist.all_reduce(weighted_violation, op=dist.ReduceOp.SUM)
-                synced_violation = weighted_violation / total_weight
-
-        return synced_violation, synced_constraints
-
     def _add_metric(self, metric_sums, metric_counts, name, value, weight=1.0):
         numeric_value = self._as_float(value)
         if numeric_value is None:
@@ -1395,13 +1323,7 @@ class BaseOPFTrainer:
         objective = metric_avgs.get("val/loss/objective")
         if objective is None:
             objective = 0.0
-        violation_key = "val/feas/total_violation"
-        if self.log_normalized_violation:
-            violation_key = "val/feas/total_violation_norm"
-        violation = metric_avgs.get(violation_key)
-        if violation is None:
-            violation = 0.0
-        metric_avgs["val/score"] = objective + self.score_alpha * violation
+        metric_avgs["val/score"] = objective
 
     def _violation_eval_disabled(self):
         return self.violation_eval_p <= 0.0
@@ -1435,6 +1357,17 @@ class BaseOPFTrainer:
                 print("    " + ", ".join(parts))
 
     def forward(self, batch):
+        """Run a forward pass through the model.
+
+        Handles both heterogeneous and homogeneous model types, performing
+        the appropriate input conversion.
+
+        Args:
+            batch: PyG batch object on the training device.
+
+        Returns:
+            dict[str, torch.Tensor]: Per-node-type prediction tensors.
+        """
         if self.model_type in HETERO_MODEL_TYPES:
             x_dict = {k: v.float() for k, v in batch.x_dict.items()}
             return self.model.module(x_dict, batch.edge_index_dict, minmax_scaling=self.minmax_scaling)
@@ -1460,6 +1393,11 @@ class BaseOPFTrainer:
         return predictions
 
     def save_checkpoint(self, filepath):
+        """Save a training checkpoint to disk (rank-0 only).
+
+        Args:
+            filepath (str): Destination path for the ``.pt`` checkpoint file.
+        """
         if self.global_rank == 0:
             checkpoint = self._checkpoint_payload()
             torch.save(checkpoint, filepath)
@@ -1467,6 +1405,13 @@ class BaseOPFTrainer:
             self._on_checkpoint_saved(filepath)
 
     def train(self):
+        """Run the full training loop across all epochs.
+
+        Iterates for ``max_epochs`` epochs, calling ``train_epoch`` each
+        iteration.  Handles early stopping via patience, sample-budget
+        limits, periodic validation, checkpoint saving, throughput
+        measurement finalization, and W&B cleanup.
+        """
         checkpoint_dir = self.checkpoint_dir
         if self.global_rank == 0:
             os.makedirs(checkpoint_dir, exist_ok=True)
@@ -1502,6 +1447,30 @@ class BaseOPFTrainer:
 
 
 class OPFTrainer(BaseOPFTrainer):
+    """Single-case OPF trainer for DDP training on one power-grid topology.
+
+    Manages a single dataset (one case name with one or more data groups),
+    creates a single loss manager, and provides ``train_epoch`` /
+    ``validate`` implementations that iterate over one train/val loader pair.
+
+    Args:
+        config (dict): Full training configuration (parsed YAML).
+        case_name (str): Fully-qualified PGLib case name.
+        group_ids (list[int] | int): Data group identifiers to load.
+        model_type (str): Model architecture identifier.
+        loss_type (str): Loss function name.
+        minmax_scaling (bool): Whether to apply min-max scaling.
+        local_rank (int): Local GPU rank for DDP.
+        global_rank (int): Global process rank for DDP.
+        world_size (int): Total number of DDP processes.
+        wandb_run_name (str, optional): Custom W&B run name.
+        wandb_group_name (str, optional): W&B run group.
+        wandb_requested (bool): Whether W&B logging was requested.
+        wandb_project (str): W&B project name.
+        wandb_entity (str, optional): W&B entity/team name.
+        run_metadata (dict, optional): Extra metadata to log with the run.
+    """
+
     def __init__(
         self,
         config,
@@ -1703,11 +1672,9 @@ class OPFTrainer(BaseOPFTrainer):
         self.model = self._build_model(sample_data, metadata, per_node_output_size)
 
     def _initialize_loss_managers(self):
-        lagrangian_config = self.config.get("lagrangian", {})
         self.loss_manager = OPFLossManager(
             loss_type=self.loss_type,
             device=self.device,
-            lagrangian_config=lagrangian_config,
             log_normalized_violation=self.log_normalized_violation,
         )
 
@@ -1725,6 +1692,21 @@ class OPFTrainer(BaseOPFTrainer):
                 pass
 
     def train_epoch(self, epoch):
+        """Execute one training epoch over the single-case dataset.
+
+        Iterates through all batches in the training loader, performing
+        forward/backward passes with gradient accumulation, non-finite
+        loss/gradient handling, optional throughput tracking, and mid-epoch
+        validation/checkpointing when sample-based schedules are active.
+
+        Args:
+            epoch (int): Current epoch index (used for sampler seeding and
+                progress display).
+
+        Returns:
+            tuple[float, float, dict]: ``(avg_loss, avg_task_loss, metric_avgs)``
+                aggregated across all DDP ranks.
+        """
         self.model.train()
         if self.train_sampler is not None:
             self.train_sampler.set_epoch(epoch)
@@ -1765,31 +1747,10 @@ class OPFTrainer(BaseOPFTrainer):
                 step_samples += tracker.get_batch_samples(batch)
 
             predictions = self.forward(batch)
-            collect_constraints = self.loss_manager.lagrangian is not None
             loss, loss_info = self.loss_manager.compute_loss(
                 predictions,
                 batch,
                 return_info=True,
-                collect_constraints=collect_constraints,
-            )
-
-            global_batch_samples = batch_samples
-            synced_violation = loss_info.get("constraint_violation")
-            synced_constraints = loss_info.get("constraints")
-            if self.loss_manager.lagrangian is not None:
-                global_batch_samples = self._sync_batch_samples(batch_samples)
-                synced_violation, synced_constraints = self._sync_lagrangian_inputs(
-                    synced_violation,
-                    synced_constraints,
-                    batch_samples=batch_samples,
-                    total_batch_samples=global_batch_samples,
-                )
-
-            self.loss_manager.update_lagrangian(
-                constraint_violation=synced_violation,
-                constraints=synced_constraints,
-                is_training=self.model.training,
-                sample_count=global_batch_samples,
             )
 
             loss_value = loss.item()
@@ -1871,11 +1832,21 @@ class OPFTrainer(BaseOPFTrainer):
         metric_sums, metric_counts = self._reduce_metrics(metric_sums, metric_counts)
         metric_avgs = self._compute_metric_avgs(metric_sums, metric_counts)
 
-        self.loss_manager.step_epoch()
-
         return loss_tensor[0].item(), loss_tensor[1].item(), metric_avgs
 
     def validate(self):
+        """Run validation over the single-case validation loader.
+
+        Evaluates constraint violations on a (possibly sub-sampled) set of
+        validation batches.  Timing information is optionally collected per
+        batch.  Results are reduced across all DDP ranks.
+
+        Returns:
+            tuple[float | None, float | None, dict | None]:
+                ``(avg_loss, avg_task_loss, metric_avgs)``, or
+                ``(None, None, None)`` when validation is disabled or no
+                batches were evaluated.
+        """
         self.model.eval()
 
         if self.violation_eval_p <= 0.0:
@@ -1922,19 +1893,11 @@ class OPFTrainer(BaseOPFTrainer):
                 if do_timing:
                     self._sync_for_timing()
                     timing_after_forward = time.perf_counter()
-                if self.loss_manager.lagrangian is None:
-                    loss, loss_info = self.loss_manager.compute_loss(
-                        predictions,
-                        batch,
-                        return_info=True,
-                        collect_constraints=True,
-                    )
-                else:
-                    loss, loss_info = self.loss_manager.compute_loss(
-                        predictions,
-                        batch,
-                        return_info=True,
-                    )
+                loss, loss_info = self.loss_manager.compute_loss(
+                    predictions,
+                    batch,
+                    return_info=True,
+                )
                 if do_timing:
                     self._sync_for_timing()
                     timing_after_loss = time.perf_counter()
@@ -1998,6 +1961,31 @@ class OPFTrainer(BaseOPFTrainer):
 
 
 class MultiCaseOPFTrainer(BaseOPFTrainer):
+    """Multi-case OPF trainer for joint training across multiple grid topologies.
+
+    Extends ``BaseOPFTrainer`` to handle multiple power-grid cases simultaneously.
+    Each case has its own dataset, data loader, and loss manager, while sharing
+    a single model and optimizer.  Cases can be trained sequentially per epoch or
+    interleaved every ``case_mix_every_n_steps`` batches.
+
+    Args:
+        config (dict): Full training configuration (parsed YAML).
+        case_names (list[str]): Fully-qualified PGLib case names.
+        group_ids (list[int] | int): Data group identifiers to load.
+        model_type (str): Model architecture identifier.
+        loss_type (str): Loss function name.
+        minmax_scaling (bool): Whether to apply min-max scaling.
+        local_rank (int): Local GPU rank for DDP.
+        global_rank (int): Global process rank for DDP.
+        world_size (int): Total number of DDP processes.
+        wandb_run_name (str, optional): Custom W&B run name.
+        wandb_group_name (str, optional): W&B run group.
+        wandb_requested (bool): Whether W&B logging was requested.
+        wandb_project (str): W&B project name.
+        wandb_entity (str, optional): W&B entity/team name.
+        run_metadata (dict, optional): Extra metadata to log with the run.
+    """
+
     def __init__(
         self,
         config,
@@ -2327,14 +2315,12 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
         self.model = self._build_model(sample_data, metadata, per_node_output_size)
 
     def _initialize_loss_managers(self):
-        lagrangian_config = self.config.get("lagrangian", {})
         self.loss_managers = {}
 
         for case_idx in range(len(self.case_names)):
             self.loss_managers[case_idx] = OPFLossManager(
                 loss_type=self.loss_type,
                 device=self.device,
-                lagrangian_config=lagrangian_config,
                 log_normalized_violation=self.log_normalized_violation,
             )
 
@@ -2359,6 +2345,19 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
         return payload
 
     def train_epoch(self, epoch):
+        """Execute one training epoch across all cases.
+
+        Cases are either iterated sequentially (each case exhausted before
+        the next) or interleaved every ``case_mix_every_n_steps`` batches,
+        depending on configuration.
+
+        Args:
+            epoch (int): Current epoch index.
+
+        Returns:
+            tuple[float, float, dict]: ``(avg_loss, avg_task_loss, metric_avgs)``
+                aggregated across all cases and DDP ranks.
+        """
         self.model.train()
 
         total_loss = 0.0
@@ -2387,31 +2386,10 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
                 step_samples += tracker.get_batch_samples(batch)
 
             predictions = self.forward(batch)
-            collect_constraints = self.loss_managers[case_idx].lagrangian is not None
             loss, loss_info = self.loss_managers[case_idx].compute_loss(
                 predictions,
                 batch,
                 return_info=True,
-                collect_constraints=collect_constraints,
-            )
-
-            global_batch_samples = batch_samples
-            synced_violation = loss_info.get("constraint_violation")
-            synced_constraints = loss_info.get("constraints")
-            if self.loss_managers[case_idx].lagrangian is not None:
-                global_batch_samples = self._sync_batch_samples(batch_samples)
-                synced_violation, synced_constraints = self._sync_lagrangian_inputs(
-                    synced_violation,
-                    synced_constraints,
-                    batch_samples=batch_samples,
-                    total_batch_samples=global_batch_samples,
-                )
-
-            self.loss_managers[case_idx].update_lagrangian(
-                constraint_violation=synced_violation,
-                constraints=synced_constraints,
-                is_training=self.model.training,
-                sample_count=global_batch_samples,
             )
 
             loss_value = loss.item()
@@ -2604,12 +2582,21 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
         metric_sums, metric_counts = self._reduce_metrics(metric_sums, metric_counts)
         metric_avgs = self._compute_metric_avgs(metric_sums, metric_counts)
 
-        for manager in self.loss_managers.values():
-            manager.step_epoch()
-
         return loss_tensor[0].item(), loss_tensor[1].item(), metric_avgs
 
     def validate(self):
+        """Run validation across all cases with validation loaders.
+
+        Iterates through each case's validation loader, evaluating
+        constraint violations.  Results are aggregated across cases and
+        reduced across all DDP ranks.
+
+        Returns:
+            tuple[float | None, float | None, dict | None]:
+                ``(avg_loss, avg_task_loss, metric_avgs)``, or
+                ``(None, None, None)`` when validation is disabled or no
+                batches were evaluated.
+        """
         if not self.val_case_indices:
             return None, None, None
 
@@ -2664,19 +2651,11 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
                     if do_timing:
                         self._sync_for_timing()
                         timing_after_forward = time.perf_counter()
-                    if self.loss_managers[case_idx].lagrangian is None:
-                        loss, loss_info = self.loss_managers[case_idx].compute_loss(
-                            predictions,
-                            batch,
-                            return_info=True,
-                            collect_constraints=True,
-                        )
-                    else:
-                        loss, loss_info = self.loss_managers[case_idx].compute_loss(
-                            predictions,
-                            batch,
-                            return_info=True,
-                        )
+                    loss, loss_info = self.loss_managers[case_idx].compute_loss(
+                        predictions,
+                        batch,
+                        return_info=True,
+                    )
                     if do_timing:
                         self._sync_for_timing()
                         timing_after_loss = time.perf_counter()

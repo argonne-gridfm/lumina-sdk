@@ -43,7 +43,7 @@ if __name__ == "__main__":
     rank, size = get_rank_size()
     for case_name, group_id in tasks[rank::size]:
         print(f"Processing case [rank: {rank}]: {case_name}, group_id: {group_id}")
-        # OPFDataset(root=root, case_name=case_name, group_id=group_id, topological_perturbations=False)
-        # OPFHomogeneousDataset(root=root, case_name=case_name, group_id=group_id, topological_perturbations=False)
-        # OPFOnDiskDataset(root=root, case_name=case_name, group_id=group_id, topological_perturbations=False)
-        OPFOnDiskHomogeneousDataset(root=root, case_name=case_name, group_id=group_id, topological_perturbations=False)
+        # OPFDataset(root=root, case_name=case_name, group_id=group_id)
+        # OPFHomogeneousDataset(root=root, case_name=case_name, group_id=group_id)
+        # OPFOnDiskDataset(root=root, case_name=case_name, group_id=group_id)
+        OPFOnDiskHomogeneousDataset(root=root, case_name=case_name, group_id=group_id)
