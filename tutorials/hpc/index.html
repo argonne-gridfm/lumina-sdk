@@ -922,45 +922,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#frontier-olcf" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Frontier (OLCF)
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Frontier (OLCF)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#setup_2" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Setup
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#config_2" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Config
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#multi-node-tips" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1485,7 +1446,7 @@
 
 
 <h1 id="hpc-training">HPC Training<a class="headerlink" href="#hpc-training" title="Permanent link">&para;</a></h1>
-<p>This guide covers running LUMINA on Argonne's Polaris, NERSC's Perlmutter, and OLCF's Frontier supercomputers.</p>
+<p>This guide covers running LUMINA on Argonne's Polaris and NERSC's Perlmutter supercomputers.</p>
 <h2 id="polaris-alcf">Polaris (ALCF)<a class="headerlink" href="#polaris-alcf" title="Permanent link">&para;</a></h2>
 <h3 id="setup">Setup<a class="headerlink" href="#setup" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>module<span class="w"> </span>load<span class="w"> </span>conda
@@ -1554,16 +1515,6 @@
 <a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="w">  </span>--config<span class="w"> </span>configs/config.perlmutter.ddp.yaml<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="w">  </span>--cases<span class="w"> </span>case14<span class="w"> </span>case118<span class="w"> </span>case2000<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a><span class="w">  </span>--group_ids<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="m">4</span>
-</code></pre></div>
-<h2 id="frontier-olcf">Frontier (OLCF)<a class="headerlink" href="#frontier-olcf" title="Permanent link">&para;</a></h2>
-<h3 id="setup_2">Setup<a class="headerlink" href="#setup_2" title="Permanent link">&para;</a></h3>
-<p>See <code>install/frontier/</code> for system-specific installation scripts.</p>
-<h3 id="config_2">Config<a class="headerlink" href="#config_2" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>torchrun<span class="w"> </span>--standalone<span class="w"> </span>--nproc_per_node<span class="o">=</span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>example/opf/train_opf_ddp.py<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>--config<span class="w"> </span>configs/config.frontier.ddp.yaml<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span>--cases<span class="w"> </span>case14<span class="w"> </span>case118<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span>--group_ids<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="m">1</span>
 </code></pre></div>
 <h2 id="multi-node-tips">Multi-Node Tips<a class="headerlink" href="#multi-node-tips" title="Permanent link">&para;</a></h2>
 <ul>

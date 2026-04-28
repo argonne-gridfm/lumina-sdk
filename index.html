@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#lumina" class="md-skip">
+        <a href="#lumina-sdk" class="md-skip">
           Skip to content
         </a>
       
@@ -489,6 +489,17 @@
     <span class="md-ellipsis">
       
         Quick Links
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#license" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LICENSE
       
     </span>
   </a>
@@ -1351,14 +1362,14 @@
   
 
 
-<h1 id="lumina">LUMINA<a class="headerlink" href="#lumina" title="Permanent link">&para;</a></h1>
+<h1 id="lumina-sdk">LUMINA-SDK<a class="headerlink" href="#lumina-sdk" title="Permanent link">&para;</a></h1>
 <p><strong>Large-scale Unified Model for Intelligent Grid Applications</strong></p>
-<p>LUMINA is a PyTorch/PyTorch Geometric framework for training Graph Neural Network (GNN) models on AC Optimal Power Flow (ACOPF) problems. It provides a complete pipeline from data loading through distributed training to constraint-aware evaluation.</p>
+<p>LUMINA-SDK is a PyTorch/PyTorch Geometric framework for training AI models (e.g., GNNs) for power grid problems (e.g., AC Optimal Power Flow). It provides a complete pipeline from data loading through distributed training to constraint-aware evaluation.</p>
 <h2 id="key-features">Key Features<a class="headerlink" href="#key-features" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Multiple GNN Architectures</strong> — HeteroGNN with SAGE, GAT, GCN, GIN, HGT, HEAT, and Transformer backends, plus homogeneous model variants</li>
 <li><strong>Flexible Loss Functions</strong> — MSE, RMSE, MAE, MAPE, SmoothL1 with per-node-type weighting and physics-informed penalties</li>
-<li><strong>Scalable Training</strong> — PyTorch DDP with multi-GPU, multi-node support on Polaris, Perlmutter, and Frontier HPC systems</li>
+<li><strong>Scalable Training</strong> — PyTorch DDP with multi-GPU, multi-node support on Polaris and Perlmutter HPC systems</li>
 <li><strong>Large-Scale Data</strong> — In-memory, SQLite/RocksDB on-disk, and sharded iterable datasets for cases from 14 to 13,659 buses</li>
 <li><strong>Constraint Evaluation</strong> — Voltage bounds, generation limits, and power balance violation checking</li>
 <li><strong>Experiment Tracking</strong> — Weights &amp; Biases integration with metric logging and checkpointing</li>
@@ -1381,6 +1392,8 @@
 <li><a href="api/dataset/">API Reference</a> — Full API documentation</li>
 <li><a href="tutorials/training/">Tutorials</a> — Step-by-step guides</li>
 </ul>
+<h2 id="license">LICENSE<a class="headerlink" href="#license" title="Permanent link">&para;</a></h2>
+<p>Copyright (c) 2026, Argonne National Laboratory</p>
 
 
 
