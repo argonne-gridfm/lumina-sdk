@@ -3,7 +3,6 @@ name: Deploy Documentation
 on:
   push:
     branches:
-      - docs/mkdocs
       - main
     paths:
       - 'docs/**'
