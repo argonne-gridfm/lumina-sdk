@@ -63,6 +63,33 @@ def _normalize_group_ids(group_ids):
 
 
 class BaseOPFTrainer:
+    """Base trainer for AC Optimal Power Flow GNN models with DDP support.
+
+    Provides the shared training infrastructure used by both single-case and
+    multi-case trainers, including optimizer/scheduler initialization, gradient
+    clipping, non-finite loss handling, W&B logging, checkpoint management,
+    sample-based scheduling, and throughput measurement.
+
+    Subclasses must implement ``_load_data``, ``_create_dataloaders``,
+    ``_create_model``, ``_initialize_loss_managers``, ``_checkpoint_tag``,
+    ``train_epoch``, and ``validate``.
+
+    Args:
+        config (dict): Full training configuration (parsed YAML).
+        model_type (str): Model architecture identifier (e.g. ``"HeteroGNN"``).
+        loss_type (str): Loss function name (e.g. ``"mse"``, ``"rmse"``).
+        minmax_scaling (bool): Whether to apply min-max scaling in forward pass.
+        local_rank (int): Local GPU rank for DDP.
+        global_rank (int): Global process rank for DDP.
+        world_size (int): Total number of DDP processes.
+        wandb_run_name (str, optional): Custom W&B run name.
+        wandb_group_name (str, optional): W&B run group.
+        wandb_requested (bool): Whether W&B logging was requested.
+        wandb_project (str): W&B project name.
+        wandb_entity (str, optional): W&B entity/team name.
+        run_metadata (dict, optional): Extra metadata to log with the run.
+    """
+
     TRAIN_METRIC_NAMES = (
         "train/loss/total",
         "train/loss/objective",
@@ -1330,6 +1357,17 @@ class BaseOPFTrainer:
                 print("    " + ", ".join(parts))
 
     def forward(self, batch):
+        """Run a forward pass through the model.
+
+        Handles both heterogeneous and homogeneous model types, performing
+        the appropriate input conversion.
+
+        Args:
+            batch: PyG batch object on the training device.
+
+        Returns:
+            dict[str, torch.Tensor]: Per-node-type prediction tensors.
+        """
         if self.model_type in HETERO_MODEL_TYPES:
             x_dict = {k: v.float() for k, v in batch.x_dict.items()}
             return self.model.module(x_dict, batch.edge_index_dict, minmax_scaling=self.minmax_scaling)
@@ -1355,6 +1393,11 @@ class BaseOPFTrainer:
         return predictions
 
     def save_checkpoint(self, filepath):
+        """Save a training checkpoint to disk (rank-0 only).
+
+        Args:
+            filepath (str): Destination path for the ``.pt`` checkpoint file.
+        """
         if self.global_rank == 0:
             checkpoint = self._checkpoint_payload()
             torch.save(checkpoint, filepath)
@@ -1362,6 +1405,13 @@ class BaseOPFTrainer:
             self._on_checkpoint_saved(filepath)
 
     def train(self):
+        """Run the full training loop across all epochs.
+
+        Iterates for ``max_epochs`` epochs, calling ``train_epoch`` each
+        iteration.  Handles early stopping via patience, sample-budget
+        limits, periodic validation, checkpoint saving, throughput
+        measurement finalization, and W&B cleanup.
+        """
         checkpoint_dir = self.checkpoint_dir
         if self.global_rank == 0:
             os.makedirs(checkpoint_dir, exist_ok=True)
@@ -1397,6 +1447,30 @@ class BaseOPFTrainer:
 
 
 class OPFTrainer(BaseOPFTrainer):
+    """Single-case OPF trainer for DDP training on one power-grid topology.
+
+    Manages a single dataset (one case name with one or more data groups),
+    creates a single loss manager, and provides ``train_epoch`` /
+    ``validate`` implementations that iterate over one train/val loader pair.
+
+    Args:
+        config (dict): Full training configuration (parsed YAML).
+        case_name (str): Fully-qualified PGLib case name.
+        group_ids (list[int] | int): Data group identifiers to load.
+        model_type (str): Model architecture identifier.
+        loss_type (str): Loss function name.
+        minmax_scaling (bool): Whether to apply min-max scaling.
+        local_rank (int): Local GPU rank for DDP.
+        global_rank (int): Global process rank for DDP.
+        world_size (int): Total number of DDP processes.
+        wandb_run_name (str, optional): Custom W&B run name.
+        wandb_group_name (str, optional): W&B run group.
+        wandb_requested (bool): Whether W&B logging was requested.
+        wandb_project (str): W&B project name.
+        wandb_entity (str, optional): W&B entity/team name.
+        run_metadata (dict, optional): Extra metadata to log with the run.
+    """
+
     def __init__(
         self,
         config,
@@ -1618,6 +1692,21 @@ class OPFTrainer(BaseOPFTrainer):
                 pass
 
     def train_epoch(self, epoch):
+        """Execute one training epoch over the single-case dataset.
+
+        Iterates through all batches in the training loader, performing
+        forward/backward passes with gradient accumulation, non-finite
+        loss/gradient handling, optional throughput tracking, and mid-epoch
+        validation/checkpointing when sample-based schedules are active.
+
+        Args:
+            epoch (int): Current epoch index (used for sampler seeding and
+                progress display).
+
+        Returns:
+            tuple[float, float, dict]: ``(avg_loss, avg_task_loss, metric_avgs)``
+                aggregated across all DDP ranks.
+        """
         self.model.train()
         if self.train_sampler is not None:
             self.train_sampler.set_epoch(epoch)
@@ -1746,6 +1835,18 @@ class OPFTrainer(BaseOPFTrainer):
         return loss_tensor[0].item(), loss_tensor[1].item(), metric_avgs
 
     def validate(self):
+        """Run validation over the single-case validation loader.
+
+        Evaluates constraint violations on a (possibly sub-sampled) set of
+        validation batches.  Timing information is optionally collected per
+        batch.  Results are reduced across all DDP ranks.
+
+        Returns:
+            tuple[float | None, float | None, dict | None]:
+                ``(avg_loss, avg_task_loss, metric_avgs)``, or
+                ``(None, None, None)`` when validation is disabled or no
+                batches were evaluated.
+        """
         self.model.eval()
 
         if self.violation_eval_p <= 0.0:
@@ -1860,6 +1961,31 @@ class OPFTrainer(BaseOPFTrainer):
 
 
 class MultiCaseOPFTrainer(BaseOPFTrainer):
+    """Multi-case OPF trainer for joint training across multiple grid topologies.
+
+    Extends ``BaseOPFTrainer`` to handle multiple power-grid cases simultaneously.
+    Each case has its own dataset, data loader, and loss manager, while sharing
+    a single model and optimizer.  Cases can be trained sequentially per epoch or
+    interleaved every ``case_mix_every_n_steps`` batches.
+
+    Args:
+        config (dict): Full training configuration (parsed YAML).
+        case_names (list[str]): Fully-qualified PGLib case names.
+        group_ids (list[int] | int): Data group identifiers to load.
+        model_type (str): Model architecture identifier.
+        loss_type (str): Loss function name.
+        minmax_scaling (bool): Whether to apply min-max scaling.
+        local_rank (int): Local GPU rank for DDP.
+        global_rank (int): Global process rank for DDP.
+        world_size (int): Total number of DDP processes.
+        wandb_run_name (str, optional): Custom W&B run name.
+        wandb_group_name (str, optional): W&B run group.
+        wandb_requested (bool): Whether W&B logging was requested.
+        wandb_project (str): W&B project name.
+        wandb_entity (str, optional): W&B entity/team name.
+        run_metadata (dict, optional): Extra metadata to log with the run.
+    """
+
     def __init__(
         self,
         config,
@@ -2219,6 +2345,19 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
         return payload
 
     def train_epoch(self, epoch):
+        """Execute one training epoch across all cases.
+
+        Cases are either iterated sequentially (each case exhausted before
+        the next) or interleaved every ``case_mix_every_n_steps`` batches,
+        depending on configuration.
+
+        Args:
+            epoch (int): Current epoch index.
+
+        Returns:
+            tuple[float, float, dict]: ``(avg_loss, avg_task_loss, metric_avgs)``
+                aggregated across all cases and DDP ranks.
+        """
         self.model.train()
 
         total_loss = 0.0
@@ -2446,6 +2585,18 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
         return loss_tensor[0].item(), loss_tensor[1].item(), metric_avgs
 
     def validate(self):
+        """Run validation across all cases with validation loaders.
+
+        Iterates through each case's validation loader, evaluating
+        constraint violations.  Results are aggregated across cases and
+        reduced across all DDP ranks.
+
+        Returns:
+            tuple[float | None, float | None, dict | None]:
+                ``(avg_loss, avg_task_loss, metric_avgs)``, or
+                ``(None, None, None)`` when validation is disabled or no
+                batches were evaluated.
+        """
         if not self.val_case_indices:
             return None, None, None
 

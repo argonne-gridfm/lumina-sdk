@@ -433,20 +433,26 @@ class Modeler:
             *,
             strict: bool = True,
     ) -> torch.nn.Module:
-        """
-        training checkpoint formats differ slightly from HF safetensor serialization
-        minimal checkpoint keys for self-contained checkpoints:
-          - model_class: str
-              Fully-qualified class name, e.g.:
-                "lumina.model.opf.hetero_model.HGT"
-          - model_kwargs: dict
-              Keyword arguments to reconstruct the model __init__(**model_kwargs)
-              (e.g., metadata/input_channels/hidden_channels/... for hetero models).
-          - model_state_dict: dict[str, Tensor]
-              Weights.
+        """Load a model from a training checkpoint file.
+
+        Training checkpoint formats differ from HuggingFace safetensor
+        serialization. This method expects a checkpoint with at least:
+        ``model_class`` (fully-qualified class name), ``model_kwargs``
+        (constructor arguments), and ``model_state_dict`` or ``model_state``
+        (weight tensors).
+
+        Args:
+            ckpt_path (str | os.PathLike): Path to the ``.pt`` checkpoint file.
+            strict (bool): Whether to enforce strict key matching in
+                ``load_state_dict``.
 
         Returns:
-          torch.nn.Module (not DDP wrapped), moved to `device` if provided.
+            torch.nn.Module: Reconstructed model (not DDP-wrapped), in eval mode,
+                moved to the instance's device.
+
+        Raises:
+            ValueError: If ``model_class`` in the checkpoint is not a valid
+                fully-qualified Python class path.
         """
         ckpt: Dict[str, Any] = torch.load(ckpt_path, map_location=self.device)
         class_path = ckpt.get("model_class")

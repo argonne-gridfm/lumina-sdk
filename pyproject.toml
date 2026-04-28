@@ -3,19 +3,36 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "lumina"
+name = "lumina-sdk"
 version = "0.1.0"
 description = "LUMINA: A Large-scale Unified Model for Intelligent Grid Applications"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {file = "LICENSE.md"}
+license = {file = "LICENSE"}
 authors = [
   {name = "Argonne LUMINA Team", email = "kimk@anl.gov"},
 ]
+keywords = [
+  "power-grid",
+  "graph-neural-networks",
+  "foundation-model",
+  "pytorch",
+  "torch-geometric",
+  "energy-systems",
+  "ac-opf",
+  "scientific-machine-learning",
+]
 classifiers = [
-  "Programming Language :: Python :: 3",
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent",
-  "Copyright :: 2025 :: Argonne National Laboratory",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Scientific/Engineering :: Physics",
 ]
 dependencies = [
     # core dependencies
@@ -32,8 +49,11 @@ dependencies = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/argonne-gridfm/lumina-core"
-"Bug Tracker" = "https://github.com/argonne-gridfm/lumina-core/issues"
+Homepage      = "https://github.com/cshjin/lumina-sdk"
+Documentation = "https://cshjin.github.io/lumina-sdk/"
+Source        = "https://github.com/cshjin/lumina-sdk"
+Changelog     = "https://github.com/cshjin/lumina-sdk/blob/main/CHANGELOG.md"
+Issues        = "https://github.com/cshjin/lumina-sdk/issues"
 
 # This section helps setuptools find your package automatically
 [tool.setuptools.packages.find]
@@ -53,7 +73,11 @@ cuGraph = [
 
 # `pip install -e .[dev]`
 dev = [
-    "ipykernel"
+    "ipykernel",
+    "pytest",
+    "ruff",
+    "build",
+    "twine",
 ]
 
 # `pip install -e .[acopf]`
@@ -74,9 +98,9 @@ hps = [
 
 # `pip install -e .[doc]`
 doc = [
-    "sphinx",
-    "sphinx-rtd-theme",
-    "sphinx-autodoc-typehints"
+    "mkdocs-material",
+    "mkdocstrings[python]",
+    "mkdocs-jupyter",
 ]
 
 # `pip install -e .[benchmark]`
@@ -84,28 +108,7 @@ benchmark = [
     "lightning",
 ]
 
-# `pip install -e ".[all]"`
+# `pip install -e ".[all]"` (composes all named extras; requires pip>=21.2)
 all = [
-    "torch",
-    "torch-geometric",
-    "pyg-lib",
-    "numpy",
-    "pandas",
-    "scipy",
-    "joblib",
-    "pytest",
-    "ipykernel",
-    "pandapower",
-    "matpowercaseframes",
-    "pypower",
-    "pyjulia",
-    "julia",
-    "numba",
-    "wandb",
-    "optuna",
-    "sphinx",
-    "sphinx-rtd-theme",
-    "sphinx-autodoc-typehints",
-    "lightning",
-    "pyyaml",
+    "lumina-sdk[test,dev,cuGraph,acopf,hps,doc,benchmark]",
 ]

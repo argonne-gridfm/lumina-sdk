@@ -10,11 +10,10 @@
 | D4 | **Multi-Case Dataset** | `OPFMultiDataset` — combines multiple cases/groups with factory methods |
 | D5 | **Homogeneous Graph Conversion** | `OPFHomogeneousDataset` — converts hetero graphs to homo with node/edge type embeddings |
 | D6 | **HDF5 Format Support** | Loads HDF5 data with automatic schema alignment between JSON/HDF5 formats |
-| D7 | **Contingency (N-1/N-k) Support** | Topological perturbations: branch removal, generator removal, slack generator injection |
-| D8 | **OPF Data Schema** | Pydantic-based schemas for bus, generator, load, shunt, ac_line, transformer with alignment maps |
-| D9 | **Data Staging** | Copy datasets to fast local storage (SSD/tmpdir) for HPC with file locking |
-| D10 | **Case ID Tagging** | `CaseTaggedDataset` attaches case identifiers to samples for multi-case training |
-| D11 | **Target Sanitization** | Detects/replaces NaN/Inf targets with masking or zero-fill |
+| D7 | **OPF Data Schema** | Pydantic-based schemas for bus, generator, load, shunt, ac_line, transformer with alignment maps |
+| D8 | **Data Staging** | Copy datasets to fast local storage (SSD/tmpdir) for HPC with file locking |
+| D9 | **Case ID Tagging** | `CaseTaggedDataset` attaches case identifiers to samples for multi-case training |
+| D10 | **Target Sanitization** | Detects/replaces NaN/Inf targets with masking or zero-fill |
 
 ## Model
 

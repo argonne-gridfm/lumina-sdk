@@ -22,8 +22,6 @@ torchrun --standalone --nproc_per_node=4 \
   --loss_type mse
 ```
 
-For detailed information about loss functions and training strategies, see [Loss Functions Documentation](docs/LOSS_FUNCTIONS.md). 
-
 ## Installation
 
 ### Prerequisites
@@ -77,8 +75,6 @@ On NERSC Perlmutter, the raw and processed datasets are available at `$CFS/amsc0
 Before running, edit:
 - `root` to point at your dataset directory
 - `case_mapping` and `group_ids` for the cases/groups you want
-- `topological_perturbations` if you need the N-1 release
-- Set `data.topological_perturbations: true` in your training config when using the N-1 release
 
 Example:
 ```shell

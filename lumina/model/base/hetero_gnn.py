@@ -12,6 +12,16 @@ from torch_geometric.nn import (MLP, GATConv, GCNConv, GINConv, GraphConv,
 
 
 class HeteroGNN(torch.nn.Module):
+    """Generic Heterogeneous GNN with configurable message-passing backend.
+
+    Supports SAGE, GCN, GIN, and GAT backends via ``HeteroConv``. Each edge
+    type gets its own convolution instance. Produces per-node predictions for
+    ``bus`` and ``generator`` node types.
+
+    Input shape per node type: ``(N_type, input_channels[type])``.
+    Output shape: ``{'bus': (N_bus, out_channels), 'generator': (N_gen, out_channels)}``.
+    """
+
     def __init__(
             self,
             metadata,
@@ -201,6 +211,15 @@ class HeteroGNN(torch.nn.Module):
 
 
 class RGAT(torch.nn.Module):
+    """Relational Graph Attention Network using ``RGATConv``.
+
+    Applies relation-aware graph attention with shared hidden channels
+    across node types. Produces predictions for ``bus`` and ``generator``
+    node types.
+
+    Input shape per node type: ``(N_type, input_channels[type])``.
+    Output shape: ``{'bus': (N_bus, out_channels), 'generator': (N_gen, out_channels)}``.
+    """
 
     def __init__(self,
                  metadata,
@@ -324,6 +343,15 @@ class RGAT(torch.nn.Module):
 
 
 class HEAT(torch.nn.Module):
+    """Heterogeneous Edge-Attributed Transformer using ``HEATConv`` via ``HeteroConv``.
+
+    Wraps per-edge-type ``HEATConv`` layers inside ``HeteroConv`` for
+    attention-based message passing with edge attributes.
+
+    Input shape per node type: ``(N_type, input_channels[type])``.
+    Output shape: ``{'bus': (N_bus, out_channels), 'generator': (N_gen, out_channels)}``.
+    """
+
     def __init__(
             self,
             metadata,
@@ -463,6 +491,15 @@ class HEAT(torch.nn.Module):
 
 
 class HGT(torch.nn.Module):
+    """Heterogeneous Graph Transformer using ``HGTConv``.
+
+    Applies type-specific multi-head attention following the HGT
+    architecture. Each node and edge type receives dedicated attention
+    weight matrices.
+
+    Input shape per node type: ``(N_type, input_channels[type])``.
+    Output shape: ``{'bus': (N_bus, out_channels), 'generator': (N_gen, out_channels)}``.
+    """
 
     def __init__(self,
                  metadata,
@@ -588,6 +625,16 @@ class HGT(torch.nn.Module):
 
 
 class HEAT_v2(torch.nn.Module):
+    """Improved HEAT model with per-edge-type linear projections and concat heads.
+
+    Adds learnable edge attribute projections for every edge type and
+    uses ``HEATConv`` with ``concat=True`` for richer multi-head
+    representations.
+
+    Input shape per node type: ``(N_type, input_channels[type])``.
+    Output shape: ``{'bus': (N_bus, out_channels), 'generator': (N_gen, out_channels)}``.
+    """
+
     def __init__(
             self,
             metadata,
@@ -754,7 +801,12 @@ class HEAT_v2(torch.nn.Module):
 
 
 class HGNN_Base(torch.nn.Module):
-    r""" Base class for Heterogeneous Graph Neural Network (HGNN) models. """
+    """Abstract base class for heterogeneous GNN models.
+
+    Provides shared input projection layers (``lin_dict``) and output
+    heads (``out_dict``) for ``bus`` and ``generator`` node types.
+    Subclasses must implement ``forward``.
+    """
 
     def __init__(self,
                  metadata,
@@ -765,7 +817,7 @@ class HGNN_Base(torch.nn.Module):
                  backend="sage",
                  edge_attr_dim=None,
                  **kwargs):
-        """Base class for Heterogeneous Graph Neural Network (HGNN) models.
+        """Initialize the HGNN base with input projections and output heads.
 
         Args:
             metadata (dict or tuple): Metadata containing node types and edge types.
@@ -804,11 +856,26 @@ class HGNN_Base(torch.nn.Module):
         })
 
     def forward(self, x_dict, edge_index_dict, edge_attr_dict=None, minmax_scaling=False, **kwargs):
+        """Forward pass (must be implemented by subclasses).
+
+        Args:
+            x_dict (dict): Node features for each node type.
+            edge_index_dict (dict): Edge indices for each edge type.
+            edge_attr_dict (dict, optional): Edge attributes for each edge
+                type. Defaults to None.
+            minmax_scaling (bool): Whether to apply min-max scaling to
+                outputs. Defaults to False.
+
+        Raises:
+            NotImplementedError: Always raised in the base class.
+        """
         raise NotImplementedError("Forward method not implemented in base class")
 
 
 class GridEcoder(torch.nn.Module):
-    """
+    """Placeholder encoder for power grid graph representations.
+
+    Not yet implemented. Reserved for future grid-specific encoding logic.
     """
 
     def __init__(self):
@@ -816,9 +883,10 @@ class GridEcoder(torch.nn.Module):
 
 
 class ACOPFModel(torch.nn.Module):
-    """
-    AC Optimal Power Flow (ACOPF) model for power systems.
-    This model is a placeholder and should be implemented with specific logic.
+    """Placeholder ACOPF model for power systems.
+
+    Not yet implemented. Reserved for a future end-to-end ACOPF model that
+    combines graph encoding with constraint-aware decoding.
     """
 
     def __init__(self, ):
@@ -826,11 +894,33 @@ class ACOPFModel(torch.nn.Module):
 
 
 class ModelFactory:
-    """Factory class for creating different model architectures"""
+    """Factory for instantiating heterogeneous GNN model architectures.
+
+    Currently supports ``'heterognn'``, ``'hgt'``, ``'heat'``, and ``'rgat'``.
+    HGT, HEAT, and RGAT fall back to HeteroGNN with a warning until their
+    dedicated configurations are finalized.
+    """
 
     @staticmethod
     def create_model(model_name, metadata, input_channels, config):
-        """Create model based on name and configuration"""
+        """Create a model instance by name and configuration.
+
+        Args:
+            model_name (str): Model architecture name (case-insensitive).
+                One of ``'heterognn'``, ``'hgt'``, ``'heat'``, ``'rgat'``.
+            metadata (dict or tuple): Graph metadata describing node and
+                edge types.
+            input_channels (dict): Mapping of node type to input feature
+                dimension.
+            config (dict): Full training configuration dict; model
+                hyperparameters are read from ``config['models'][name]``.
+
+        Returns:
+            torch.nn.Module: An instantiated GNN model.
+
+        Raises:
+            ValueError: If ``model_name`` is not recognized.
+        """
         model_name = model_name.lower()
 
         if model_name == 'heterognn':
@@ -864,5 +954,9 @@ class ModelFactory:
 
     @staticmethod
     def get_available_models():
-        """Get list of available models"""
+        """Return the list of supported model architecture names.
+
+        Returns:
+            list[str]: Available model names.
+        """
         return ['heterognn', 'hgt', 'heat', 'rgat']
