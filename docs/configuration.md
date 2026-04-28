@@ -89,11 +89,10 @@ models:
 
 Pre-built configs for HPC systems:
 
-| System | Config File |
-|--------|-------------|
-| Polaris (ALCF) | `configs/config.polaris.ddp.yaml` |
+| System             | Config File                          |
+| ------------------ | ------------------------------------ |
+| Polaris (ALCF)     | `configs/config.polaris.ddp.yaml`    |
 | Perlmutter (NERSC) | `configs/config.perlmutter.ddp.yaml` |
-| Frontier (OLCF) | `configs/config.frontier.ddp.yaml` |
 
 ## Sweep Configs
 

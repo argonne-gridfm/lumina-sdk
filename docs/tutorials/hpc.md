@@ -1,6 +1,6 @@
 # HPC Training
 
-This guide covers running LUMINA on Argonne's Polaris, NERSC's Perlmutter, and OLCF's Frontier supercomputers.
+This guide covers running LUMINA on Argonne's Polaris and NERSC's Perlmutter supercomputers.
 
 ## Polaris (ALCF)
 
@@ -90,22 +90,6 @@ srun torchrun \
   --config configs/config.perlmutter.ddp.yaml \
   --cases case14 case118 case2000 \
   --group_ids 0 1 2 3 4
-```
-
-## Frontier (OLCF)
-
-### Setup
-
-See `install/frontier/` for system-specific installation scripts.
-
-### Config
-
-```bash
-torchrun --standalone --nproc_per_node=8 \
-  example/opf/train_opf_ddp.py \
-  --config configs/config.frontier.ddp.yaml \
-  --cases case14 case118 \
-  --group_ids 0 1
 ```
 
 ## Multi-Node Tips

@@ -1,14 +1,14 @@
-# LUMINA
+# LUMINA-SDK
 
 **Large-scale Unified Model for Intelligent Grid Applications**
 
-LUMINA is a PyTorch/PyTorch Geometric framework for training Graph Neural Network (GNN) models on AC Optimal Power Flow (ACOPF) problems. It provides a complete pipeline from data loading through distributed training to constraint-aware evaluation.
+LUMINA-SDK is a PyTorch/PyTorch Geometric framework for training AI models (e.g., GNNs) for power grid problems (e.g., AC Optimal Power Flow). It provides a complete pipeline from data loading through distributed training to constraint-aware evaluation.
 
 ## Key Features
 
 - **Multiple GNN Architectures** — HeteroGNN with SAGE, GAT, GCN, GIN, HGT, HEAT, and Transformer backends, plus homogeneous model variants
 - **Flexible Loss Functions** — MSE, RMSE, MAE, MAPE, SmoothL1 with per-node-type weighting and physics-informed penalties
-- **Scalable Training** — PyTorch DDP with multi-GPU, multi-node support on Polaris, Perlmutter, and Frontier HPC systems
+- **Scalable Training** — PyTorch DDP with multi-GPU, multi-node support on Polaris and Perlmutter HPC systems
 - **Large-Scale Data** — In-memory, SQLite/RocksDB on-disk, and sharded iterable datasets for cases from 14 to 13,659 buses
 - **Constraint Evaluation** — Voltage bounds, generation limits, and power balance violation checking
 - **Experiment Tracking** — Weights & Biases integration with metric logging and checkpointing
@@ -33,3 +33,8 @@ lumina/
 - [Quickstart](getting-started/quickstart.md) — Train your first model in minutes
 - [API Reference](api/dataset.md) — Full API documentation
 - [Tutorials](tutorials/training.md) — Step-by-step guides
+
+
+## LICENSE
+
+Copyright (c) 2026, Argonne National Laboratory

@@ -73,4 +73,4 @@ make info
 
 ## HPC Systems
 
-For Polaris, Perlmutter, or Frontier, see the [HPC Training guide](../tutorials/hpc.md) for system-specific setup instructions.
+For Polaris or Perlmutter, see the [HPC Training guide](../tutorials/hpc.md) for system-specific setup instructions.
