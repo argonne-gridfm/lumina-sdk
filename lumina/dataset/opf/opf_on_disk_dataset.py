@@ -75,7 +75,6 @@ class OPFOnDiskDataset(OnDiskDataset):
             "pglib_opf_case13659_pegase",
         ] = "pglib_opf_case14_ieee",
         group_id: int = 0,
-        topological_perturbations: bool = False,
         transform: Optional[Callable] = None,
         pre_transform: Optional[Callable] = None,
         pre_filter: Optional[Callable] = None,
@@ -105,13 +104,10 @@ class OPFOnDiskDataset(OnDiskDataset):
 
         self.case_name = case_name
         self.group_id = int(group_id)
-        self.topological_perturbations = topological_perturbations
 
         self._raw_root = osp.join(root, "OPFData/raw")
         self._processed_root = osp.join(root, "OPFData/on_disk")
         self._release = "dataset_release_1"
-        if topological_perturbations:
-            self._release += "_nminusone"
         self.n_jobs = n_jobs
         self.keep_temp = keep_temp
         self.local_raw_folder = local_raw_folder
@@ -293,8 +289,7 @@ class OPFOnDiskDataset(OnDiskDataset):
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__}({len(self)}, "
-            f"case_name={self.case_name}, "
-            f"topological_perturbations={self.topological_perturbations})"
+            f"case_name={self.case_name})"
         )
 
 

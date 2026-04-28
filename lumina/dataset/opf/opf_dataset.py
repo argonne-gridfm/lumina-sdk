@@ -27,7 +27,6 @@ from glob import glob
 from typing import Callable, Dict, List, Literal, Optional, Union
 
 import h5py
-import logging
 import numpy as np
 import torch
 import tqdm
@@ -38,14 +37,12 @@ from torch_geometric.data import (HeteroData, InMemoryDataset, download_url,
 
 from lumina.utils.graph_utils import OPFHomoWrapper
 
-from .contingency import add_slack_generators, parse_contingency, apply_contingency
 from .utils import extract_edge_index, extract_edge_index_rev
 from .schema import (
     JSONBus, JSONGenerator, JSONLoad, JSONShunt, JSONACLine, JSONTransformer,
     JSONBusSolution, JSONGeneratorSolution, JSONEdgeSolution,
     H5Bus, H5Generator, H5Load, H5Shunt, H5ACLine, H5Transformer,
     H5BusSolution, H5GeneratorSolution, H5EdgeSolution,
-    ContingencyH5Load, ContingencyH5LoadSolution
 )
 
 
@@ -75,8 +72,6 @@ class OPFDataset(InMemoryDataset):
         group_id (int, optional): The specific group to load. Each group
             contains 15,000 samples. Valid values are [0, 19].
             (default: :obj:`0`)
-        topological_perturbations (bool, optional): Whether to use the dataset
-            with added topological perturbations. (default: :obj:`False`)
         transform (callable, optional): A function/transform that takes in
             a :obj:`torch_geometric.data.HeteroData` object and returns a
             transformed version. The data object will be transformed before
@@ -126,7 +121,6 @@ class OPFDataset(InMemoryDataset):
             'pglib_opf_case13659_pegase',
         ] = 'pglib_opf_case14_ieee',
         group_id: int = 0,
-        topological_perturbations: bool = False,
         transform: Optional[Callable] = None,
         pre_transform: Optional[Callable] = None,
         pre_filter: Optional[Callable] = None,
@@ -138,13 +132,10 @@ class OPFDataset(InMemoryDataset):
 
         self.case_name = case_name
         self.group_id = group_id
-        self.topological_perturbations = topological_perturbations
 
         self._raw_root = osp.join(root, 'OPFData/raw')
         self._processed_root = osp.join(root, 'OPFData/processed')
         self._release = 'dataset_release_1'
-        if topological_perturbations:
-            self._release += '_nminusone'
         self.n_jobs = n_jobs
         self.keep_temp = keep_temp
 
@@ -394,8 +385,7 @@ class OPFDataset(InMemoryDataset):
     def __repr__(self) -> str:
         r""" Returns the string representation of the dataset. """
         return (f'{self.__class__.__name__}({len(self)}, '
-                f'case_name={self.case_name}, '
-                f'topological_perturbations={self.topological_perturbations})')
+                f'case_name={self.case_name})')
 
 
 class OPFHomogeneousDataset(OPFDataset):
@@ -740,10 +730,6 @@ def build_heterodata_from_grid(grid: Dict, metadata: Dict, solution: Optional[Di
 def process_hdf5_scenario(scenario, scenario_key: str) -> Union[Optional[HeteroData], List[HeteroData]]:
     """Process a single scenario from HDF5 format to HeteroData."""
     try:
-        # contingency scenario or acopf scenario
-        if 'base_solution' in scenario:
-            return process_contingency_scenario(scenario, scenario_key)
-
         grid = scenario['grid'] if 'grid' in scenario else scenario.file['grid']
         solution = scenario['solution']
         metadata = scenario['metadata']
@@ -762,105 +748,6 @@ def process_hdf5_scenario(scenario, scenario_key: str) -> Union[Optional[HeteroD
         return None
 
 
-def process_contingency_scenario(scenario, scenario_key: str) -> List[HeteroData]:
-    """Process a contingency scenario from HDF5 format."""
-    try:
-        # formats are slightly different between single scenarios, grouped scenarios, and contingency (see schema.py)
-        if 'grid' in scenario:
-            grid = scenario['grid']
-        elif 'grid' in scenario.file:
-            grid = scenario.file['grid']
-        elif 'grid' in scenario.parent:
-            grid = scenario.parent['grid']
-        else:
-            grid = scenario['base_solution']['grid']
-
-        try:
-            base_mva = torch.tensor(grid['context']['baseMVA'][()], dtype=torch.float32).view(-1)
-        except Exception:
-            base_mva = torch.tensor([100.0], dtype=torch.float32)
-
-        metadata = scenario['metadata']
-        n_contingencies = int(metadata.attrs.get('n_contingencies', 0))
-
-        # Read contingency definition arrays once (before the loop)
-        cont_ids = cont_types = cont_names = None
-        if 'contingencies' in scenario:
-            cg = scenario['contingencies']
-            cont_ids = cg['ids'][()]
-            cont_types = cg['types'][()]
-            cont_names = cg['names'][()]
-        else:
-            logging.warning("No 'contingencies' group in scenario '%s'; topology unmodified", scenario_key)
-
-        # Load branch mapping JSON (must exist alongside the HDF5 file)
-        branch_mapping = None
-        if cont_ids is not None:
-            from pathlib import Path
-            h5_dir = Path(scenario.file.filename).parent
-            n_grid_branches = (
-                len(grid['edges']['ac_line']['senders'][()])
-                + len(grid['edges']['transformer']['senders'][()])
-            )
-            # Search for branch_mapping*.json files and pick the one
-            # whose entry count matches this grid's total branch count.
-            branch_mapping = None
-            for candidate_path in sorted(h5_dir.glob('branch_mapping*.json')):
-                with open(candidate_path, "r") as fp:
-                    candidate = json.load(fp)
-                if len(candidate) == n_grid_branches:
-                    branch_mapping = candidate
-                    break
-            if branch_mapping is None:
-                raise FileNotFoundError(
-                    f"No branch mapping file in {h5_dir} with {n_grid_branches} branches. "
-                    f"Generate one with: python example/opf/build_contingency_index.py "
-                    f"--matpower <path_to_.m_file> --output {h5_dir / 'branch_mapping.json'}"
-                )
-
-        results = []
-
-        # iterate over post-contingency solutions and load each as a separate sample in heterodata
-        if 'post_contingency' in scenario:
-            pc_group = scenario['post_contingency']
-            for cont_name in pc_group.keys():
-                cont_group = pc_group[cont_name]
-
-                if 'opf' not in cont_group:
-                    continue
-
-                solution = cont_group['opf']
-                if solution.attrs.get('opf_converged', 1) != 1:
-                    continue
-
-                hdata = HeteroData()
-                _process_nodes_hdf5(hdata, grid, solution)
-                _process_edges_hdf5(hdata, grid, solution)
-
-                hdata.baseMVA = base_mva
-                hdata.objective = torch.tensor(solution.attrs['objective'], dtype=torch.float32)
-                hdata.scenario_id = f"{scenario_key}_{cont_name}"
-                hdata.n_contingencies = n_contingencies
-
-                # Apply contingency topology modifications before adding slacks
-                if cont_ids is not None:
-                    cont_idx = int(cont_name.split('_')[1]) - 1  # contingency_000001 → 0, etc.
-                    parsed = parse_contingency(
-                        cont_idx, cont_ids, cont_types, cont_names,
-                        branch_mapping,
-                    )
-                    apply_contingency(hdata, parsed)
-
-                add_slack_generators(hdata)
-
-                results.append(hdata)
-
-        return results
-    except Exception as e:
-        print(f"Error in process_contingency_scenario for {scenario_key}: {e}")
-        return []
-
-
 def _process_hdf5_scenario_from_path(h5_file_path, scenario_key):
     with h5py.File(h5_file_path, 'r') as f:
         scenario = f[scenario_key]
@@ -868,7 +755,7 @@ def _process_hdf5_scenario_from_path(h5_file_path, scenario_key):
 
 
 def _align_features(data: np.ndarray, src_schema, dst_schema, aliases: dict = None) -> np.ndarray:
-    """feature indices are different between hdf5 acopf, json acopf, and hdf5 contingency and must be aligned.
+    """feature indices are different between hdf5 acopf and json acopf and must be aligned.
 
     Args:
         aliases: optional mapping of src field names to dst field names for fields that are
@@ -941,9 +828,7 @@ def _process_nodes_hdf5(hdata: HeteroData, grid, solution):
     if load_data.shape[0] == 4 or load_data.shape[0] == 2:
         load_data = load_data.T
 
-    if load_data.shape[1] == 4:
-        load_x_final = _align_features(load_data, ContingencyH5Load, JSONLoad)
-    elif load_data.shape[1] == 2:
+    if load_data.shape[1] == 2:
         load_x_final = _align_features(load_data, H5Load, JSONLoad)
     else:
         load_x_final = load_data
@@ -980,9 +865,7 @@ def _process_nodes_hdf5(hdata: HeteroData, grid, solution):
         load_sol = sol_nodes['load'][()]
         if load_sol.shape[0] == 2:
             load_sol = load_sol.T
-        if load_sol.shape[1] == 2:
-            hdata['load'].y = torch.tensor(_align_features(load_sol, ContingencyH5LoadSolution, JSONLoad,
-                                                           aliases={"pd_served": "pd", "qd_served": "qd"}), dtype=torch.float32)
+        hdata['load'].y = torch.tensor(load_sol, dtype=torch.float32)
 
 
 def _process_edges_hdf5(hdata: HeteroData, grid, solution):
@@ -992,7 +875,7 @@ def _process_edges_hdf5(hdata: HeteroData, grid, solution):
     
     edges = grid['edges']
 
-    # solution might not have edges in some structures (e.g. contingency)
+    # solution might not have edges in some structures
     sol_edges = solution.get('edges', {})
 
     if 'ac_line' in edges:

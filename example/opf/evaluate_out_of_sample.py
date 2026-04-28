@@ -22,7 +22,6 @@ from safetensors.torch import load_file
 import pandapower.networks as pn
 
 from lumina.dataset.opf.opf_dataset import OPFDataset, OPFHomogeneousDataset
-from lumina.model.opf.augmented_lagrangian import AugmentedLagrangianACOPF
 from lumina.model.opf.losses import OPFLossManager
 from lumina.evaluator.opf.utils import Modeler
 from lumina.loader.opf.opf_loader import DataLoader
@@ -336,15 +335,9 @@ def evaluate_case(
     modeler: Modeler,
     max_batches: Optional[int],
     normalize: bool,
-    constraint_backend=None,
 ) -> dict:
     """Evaluate model on a single test case."""
     print(f"Evaluating case: {case_name}")
-    if constraint_backend is None:
-        warnings.warn(
-            "No constraint_backend supplied to evaluate_case; "
-            "constraint violations will only include bound terms and omit power-balance/thermal-flow checks."
-        )
 
     print("Running predictions")
     pred_batch_pairs = []
@@ -375,7 +368,6 @@ def evaluate_case(
             pred_batch_pairs,
             normalize=normalize,
             cache_key=case_name,
-            constraint_backend=constraint_backend,
         )
 
     print("Computing prediction errors")
@@ -502,8 +494,6 @@ def compute_feasibility_metrics(pred_batch_pairs: list, case_name: str) -> dict:
     pandapower is used to fetch network parameters if they're not included in the output
     """
 
-    al = AugmentedLagrangianACOPF()
-
     net = get_pp_net(case_name)
     if net is None:
         print(f"Warning: Could not load pandapower network for {case_name}. Skipping feasibility metrics.")
@@ -512,7 +502,6 @@ def compute_feasibility_metrics(pred_batch_pairs: list, case_name: str) -> dict:
     # pandapower uses MW/MVAr so we have to rescale for p.u.
     base_mva = net.sn_mva
 
-    # see losses.py or train_vio_lagrangian_case30.ipynb for more metrics calculation details
     # bus limits
     vmin = torch.from_numpy(net.bus.min_vm_pu.values).float()
     vmax = torch.from_numpy(net.bus.max_vm_pu.values).float()
@@ -778,12 +767,6 @@ def main():
         base_mva=args.base_mva,
         slack_bus_indices=args.slack_bus_indices
     )
-    constraint_backend = OPFLossManager(
-        loss_type="mse",
-        device=device,
-    )
-    constraint_backend.eval()
-
     if args.checkpoint_dir:
         model, config = load_model_from_checkpoint(args.checkpoint_dir, modeler)
     elif args.checkpoint_file:
@@ -831,7 +814,6 @@ def main():
                 modeler,
                 args.max_batches,
                 args.normalize,
-                constraint_backend=constraint_backend,
             )
             results.append(result)
         except Exception as e:

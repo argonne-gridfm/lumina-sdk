@@ -121,8 +121,6 @@ def build_parser():
             "mae",
             "mape",
             "smooth_l1",
-            "augmented_lagrangian",
-            "violated_lagrangian",
         ],
         help="Loss function type (default: mse)",
     )

@@ -4,7 +4,7 @@ Lumina Core is the core package for LUMINA, a large-scale unified model for inte
 
 ## Key Features
 
-- **Multiple Loss Functions**: Support for standard ML losses, Augmented Lagrangian, and Violated Lagrangian for physics-informed training
+- **Multiple Loss Functions**: Support for standard ML losses (MSE, RMSE, MAE, MAPE, SmoothL1) and physics-informed training
 - **Flexible Architecture**: Heterogeneous and homogeneous GNN models for power grid applications
 - **Scalable Training**: PyTorch Lightning integration for distributed training
 - **Comprehensive Evaluation**: Built-in evaluators for OPF and other grid optimization tasks
