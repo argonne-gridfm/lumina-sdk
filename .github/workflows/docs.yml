@@ -27,7 +27,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install mkdocs-material "mkdocstrings[python]"
+          pip install mkdocs-material "mkdocstrings[python]" mkdocs-jupyter
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install torch-geometric
           pip install -e .

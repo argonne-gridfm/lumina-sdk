@@ -48,6 +48,10 @@ plugins:
             docstring_style: google
             members_order: source
             show_signature_annotations: true
+  - mkdocs-jupyter:
+      execute: false
+      include_source: true
+      ignore_h1_titles: true
 
 markdown_extensions:
   - admonition
@@ -76,6 +80,13 @@ nav:
     - Evaluation: tutorials/evaluation.md
     - Custom Models: tutorials/custom-models.md
     - HPC Training: tutorials/hpc.md
+    - Notebooks:
+      - Quickstart (case14): tutorials/notebooks/01_quickstart_case14.ipynb
+      - Dataset exploration: tutorials/notebooks/02_dataset_exploration.ipynb
+      - Evaluation walkthrough: tutorials/notebooks/03_evaluation_walkthrough.ipynb
+      - Physics-informed loss: tutorials/notebooks/04_physics_informed_loss.ipynb
+      - DDP on local GPUs: tutorials/notebooks/05_ddp_local_gpus.ipynb
+      - Polaris (HPC): tutorials/notebooks/06_polaris_hpc.ipynb
   - API Reference:
     - api/index.md
     - Dataset: api/dataset.md
