@@ -88,4 +88,28 @@
          <loc>https://cshjin.github.io/lumina-sdk/tutorials/training/</loc>
          <lastmod>2026-04-28</lastmod>
     </url>
+    <url>
+         <loc>https://cshjin.github.io/lumina-sdk/tutorials/notebooks/01_quickstart_case14/</loc>
+         <lastmod>2026-04-28</lastmod>
+    </url>
+    <url>
+         <loc>https://cshjin.github.io/lumina-sdk/tutorials/notebooks/02_dataset_exploration/</loc>
+         <lastmod>2026-04-28</lastmod>
+    </url>
+    <url>
+         <loc>https://cshjin.github.io/lumina-sdk/tutorials/notebooks/03_evaluation_walkthrough/</loc>
+         <lastmod>2026-04-28</lastmod>
+    </url>
+    <url>
+         <loc>https://cshjin.github.io/lumina-sdk/tutorials/notebooks/04_physics_informed_loss/</loc>
+         <lastmod>2026-04-28</lastmod>
+    </url>
+    <url>
+         <loc>https://cshjin.github.io/lumina-sdk/tutorials/notebooks/05_ddp_local_gpus/</loc>
+         <lastmod>2026-04-28</lastmod>
+    </url>
+    <url>
+         <loc>https://cshjin.github.io/lumina-sdk/tutorials/notebooks/06_polaris_hpc/</loc>
+         <lastmod>2026-04-28</lastmod>
+    </url>
 </urlset>
