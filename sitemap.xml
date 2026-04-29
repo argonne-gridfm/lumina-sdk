@@ -1,115 +1,115 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/configuration/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/configuration/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/huggingface/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/huggingface/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/perlmutter/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/perlmutter/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/polaris/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/polaris/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/wandb_sweep_perlmutter/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/wandb_sweep_perlmutter/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/api/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/api/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/api/dataset/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/api/dataset/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/api/evaluator/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/api/evaluator/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/api/loader/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/api/loader/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/api/model/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/api/model/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/api/trainer/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/api/trainer/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/api/utils/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/api/utils/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/getting-started/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/getting-started/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/getting-started/installation/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/getting-started/installation/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/getting-started/quickstart/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/getting-started/quickstart/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/tutorials/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/tutorials/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/tutorials/custom-models/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/tutorials/custom-models/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/tutorials/evaluation/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/tutorials/evaluation/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/tutorials/hpc/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/tutorials/hpc/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/tutorials/multi-case/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/tutorials/multi-case/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/tutorials/training/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/tutorials/training/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/tutorials/notebooks/01_quickstart_case14/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/tutorials/notebooks/01_quickstart_case14/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/tutorials/notebooks/02_dataset_exploration/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/tutorials/notebooks/02_dataset_exploration/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/tutorials/notebooks/03_evaluation_walkthrough/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/tutorials/notebooks/03_evaluation_walkthrough/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/tutorials/notebooks/04_physics_informed_loss/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/tutorials/notebooks/04_physics_informed_loss/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/tutorials/notebooks/05_ddp_local_gpus/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/tutorials/notebooks/05_ddp_local_gpus/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://cshjin.github.io/lumina-sdk/tutorials/notebooks/06_polaris_hpc/</loc>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/tutorials/notebooks/06_polaris_hpc/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
 </urlset>
