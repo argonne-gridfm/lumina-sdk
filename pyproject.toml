@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lumina-sdk"
-version = "0.1.0"
-description = "LUMINA: A Large-scale Unified Model for Intelligent Grid Applications"
+version = "0.1.0rc1"
+description = "LUMINA-SDK: A Large-scale Unified Model for Intelligent Grid Applications"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {file = "LICENSE"}
@@ -49,11 +49,11 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage      = "https://github.com/cshjin/lumina-sdk"
-Documentation = "https://cshjin.github.io/lumina-sdk/"
-Source        = "https://github.com/cshjin/lumina-sdk"
-Changelog     = "https://github.com/cshjin/lumina-sdk/blob/main/CHANGELOG.md"
-Issues        = "https://github.com/cshjin/lumina-sdk/issues"
+Homepage      = "https://github.com/argonne-gridfm/lumina-sdk"
+Documentation = "https://argonne-gridfm.github.io/lumina-sdk/"
+Source        = "https://github.com/argonne-gridfm/lumina-sdk"
+Changelog     = "https://github.com/argonne-gridfm/lumina-sdk/blob/main/CHANGELOG.md"
+Issues        = "https://github.com/argonne-gridfm/lumina-sdk/issues"
 
 # This section helps setuptools find your package automatically
 [tool.setuptools.packages.find]

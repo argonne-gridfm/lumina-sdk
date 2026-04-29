@@ -125,5 +125,5 @@ dependencies = [
 
 ## LICENSE
 
-Copyright (c) 2025, Argonne National Laboratory  
+Copyright © 2026, Argonne National Laboratory, LUMINA Team. 
 All rights reserved.

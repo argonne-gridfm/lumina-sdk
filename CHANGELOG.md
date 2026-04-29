@@ -51,11 +51,6 @@ contributions deemed out-of-scope for the public LUMINA release.
   `kj/hpo` branches; never merged to `main`. Tracked via the
   `remove-kj-commits` branch for transparency.
 
-### Documentation
-
-- Updated `CLAUDE.md` to drop the Frontier-only contributor entry and the
-  Frontier HPC config reference; updated DDP-platform support note accordingly.
-
 ### Notes for downstream users
 
 - Any code, configs, or training runs that depend on `augmented_lagrangian`
