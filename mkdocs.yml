@@ -2,8 +2,8 @@ site_name: LUMINA Documentation
 site_description: Large-scale Unified Model for Intelligent Grid Applications
 site_url: https://cshjin.github.io/lumina-sdk/
 repo_url: https://github.com/cshjin/lumina-sdk
-repo_name: argonne-gridfm/lumina-core
-copyright: Copyright (c) 2026, Argonne National Laboratory
+repo_name: argonne-gridfm/lumina-sdk
+copyright: Copyright © 2026, Argonne National Laboratory
 
 theme:
   name: material
@@ -67,6 +67,9 @@ markdown_extensions:
       permalink: true
   - attr_list
   - md_in_html
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
 nav:
   - Home: index.md
