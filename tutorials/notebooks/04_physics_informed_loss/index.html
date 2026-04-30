@@ -331,7 +331,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../huggingface/" class="md-tabs__link">
+        <a href="../../../polaris.md" class="md-tabs__link">
           
   
   
@@ -1428,8 +1428,6 @@
       
         
       
-        
-      
     
     
     
@@ -1476,34 +1474,6 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../../huggingface/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    HuggingFace Integration
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
             
               
                 
@@ -2337,7 +2307,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 </style>
 <!-- End of mermaid configuration --><div class="jupyter-wrapper">
 <div class="jp-Notebook" data-jp-theme-light="true" data-jp-theme-name="JupyterLab Light">
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=c7c01596">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=da73e9e4">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2349,7 +2319,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 </div>
 </div>
 </div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs">
-<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=a2ef7bf4">
+<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=be503c1a">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2371,7 +2341,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch_geometric.loader</span><span class="w"> </span><span class="kn">import</span> <span class="n">DataLoader</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">lumina.dataset.opf.opf_dataset</span><span class="w"> </span><span class="kn">import</span> <span class="n">OPFDataset</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">lumina.model.opf.hetero_gnn</span><span class="w"> </span><span class="kn">import</span> <span class="n">OPFHeteroGNN</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">lumina.model.opf.hetero_model</span><span class="w"> </span><span class="kn">import</span> <span class="n">OPFHeteroGNN</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">lumina.model.opf.losses</span><span class="w"> </span><span class="kn">import</span> <span class="n">OPFLossManager</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">lumina.evaluator.opf.evaluator</span><span class="w"> </span><span class="kn">import</span> <span class="n">ACOPFConstraintEvaluator</span>
 
@@ -2382,7 +2352,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 from torch_geometric.loader import DataLoader
 
 from lumina.dataset.opf.opf_dataset import OPFDataset
-from lumina.model.opf.hetero_gnn import OPFHeteroGNN
+from lumina.model.opf.hetero_model import OPFHeteroGNN
 from lumina.model.opf.losses import OPFLossManager
 from lumina.evaluator.opf.evaluator import ACOPFConstraintEvaluator
 
@@ -2394,7 +2364,7 @@ DATA_ROOT = '/path/to/datasets'</div>
 </div>
 </div>
 </div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs">
-<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=79bea34e">
+<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=ff74654b">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2437,7 +2407,7 @@ sample = ds[0]</div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=eff530e8">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=ef3726db">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2451,7 +2421,7 @@ sample = ds[0]</div>
 </div>
 </div>
 </div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs">
-<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=8eae8ed6">
+<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=3baf0753">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2492,7 +2462,7 @@ loss_physics = OPFLossManager(
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=806401db">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=1e3854e6">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2503,7 +2473,7 @@ loss_physics = OPFLossManager(
 </div>
 </div>
 </div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs">
-<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=ec1a6716">
+<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=6dd0071f">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2580,7 +2550,7 @@ model_phys = train(make_model(), loss_physics)</div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=d487e82a">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=14c554a2">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2591,7 +2561,7 @@ model_phys = train(make_model(), loss_physics)</div>
 </div>
 </div>
 </div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs">
-<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=24cb5ba4">
+<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=24884e68">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2658,7 +2628,7 @@ for k in m_mse:
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=b57df50e">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=e8b2550c">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
