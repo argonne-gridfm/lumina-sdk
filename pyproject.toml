@@ -45,7 +45,8 @@ dependencies = [
     "joblib",
     "pyyaml",
     "h5py",
-    "pydantic"
+    "pydantic",
+    "mpi4py"
 ]
 
 [project.urls]

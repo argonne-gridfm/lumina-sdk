@@ -6,6 +6,8 @@ import torch
 import torch.distributed as dist
 import yaml
 
+from mpi4py import MPI
+
 try:
     import wandb
     WANDB_AVAILABLE = True
@@ -161,16 +163,23 @@ def build_parser():
 
 
 def init_ddp():
-    local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    world_size = int(os.environ.get("WORLD_SIZE", 1))
-    global_rank = int(os.environ.get("RANK", 0))
+    world_size = MPI.COMM_WORLD.Get_size()
+    global_rank = MPI.COMM_WORLD.Get_rank()
+    local_rank_vars = ["MPI_LOCALRANKID", "SLURM_LOCALID"] # Local rank environment variables for Polaris and Perlmutter
+    for var in local_rank_vars:
+        if var in os.environ:
+            local_rank = int(os.environ[var])
+            os.environ["LOCAL_RANK"] = str(local_rank)
+            break
+
+    os.environ["RANK"] = str(global_rank)
+    os.environ["WORLD_SIZE"] = str(world_size)
 
     dist.init_process_group(
         backend="nccl",
         init_method="env://",
         world_size=world_size,
         rank=global_rank,
-        device_id=local_rank,
     )
 
     if torch.cuda.is_available():
