@@ -1534,7 +1534,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../polaris/" class="md-nav__link">
+      <a href="../../../polaris.md" class="md-nav__link">
         
   
   
@@ -1562,7 +1562,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../perlmutter/" class="md-nav__link">
+      <a href="../../../perlmutter.md" class="md-nav__link">
         
   
   
@@ -2359,7 +2359,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 </style>
 <!-- End of mermaid configuration --><div class="jupyter-wrapper">
 <div class="jp-Notebook" data-jp-theme-light="true" data-jp-theme-name="JupyterLab Light">
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=d4e92f26">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=aa98e7dd">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2371,7 +2371,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=94c47fbb">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=349604de">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2382,7 +2382,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 </div>
 </div>
 </div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs">
-<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=a850800b">
+<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=3a29390f">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2402,24 +2402,24 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 </div>
 <div class="highlight-ipynb hl-python"><pre><span></span><span class="o">%%</span><span class="n">bash</span>
 <span class="n">module</span> <span class="n">load</span> <span class="n">conda</span>
-<span class="n">conda</span> <span class="n">create</span> <span class="o">-</span><span class="n">p</span> <span class="o">/</span><span class="n">eagle</span><span class="o">/</span><span class="n">projects</span><span class="o">/</span><span class="n">GridFM</span><span class="o">/</span><span class="n">envs</span><span class="o">/</span><span class="n">lumina</span> <span class="n">python</span><span class="o">=</span><span class="mf">3.11</span> <span class="o">-</span><span class="n">y</span>
-<span class="n">conda</span> <span class="n">activate</span> <span class="o">/</span><span class="n">eagle</span><span class="o">/</span><span class="n">projects</span><span class="o">/</span><span class="n">GridFM</span><span class="o">/</span><span class="n">envs</span><span class="o">/</span><span class="n">lumina</span>
+<span class="n">conda</span> <span class="n">create</span> <span class="o">-</span><span class="n">p</span> <span class="o">/</span><span class="n">path</span><span class="o">/</span><span class="n">to</span><span class="o">/</span><span class="n">your</span><span class="o">/</span><span class="n">env</span> <span class="n">python</span><span class="o">=</span><span class="mf">3.11</span> <span class="o">-</span><span class="n">y</span>
+<span class="n">conda</span> <span class="n">activate</span> <span class="o">/</span><span class="n">path</span><span class="o">/</span><span class="n">to</span><span class="o">/</span><span class="n">your</span><span class="o">/</span><span class="n">env</span>
 
 <span class="c1"># torch + PyG matching Polaris CUDA</span>
 <span class="n">pip</span> <span class="n">install</span> <span class="n">torch</span> <span class="n">torch</span><span class="o">-</span><span class="n">geometric</span>
 
-<span class="n">cd</span> <span class="o">/</span><span class="n">eagle</span><span class="o">/</span><span class="n">projects</span><span class="o">/</span><span class="n">GridFM</span><span class="o">/</span><span class="n">lumina</span><span class="o">-</span><span class="n">core</span>
+<span class="n">cd</span> <span class="o">/</span><span class="n">path</span><span class="o">/</span><span class="n">to</span><span class="o">/</span><span class="n">your</span><span class="o">/</span><span class="n">lumina</span><span class="o">-</span><span class="n">sdk</span>
 <span class="n">pip</span> <span class="n">install</span> <span class="o">-</span><span class="n">e</span> <span class="s2">".[acopf,hps]"</span>
 </pre></div>
 <div class="clipboard-copy-txt" id="cell-1">%%bash
 module load conda
-conda create -p /eagle/projects/GridFM/envs/lumina python=3.11 -y
-conda activate /eagle/projects/GridFM/envs/lumina
+conda create -p /path/to/your/env python=3.11 -y
+conda activate /path/to/your/env
 
 # torch + PyG matching Polaris CUDA
 pip install torch torch-geometric
 
-cd /eagle/projects/GridFM/lumina-core
+cd /path/to/your/lumina-sdk
 pip install -e ".[acopf,hps]"</div>
 </div>
 </div>
@@ -2427,7 +2427,7 @@ pip install -e ".[acopf,hps]"</div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=2b52bb83">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=e26fbab2">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2438,7 +2438,7 @@ pip install -e ".[acopf,hps]"</div>
 </div>
 </div>
 </div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs">
-<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=3fd80592">
+<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=cacb3a43">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2459,13 +2459,13 @@ pip install -e ".[acopf,hps]"</div>
 <div class="highlight-ipynb hl-python"><pre><span></span><span class="o">%%</span><span class="n">bash</span>
 <span class="c1"># Inside a PBS job</span>
 <span class="n">mkdir</span> <span class="o">-</span><span class="n">p</span> <span class="err">$</span><span class="n">TMPDIR</span><span class="o">/</span><span class="n">OPFData</span>
-<span class="n">cp</span> <span class="o">-</span><span class="n">r</span> <span class="o">/</span><span class="n">eagle</span><span class="o">/</span><span class="n">projects</span><span class="o">/</span><span class="n">GridFM</span><span class="o">/</span><span class="n">data</span><span class="o">/</span><span class="n">OPFData</span><span class="o">/</span><span class="n">processed</span><span class="o">/</span><span class="n">dataset_release_1</span><span class="o">/</span><span class="n">pglib_opf_case14_ieee</span> \
+<span class="n">cp</span> <span class="o">-</span><span class="n">r</span> <span class="o">/</span><span class="n">path</span><span class="o">/</span><span class="n">to</span><span class="o">/</span><span class="n">your</span><span class="o">/</span><span class="n">dataset</span><span class="o">/</span><span class="n">OPFData</span><span class="o">/</span><span class="n">processed</span><span class="o">/</span><span class="n">dataset_release_1</span><span class="o">/</span><span class="n">pglib_opf_case14_ieee</span> \
       <span class="err">$</span><span class="n">TMPDIR</span><span class="o">/</span><span class="n">OPFData</span><span class="o">/</span>
 </pre></div>
 <div class="clipboard-copy-txt" id="cell-2">%%bash
 # Inside a PBS job
 mkdir -p $TMPDIR/OPFData
-cp -r /eagle/projects/GridFM/data/OPFData/processed/dataset_release_1/pglib_opf_case14_ieee \
+cp -r /path/to/your/dataset/OPFData/processed/dataset_release_1/pglib_opf_case14_ieee \
       $TMPDIR/OPFData/</div>
 </div>
 </div>
@@ -2473,7 +2473,7 @@ cp -r /eagle/projects/GridFM/data/OPFData/processed/dataset_release_1/pglib_opf_
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=efdc3769">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=d1941c95">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2484,7 +2484,7 @@ cp -r /eagle/projects/GridFM/data/OPFData/processed/dataset_release_1/pglib_opf_
 </div>
 </div>
 </div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs">
-<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=b6772cb3">
+<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=b29ab6cc">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2513,18 +2513,18 @@ head -40 configs/config.polaris.ddp.yaml</div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=fbfeaae6">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=7b18ae36">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
 </div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
-<h2 id="4-pbs-job-script">4. PBS job script<a class="anchor-link" href="#4-pbs-job-script">¶</a></h2><p>Save as <code>job-polaris.sh</code>. The key bit: <code>torchrun</code> with <code>--rdzv_backend=c10d</code> and a rendezvous endpoint at the first node in <code>$PBS_NODEFILE</code>.</p>
+<h2 id="4-pbs-job-script">4. PBS job script<a class="anchor-link" href="#4-pbs-job-script">¶</a></h2><p>Save as <code>job-polaris.sh</code>.</p>
 </div>
 </div>
 </div>
 </div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs">
-<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=3ace2ecf">
+<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=8836912e">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2548,26 +2548,22 @@ head -40 configs/config.polaris.ddp.yaml</div>
 <span class="c1">#PBS -l walltime=02:00:00</span>
 <span class="c1">#PBS -l filesystems=home:eagle</span>
 <span class="c1">#PBS -q prod</span>
-<span class="c1">#PBS -A GridFM</span>
+<span class="c1">#PBS -A account_name</span>
 <span class="c1">#PBS -N lumina</span>
 
 <span class="n">module</span> <span class="n">load</span> <span class="n">conda</span>
-<span class="n">conda</span> <span class="n">activate</span> <span class="o">/</span><span class="n">eagle</span><span class="o">/</span><span class="n">projects</span><span class="o">/</span><span class="n">GridFM</span><span class="o">/</span><span class="n">envs</span><span class="o">/</span><span class="n">lumina</span>
-<span class="n">cd</span> <span class="o">/</span><span class="n">eagle</span><span class="o">/</span><span class="n">projects</span><span class="o">/</span><span class="n">GridFM</span><span class="o">/</span><span class="n">lumina</span><span class="o">-</span><span class="n">core</span>
+<span class="n">conda</span> <span class="n">activate</span> <span class="o">/</span><span class="n">path</span><span class="o">/</span><span class="n">to</span><span class="o">/</span><span class="n">lumina</span><span class="o">-</span><span class="n">env</span>
+<span class="n">cd</span> <span class="o">/</span><span class="n">path</span><span class="o">/</span><span class="n">to</span><span class="o">/</span><span class="n">lumina</span><span class="o">-</span><span class="n">sdk</span>
 
-<span class="n">NNODES</span><span class="o">=</span><span class="err">$</span><span class="p">(</span><span class="n">wc</span> <span class="o">-</span><span class="n">l</span> <span class="o">&lt;</span> <span class="err">$</span><span class="n">PBS_NODEFILE</span><span class="p">)</span>
+<span class="n">NNODES</span><span class="o">=</span><span class="err">$</span><span class="p">(</span><span class="n">cat</span> <span class="err">$</span><span class="n">PBS_NODEFILE</span> <span class="o">|</span> <span class="n">sort</span> <span class="o">|</span> <span class="n">uniq</span> <span class="o">|</span> <span class="n">wc</span> <span class="o">-</span><span class="n">l</span><span class="p">)</span>
 <span class="n">NGPUS_PER_NODE</span><span class="o">=</span><span class="mi">4</span>
-<span class="n">MASTER_ADDR</span><span class="o">=</span><span class="err">$</span><span class="p">(</span><span class="n">head</span> <span class="o">-</span><span class="mi">1</span> <span class="err">$</span><span class="n">PBS_NODEFILE</span><span class="p">)</span>
-<span class="n">MASTER_PORT</span><span class="o">=</span><span class="mi">29500</span>
+<span class="n">NTOTGPUS</span><span class="o">=</span><span class="err">$</span><span class="p">((</span><span class="n">NNODES</span> <span class="o">*</span> <span class="n">NGPUS_PER_NODE</span><span class="p">))</span>
 
-<span class="n">mpiexec</span> <span class="o">-</span><span class="n">n</span> <span class="err">$</span><span class="n">NNODES</span> <span class="o">--</span><span class="n">ppn</span> <span class="mi">1</span> <span class="o">--</span><span class="n">hostfile</span> <span class="err">$</span><span class="n">PBS_NODEFILE</span> \
-  <span class="n">torchrun</span> \
-    <span class="o">--</span><span class="n">nnodes</span><span class="o">=</span><span class="err">$</span><span class="n">NNODES</span> \
-    <span class="o">--</span><span class="n">nproc_per_node</span><span class="o">=</span><span class="err">$</span><span class="n">NGPUS_PER_NODE</span> \
-    <span class="o">--</span><span class="n">rdzv_backend</span><span class="o">=</span><span class="n">c10d</span> \
-    <span class="o">--</span><span class="n">rdzv_endpoint</span><span class="o">=</span><span class="err">$</span><span class="n">MASTER_ADDR</span><span class="p">:</span><span class="err">$</span><span class="n">MASTER_PORT</span> \
-    <span class="o">--</span><span class="n">node_rank</span><span class="o">=</span><span class="err">$</span><span class="n">PMI_RANK</span> \
-    <span class="n">example</span><span class="o">/</span><span class="n">opf</span><span class="o">/</span><span class="n">train_opf_ddp</span><span class="o">.</span><span class="n">py</span> \
+<span class="n">export</span> <span class="n">MASTER_ADDR</span><span class="o">=</span><span class="err">$</span><span class="p">(</span><span class="n">hostname</span><span class="p">)</span><span class="o">.</span><span class="n">hsn</span><span class="o">.</span><span class="n">cm</span><span class="o">.</span><span class="n">polaris</span><span class="o">.</span><span class="n">alcf</span><span class="o">.</span><span class="n">anl</span><span class="o">.</span><span class="n">gov</span>
+<span class="n">export</span> <span class="n">MASTER_PORT</span><span class="o">=</span><span class="mi">29500</span>
+
+<span class="n">mpiexec</span> <span class="o">-</span><span class="n">n</span> <span class="err">$</span><span class="p">{</span><span class="n">NTOTGPUS</span><span class="p">}</span> <span class="o">-</span><span class="n">ppn</span> <span class="err">$</span><span class="p">{</span><span class="n">NGPUS_PER_NODE</span><span class="p">}</span> \
+    <span class="n">python</span> <span class="n">example</span><span class="o">/</span><span class="n">opf</span><span class="o">/</span><span class="n">train_opf_ddp</span><span class="o">.</span><span class="n">py</span> \
     <span class="o">--</span><span class="n">config</span> <span class="n">configs</span><span class="o">/</span><span class="n">config</span><span class="o">.</span><span class="n">polaris</span><span class="o">.</span><span class="n">ddp</span><span class="o">.</span><span class="n">yaml</span> \
     <span class="o">--</span><span class="n">cases</span> <span class="n">case14</span> <span class="n">case118</span> <span class="n">case2000</span> \
     <span class="o">--</span><span class="n">group_ids</span> <span class="mi">0</span> <span class="mi">1</span> <span class="mi">2</span> <span class="mi">3</span> <span class="mi">4</span> \
@@ -2582,26 +2578,22 @@ head -40 configs/config.polaris.ddp.yaml</div>
 #PBS -l walltime=02:00:00
 #PBS -l filesystems=home:eagle
 #PBS -q prod
-#PBS -A GridFM
+#PBS -A account_name
 #PBS -N lumina
 
 module load conda
-conda activate /eagle/projects/GridFM/envs/lumina
-cd /eagle/projects/GridFM/lumina-core
+conda activate /path/to/lumina-env
+cd /path/to/lumina-sdk
 
-NNODES=$(wc -l &lt; $PBS_NODEFILE)
+NNODES=$(cat $PBS_NODEFILE | sort | uniq | wc -l)
 NGPUS_PER_NODE=4
-MASTER_ADDR=$(head -1 $PBS_NODEFILE)
-MASTER_PORT=29500
+NTOTGPUS=$((NNODES * NGPUS_PER_NODE))
 
-mpiexec -n $NNODES --ppn 1 --hostfile $PBS_NODEFILE \
-  torchrun \
-    --nnodes=$NNODES \
-    --nproc_per_node=$NGPUS_PER_NODE \
-    --rdzv_backend=c10d \
-    --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
-    --node_rank=$PMI_RANK \
-    example/opf/train_opf_ddp.py \
+export MASTER_ADDR=$(hostname).hsn.cm.polaris.alcf.anl.gov
+export MASTER_PORT=29500
+
+mpiexec -n ${NTOTGPUS} -ppn ${NGPUS_PER_NODE} \
+    python example/opf/train_opf_ddp.py \
     --config configs/config.polaris.ddp.yaml \
     --cases case14 case118 case2000 \
     --group_ids 0 1 2 3 4 \
@@ -2615,7 +2607,7 @@ mpiexec -n $NNODES --ppn 1 --hostfile $PBS_NODEFILE \
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=4a7e3db2">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=8d644419">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2626,7 +2618,7 @@ mpiexec -n $NNODES --ppn 1 --hostfile $PBS_NODEFILE \
 </div>
 </div>
 </div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs">
-<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=4443e5db">
+<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=430a55c1">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2657,7 +2649,7 @@ qstat -u $USER</div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=1efc1241">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=58f811df">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
