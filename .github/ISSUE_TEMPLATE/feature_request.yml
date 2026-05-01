@@ -1,0 +1,35 @@
+name: Feature request
+description: Suggest a new feature or improvement
+title: "[feature]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user-facing problem or limitation are you trying to solve?
+      placeholder: e.g. Cannot run DDP training without an MPI launcher on a single workstation.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Sketch the API / behavior you'd like.
+      placeholder: e.g. Make `init_ddp()` fall back to torchrun's RANK / LOCAL_RANK env vars when MPI is unavailable.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you thought about and why you didn't pick them.
+    validations:
+      required: false
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope / breaking changes
+      description: Which modules does this touch? Would it break existing user code or configs?
+    validations:
+      required: false

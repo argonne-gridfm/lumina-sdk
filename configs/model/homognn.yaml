@@ -1,0 +1,22 @@
+---
+models:
+  GCN:
+    hidden_dim: 512
+    num_layers: 3
+    dropout: 0.1
+    readout: "mean"
+  GAT:
+    hidden_dim: 512
+    num_layers: 3
+    dropout: 0.1
+    readout: "mean"
+  GIN:
+    hidden_dim: 512
+    num_layers: 3
+    dropout: 0.1
+    readout: "mean"
+  Transformer:
+    hidden_dim: 512
+    num_layers: 3
+    dropout: 0.1
+    readout: "mean"

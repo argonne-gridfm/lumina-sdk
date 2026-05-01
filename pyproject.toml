@@ -1,0 +1,115 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lumina-sdk"
+version = "0.1.0rc1"
+description = "LUMINA-SDK: A Large-scale Unified Model for Intelligent Grid Applications"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+authors = [
+  {name = "Argonne LUMINA Team", email = "kimk@anl.gov"},
+]
+keywords = [
+  "power-grid",
+  "graph-neural-networks",
+  "foundation-model",
+  "pytorch",
+  "torch-geometric",
+  "energy-systems",
+  "ac-opf",
+  "scientific-machine-learning",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    # core dependencies
+    "torch>=2.9.1",
+    "torch-geometric>=2.7.0",
+    "numpy",
+    "pandas",
+    "scipy",
+    "networkx",
+    "joblib",
+    "pyyaml",
+    "h5py",
+    "pydantic",
+    "mpi4py"
+]
+
+[project.urls]
+Homepage      = "https://github.com/argonne-gridfm/lumina-sdk"
+Documentation = "https://argonne-gridfm.github.io/lumina-sdk/"
+Source        = "https://github.com/argonne-gridfm/lumina-sdk"
+Changelog     = "https://github.com/argonne-gridfm/lumina-sdk/blob/main/CHANGELOG.md"
+Issues        = "https://github.com/argonne-gridfm/lumina-sdk/issues"
+
+# This section helps setuptools find your package automatically
+[tool.setuptools.packages.find]
+include = ["lumina*"]
+
+# Optional dependencies for extra features
+[project.optional-dependencies]
+# pip install -e .[test]
+test = [
+    "pytest"
+]
+
+# `pip install -e ".[cuGraph]"` (add the PyG wheel index for your torch/CUDA build if needed)
+cuGraph = [
+  "pyg-lib"
+]
+
+# `pip install -e .[dev]`
+dev = [
+    "ipykernel",
+    "ruff",
+    "build",
+    "twine",
+    "lumina-sdk[test,acopf]",  # dev includes test + acopf dataset/eval stack
+]
+
+# `pip install -e .[acopf]`
+acopf = [
+    "pandapower",
+    "matpowercaseframes",
+    "pypower",
+    "pyjulia", # for Julia solver
+    "julia", # for Julia IPOPT solver
+    "numba", # acceleration in Python Interior Point Solver PIPS
+]
+
+# `pip install -e .[hps]`
+hps = [
+    "wandb",
+    "optuna",
+]
+
+# `pip install -e .[doc]`
+doc = [
+    "mkdocs-material",
+    "mkdocstrings[python]",
+    "mkdocs-jupyter",
+]
+
+# `pip install -e .[benchmark]`
+benchmark = [
+    "lightning",
+]
+
+# `pip install -e ".[all]"` (composes all named extras; requires pip>=21.2)
+all = [
+    "lumina-sdk[test,dev,cuGraph,acopf,hps,doc,benchmark]",
+]

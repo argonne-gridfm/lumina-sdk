@@ -1,0 +1,66 @@
+name: Bug report
+description: Something is not working as expected
+title: "[bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. Please fill out the sections below.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: A clear, concise description of the bug.
+      placeholder: e.g. `OPFDataset(...).load()` raises `RuntimeError: dtype mismatch` on case14.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Minimal command(s) or code snippet that reproduces the problem.
+      render: shell
+      placeholder: |
+        python example/opf/train_opf_simple.py --case pglib_opf_case14_ieee --device cpu
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual behavior
+      placeholder: |
+        Expected: training runs and prints per-epoch loss.
+        Actual: crashes at first batch with ...
+    validations:
+      required: true
+  - type: textarea
+    id: traceback
+    attributes:
+      label: Logs / traceback
+      description: Paste the full Python traceback or relevant log lines.
+      render: shell
+    validations:
+      required: false
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: |
+        Output of `python -c "import lumina, torch, torch_geometric; print(lumina.__version__, torch.__version__, torch_geometric.__version__)"` plus OS / GPU info.
+      render: text
+      placeholder: |
+        lumina-sdk: 0.1.0rc1
+        torch: 2.9.1+cu128
+        torch-geometric: 2.7.0
+        OS: Ubuntu 22.04
+        GPU: NVIDIA A100 (or "CPU only")
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional context
+      description: Anything else relevant — workarounds you've tried, related issues, etc.
+    validations:
+      required: false

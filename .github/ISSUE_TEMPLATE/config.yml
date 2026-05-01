@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://argonne-gridfm.github.io/lumina-sdk/
+    about: Quickstart, training tutorial, API reference, and HPC guides.
+  - name: Discussions
+    url: https://github.com/argonne-gridfm/lumina-sdk/discussions
+    about: Questions, design proposals, or anything not actionable as an issue.

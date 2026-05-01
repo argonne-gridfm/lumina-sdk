@@ -1,0 +1,24 @@
+---
+models:
+  HeteroGNN:
+    hidden_channels: 2048
+    num_layers: 8
+    backend: "gat"
+    dropout: 0.0
+  RGAT:
+    hidden_channels: 2048
+    num_layers: 8
+    num_heads: 4
+    edge_dim: 8
+    dropout: 0.0
+  HEAT:
+    hidden_channels: 2048
+    num_layers: 8
+    attention_heads: 4
+    dropout: 0.0
+  HGT:
+    hidden_channels: 2048
+    num_layers: 8
+    num_heads: 4
+    # Active regularization in HGT forward pass (after input projection + each HGT layer).
+    dropout: 0.0

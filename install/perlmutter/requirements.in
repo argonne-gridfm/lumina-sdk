@@ -1,0 +1,16 @@
+# Core runtime dependencies for lumina-sdk
+torch==2.8.0
+torch_geometric
+numpy
+pandas
+scipy
+networkx
+joblib
+pyyaml
+mpi4py
+
+# Frequently used optional dependencies
+pandapower
+wandb
+optuna
+lightning
