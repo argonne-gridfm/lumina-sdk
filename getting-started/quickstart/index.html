@@ -607,10 +607,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#train-with-ddp" class="md-nav__link">
+  <a href="#train-on-a-local-machine" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Train with DDP
+        Train on a local machine
       
     </span>
   </a>
@@ -618,10 +618,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#train-programmatically" class="md-nav__link">
+  <a href="#train-with-ddp-multi-gpu-on-hpc" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Train Programmatically
+        Train with DDP (multi-GPU on HPC)
       
     </span>
   </a>
@@ -1616,51 +1616,56 @@
 <a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Samples: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">dataset</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 <a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Node types: </span><span class="si">{</span><span class="n">dataset</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">node_types</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 <a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Edge types: </span><span class="si">{</span><span class="n">dataset</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">edge_types</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="c1"># Expected OUTPUT:</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="c1"># Samples: 15000</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="c1"># Node types: [&#39;bus&#39;, &#39;generator&#39;, &#39;load&#39;, &#39;shunt&#39;]</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="c1"># Edge types: [(&#39;bus&#39;, &#39;ac_line&#39;, &#39;bus&#39;), (&#39;bus&#39;, &#39;transformer&#39;, &#39;bus&#39;), (&#39;generator&#39;, &#39;generator_link&#39;, &#39;bus&#39;), </span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="c1">#   (&#39;bus&#39;, &#39;generator_link&#39;, &#39;generator&#39;), (&#39;load&#39;, &#39;load_link&#39;, &#39;bus&#39;), (&#39;bus&#39;, &#39;load_link&#39;, &#39;load&#39;), </span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="c1">#   (&#39;shunt&#39;, &#39;shunt_link&#39;, &#39;bus&#39;), (&#39;bus&#39;, &#39;shunt_link&#39;, &#39;shunt&#39;)]</span>
 </code></pre></div>
 <p>Each sample is a <code>HeteroData</code> graph with node types <code>bus</code>, <code>generator</code>, <code>load</code>, <code>shunt</code> and edge types <code>ac_line</code>, <code>transformer</code>, <code>generator_link</code>, <code>load_link</code>, <code>shunt_link</code>.</p>
-<h2 id="train-with-ddp">Train with DDP<a class="headerlink" href="#train-with-ddp" title="Permanent link">&para;</a></h2>
-<p>The main training entry point uses PyTorch DDP via <code>torchrun</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Single-node, 4 GPUs</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>torchrun<span class="w"> </span>--standalone<span class="w"> </span>--nproc_per_node<span class="o">=</span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>example/opf/train_opf_ddp.py<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>--config<span class="w"> </span>configs/config.yaml<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span>--cases<span class="w"> </span>case14<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span>--group_ids<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span>--model_type<span class="w"> </span>HeteroGNN<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">  </span>--loss_type<span class="w"> </span>mse
+<h2 id="train-on-a-local-machine">Train on a local machine<a class="headerlink" href="#train-on-a-local-machine" title="Permanent link">&para;</a></h2>
+<p>For a quick smoke test on a single workstation, use the minimal single-process script. It reads <code>configs/config.yaml</code> (loader / optimizer / training) and the <code>HeteroGNN</code> section of <code>configs/model/heterognn.yaml</code>, but skips DDP / MPI entirely:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>python<span class="w"> </span>example/opf/train_opf_simple.py
 </code></pre></div>
-<h2 id="train-programmatically">Train Programmatically<a class="headerlink" href="#train-programmatically" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">lumina.dataset.opf.opf_dataset</span><span class="w"> </span><span class="kn">import</span> <span class="n">OPFDataset</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">lumina.model.opf.losses</span><span class="w"> </span><span class="kn">import</span> <span class="n">OPFLossManager</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">lumina.loader.opf.opf_loader</span><span class="w"> </span><span class="kn">import</span> <span class="n">DataLoader</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1"># Load data</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="n">dataset</span> <span class="o">=</span> <span class="n">OPFDataset</span><span class="p">(</span><span class="n">root</span><span class="o">=</span><span class="s1">&#39;./opf_data&#39;</span><span class="p">,</span> <span class="n">case_name</span><span class="o">=</span><span class="s1">&#39;pglib_opf_case14_ieee&#39;</span><span class="p">)</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="n">loader</span> <span class="o">=</span> <span class="n">DataLoader</span><span class="p">(</span><span class="n">dataset</span><span class="p">,</span> <span class="n">batch_size</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span> <span class="n">shuffle</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="c1"># Create loss manager</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="n">loss_manager</span> <span class="o">=</span> <span class="n">OPFLossManager</span><span class="p">(</span><span class="n">loss_type</span><span class="o">=</span><span class="s1">&#39;mse&#39;</span><span class="p">)</span>
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>
-<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="c1"># Training loop (simplified)</span>
-<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="k">for</span> <span class="n">batch</span> <span class="ow">in</span> <span class="n">loader</span><span class="p">:</span>
-<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>    <span class="n">predictions</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">batch</span><span class="o">.</span><span class="n">x_dict</span><span class="p">,</span> <span class="n">batch</span><span class="o">.</span><span class="n">edge_index_dict</span><span class="p">)</span>
-<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>    <span class="n">loss</span><span class="p">,</span> <span class="n">info</span> <span class="o">=</span> <span class="n">loss_manager</span><span class="o">.</span><span class="n">compute_loss</span><span class="p">(</span><span class="n">predictions</span><span class="p">,</span> <span class="n">batch</span><span class="p">)</span>
-<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>    <span class="n">loss</span><span class="o">.</span><span class="n">backward</span><span class="p">()</span>
-<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>    <span class="c1"># optimizer.step() ...</span>
+<p>Defaults: case14 group 0; CUDA if available, else CPU. Override case / group / device with CLI flags:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>python<span class="w"> </span>example/opf/train_opf_simple.py<span class="w"> </span>--case<span class="w"> </span>pglib_opf_case30_ieee<span class="w"> </span>--group_id<span class="w"> </span><span class="m">0</span><span class="w"> </span>--device<span class="w"> </span>cpu
 </code></pre></div>
+<p>Per-epoch output looks like:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>epoch  1/10 | train_loss=0.0421 | val_loss=0.0357
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>epoch  2/10 | train_loss=0.0289 | val_loss=0.0271
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>...
+</code></pre></div>
+<p>Nothing is checkpointed or logged — the script is purely for validating the install + dataset + model wiring. Model architecture (<code>hidden_channels</code>, <code>num_layers</code>, <code>backend</code>) comes from <code>configs/model/heterognn.yaml</code>; the shipped defaults are GAT with <code>hidden_channels=2048</code>, <code>num_layers=8</code>. Edit that file to shrink the model if CPU iteration is too slow.</p>
+<h2 id="train-with-ddp-multi-gpu-on-hpc">Train with DDP (multi-GPU on HPC)<a class="headerlink" href="#train-with-ddp-multi-gpu-on-hpc" title="Permanent link">&para;</a></h2>
+<p>The full DDP entry point <code>example/opf/train_opf_ddp.py</code> is intended for HPC clusters (Polaris, NERSC Perlmutter) where the launcher environment provides the rendezvous and rank variables. It requires NVIDIA GPUs (the process group is hardcoded to NCCL).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>torchrun<span class="w"> </span>--standalone<span class="w"> </span>--nproc_per_node<span class="o">=</span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>example/opf/train_opf_ddp.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>--config<span class="w"> </span>configs/config.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>--cases<span class="w"> </span>case14<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span>--group_ids<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span>--model_type<span class="w"> </span>HeteroGNN<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span>--loss_type<span class="w"> </span>mse
+</code></pre></div>
+<p>For Polaris- or Perlmutter-specific <code>mpiexec</code> / <code>srun</code> invocations and job-script templates, see the <a href="../../tutorials/hpc/">HPC training guide</a>.</p>
+<div class="admonition info">
+<p class="admonition-title">Local workstation users</p>
+<p>On a non-HPC machine, the DDP launcher above won't work out of the box (it relies on env vars typically set by the cluster job launcher). Use the <a href="#train-on-a-local-machine">single-process script</a> above for local smoke testing.</p>
+</div>
 <h2 id="evaluate">Evaluate<a class="headerlink" href="#evaluate" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">lumina.evaluator.opf.evaluator</span><span class="w"> </span><span class="kn">import</span> <span class="n">ACOPFConstraintEvaluator</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">evaluator</span> <span class="o">=</span> <span class="n">ACOPFConstraintEvaluator</span><span class="p">(</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="n">voltage_limits</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;vmin&#39;</span><span class="p">:</span> <span class="n">vmin_tensor</span><span class="p">,</span> <span class="s1">&#39;vmax&#39;</span><span class="p">:</span> <span class="n">vmax_tensor</span><span class="p">},</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="n">generation_limits</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;pmin&#39;</span><span class="p">:</span> <span class="n">pmin</span><span class="p">,</span> <span class="s1">&#39;pmax&#39;</span><span class="p">:</span> <span class="n">pmax</span><span class="p">,</span> <span class="s1">&#39;qmin&#39;</span><span class="p">:</span> <span class="n">qmin</span><span class="p">,</span> <span class="s1">&#39;qmax&#39;</span><span class="p">:</span> <span class="n">qmax</span><span class="p">},</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="p">)</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="n">violations</span> <span class="o">=</span> <span class="n">evaluator</span><span class="o">.</span><span class="n">evaluate_all_constraints</span><span class="p">(</span>
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>    <span class="n">predictions</span><span class="o">=</span><span class="n">predictions</span><span class="p">,</span>
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>    <span class="n">batch_data</span><span class="o">=</span><span class="n">batch</span><span class="p">,</span>
-<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="p">)</span>
-<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="n">summary</span> <span class="o">=</span> <span class="n">evaluator</span><span class="o">.</span><span class="n">get_violation_summary</span><span class="p">(</span><span class="n">violations</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">lumina.evaluator.opf.evaluator</span><span class="w"> </span><span class="kn">import</span> <span class="n">ACOPFConstraintEvaluator</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">evaluator</span> <span class="o">=</span> <span class="n">ACOPFConstraintEvaluator</span><span class="p">(</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="n">voltage_limits</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;vmin&#39;</span><span class="p">:</span> <span class="n">vmin_tensor</span><span class="p">,</span> <span class="s1">&#39;vmax&#39;</span><span class="p">:</span> <span class="n">vmax_tensor</span><span class="p">},</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="n">generation_limits</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;pmin&#39;</span><span class="p">:</span> <span class="n">pmin</span><span class="p">,</span> <span class="s1">&#39;pmax&#39;</span><span class="p">:</span> <span class="n">pmax</span><span class="p">,</span> <span class="s1">&#39;qmin&#39;</span><span class="p">:</span> <span class="n">qmin</span><span class="p">,</span> <span class="s1">&#39;qmax&#39;</span><span class="p">:</span> <span class="n">qmax</span><span class="p">},</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="p">)</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="n">violations</span> <span class="o">=</span> <span class="n">evaluator</span><span class="o">.</span><span class="n">evaluate_all_constraints</span><span class="p">(</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>    <span class="n">predictions</span><span class="o">=</span><span class="n">predictions</span><span class="p">,</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>    <span class="n">batch_data</span><span class="o">=</span><span class="n">batch</span><span class="p">,</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="p">)</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="n">summary</span> <span class="o">=</span> <span class="n">evaluator</span><span class="o">.</span><span class="n">get_violation_summary</span><span class="p">(</span><span class="n">violations</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
 <p>All training parameters are controlled via YAML configs. See <code>configs/config.yaml</code> for the full reference with defaults.</p>
@@ -1683,7 +1688,7 @@
 </tr>
 <tr>
 <td><code>training</code></td>
-<td>Epochs, patience, gradient clipping, batch size</td>
+<td>Epochs, patience, gradient clipping, sample-based scheduling</td>
 </tr>
 <tr>
 <td><code>loader</code></td>

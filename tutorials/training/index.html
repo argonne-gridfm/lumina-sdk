@@ -746,10 +746,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#using-torchrun-recommended-for-multi-gpu" class="md-nav__link">
+  <a href="#single-process-smoke-test" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Using torchrun (recommended for multi-GPU)
+        Single process (smoke test)
       
     </span>
   </a>
@@ -757,10 +757,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#single-gpu" class="md-nav__link">
+  <a href="#ddp-training" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Single GPU
+        DDP training
       
     </span>
   </a>
@@ -1725,61 +1725,101 @@
 <a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="w">  </span><span class="nt">num_workers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
 </code></pre></div>
 <h2 id="3-launch-training">3. Launch Training<a class="headerlink" href="#3-launch-training" title="Permanent link">&para;</a></h2>
-<h3 id="using-torchrun-recommended-for-multi-gpu">Using torchrun (recommended for multi-GPU)<a class="headerlink" href="#using-torchrun-recommended-for-multi-gpu" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>torchrun<span class="w"> </span>--standalone<span class="w"> </span>--nproc_per_node<span class="o">=</span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>example/opf/train_opf_ddp.py<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>--config<span class="w"> </span>configs/config.yaml<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span>--cases<span class="w"> </span>case14<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span>--group_ids<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span>--model_type<span class="w"> </span>HeteroGNN<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span>--loss_type<span class="w"> </span>mse
+<h3 id="single-process-smoke-test">Single process (smoke test)<a class="headerlink" href="#single-process-smoke-test" title="Permanent link">&para;</a></h3>
+<p>For a one-GPU sanity check on a non-HPC machine, use the minimal single-process script:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>python<span class="w"> </span>example/opf/train_opf_simple.py
 </code></pre></div>
-<h3 id="single-gpu">Single GPU<a class="headerlink" href="#single-gpu" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>torchrun<span class="w"> </span>--standalone<span class="w"> </span>--nproc_per_node<span class="o">=</span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>example/opf/train_opf_ddp.py<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>--config<span class="w"> </span>configs/config.yaml<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>--cases<span class="w"> </span>case14<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span>--group_ids<span class="w"> </span><span class="m">0</span>
+<p>It reads the same <code>configs/config.yaml</code> (loader / optimizer / training) and the <code>HeteroGNN</code> section of <code>configs/model/heterognn.yaml</code>. CLI flags expose only the dynamic bits:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>python<span class="w"> </span>example/opf/train_opf_simple.py<span class="w"> </span>--case<span class="w"> </span>pglib_opf_case14_ieee<span class="w"> </span>--group_id<span class="w"> </span><span class="m">0</span><span class="w"> </span>--device<span class="w"> </span>cpu
 </code></pre></div>
+<p>No DDP, MPI, checkpointing, or W&amp;B — purely for validating your install + dataset + model wiring.</p>
+<h3 id="ddp-training">DDP training<a class="headerlink" href="#ddp-training" title="Permanent link">&para;</a></h3>
+<p>For real training, use <code>example/opf/train_opf_ddp.py</code>. NVIDIA GPUs are required (the process group is hardcoded to NCCL). Pick the launcher matching your environment:</p>
+<div class="tabbed-set tabbed-alternate" data-tabs="1:3"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><input id="__tabbed_1_3" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">Local workstation (torchrun)</label><label for="__tabbed_1_2">HPC single-node</label><label for="__tabbed_1_3">HPC multi-node</label></div>
+<div class="tabbed-content">
+<div class="tabbed-block">
+<p>Single-machine multi-GPU. <code>torchrun</code> handles process spawning and rendezvous — no manual <code>MASTER_ADDR</code> / <code>MASTER_PORT</code> needed.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>torchrun<span class="w"> </span>--standalone<span class="w"> </span>--nproc_per_node<span class="o">=</span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>example/opf/train_opf_ddp.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>--config<span class="w"> </span>configs/config.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span>--cases<span class="w"> </span>case14<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span>--group_ids<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span>--model_type<span class="w"> </span>HeteroGNN<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span>--loss_type<span class="w"> </span>mse
+</code></pre></div>
+<p>Use <code>--nproc_per_node=1</code> for a single-GPU run.</p>
+</div>
+<div class="tabbed-block">
+<p>Polaris (PBS + MPICH): <code>mpiexec -n 1 -ppn 4</code> to claim 4 GPUs on one node. Perlmutter (SLURM): <code>srun --ntasks-per-node 4</code>. Full job-script templates and Perlmutter <code>srun</code> invocations live in the <a href="../hpc/">HPC training guide</a>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Polaris (single node, 4 GPUs)</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MASTER_ADDR</span><span class="o">=</span><span class="k">$(</span>hostname<span class="k">)</span>.hsn.cm.polaris.alcf.anl.gov
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MASTER_PORT</span><span class="o">=</span><span class="m">29500</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>mpiexec<span class="w"> </span>-n<span class="w"> </span><span class="m">1</span><span class="w"> </span>-ppn<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span>python<span class="w"> </span>example/opf/train_opf_ddp.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span>--config<span class="w"> </span>configs/config.polaris.ddp.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">  </span>--cases<span class="w"> </span>case14<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">  </span>--group_ids<span class="w"> </span><span class="m">0</span>
+</code></pre></div>
+</div>
+<div class="tabbed-block">
+<p>Across multiple nodes — the full PBS / SLURM job scripts are in the <a href="../hpc/">HPC training guide</a>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Polaris (NNODES nodes × 4 GPUs)</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nv">NNODES</span><span class="o">=</span><span class="k">$(</span>cat<span class="w"> </span><span class="nv">$PBS_NODEFILE</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>sort<span class="w"> </span><span class="p">|</span><span class="w"> </span>uniq<span class="w"> </span><span class="p">|</span><span class="w"> </span>wc<span class="w"> </span>-l<span class="k">)</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="nv">NGPUS_PER_NODE</span><span class="o">=</span><span class="m">4</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="nv">NTOTGPUS</span><span class="o">=</span><span class="k">$((</span><span class="nv">NNODES</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nv">NGPUS_PER_NODE</span><span class="k">))</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MASTER_ADDR</span><span class="o">=</span><span class="k">$(</span>hostname<span class="k">)</span>.hsn.cm.polaris.alcf.anl.gov
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MASTER_PORT</span><span class="o">=</span><span class="m">29500</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>mpiexec<span class="w"> </span>-n<span class="w"> </span><span class="si">${</span><span class="nv">NTOTGPUS</span><span class="si">}</span><span class="w"> </span>-ppn<span class="w"> </span><span class="si">${</span><span class="nv">NGPUS_PER_NODE</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">  </span>python<span class="w"> </span>example/opf/train_opf_ddp.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">  </span>--config<span class="w"> </span>configs/config.polaris.ddp.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="w">  </span>--cases<span class="w"> </span>case14<span class="w"> </span>case118<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="w">  </span>--group_ids<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="m">3</span>
+</code></pre></div>
+</div>
+</div>
+</div>
 <h2 id="4-model-types">4. Model Types<a class="headerlink" href="#4-model-types" title="Permanent link">&para;</a></h2>
-<p>LUMINA supports several GNN architectures:</p>
+<p>LUMINA supports several GNN architectures. <code>--model_type</code> selects the architecture; <code>--backend</code> is a sub-option that only applies to <code>HeteroGNN</code> (it picks the per-relation convolution layer used inside <code>HeteroConv</code>).</p>
 <table>
 <thead>
 <tr>
-<th>Model</th>
-<th>Backend</th>
+<th><code>--model_type</code></th>
+<th><code>--backend</code> (HeteroGNN only)</th>
 <th>Description</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td><code>HeteroGNN</code></td>
-<td>SAGE/GAT/GCN/GIN</td>
-<td>General heterogeneous message passing</td>
+<td><code>sage</code> / <code>gcn</code> / <code>gin</code> / <code>gat</code></td>
+<td>General heterogeneous message passing with a selectable conv backend</td>
 </tr>
 <tr>
 <td><code>RGAT</code></td>
-<td>Relational GAT</td>
-<td>Multi-relational graph attention</td>
+<td>N/A</td>
+<td>Multi-relational graph attention (per-relation <code>GATConv</code>)</td>
 </tr>
 <tr>
 <td><code>HEAT</code></td>
-<td>HEAT</td>
-<td>Heterogeneous edge attribute transformer</td>
+<td>N/A</td>
+<td>Heterogeneous edge-attribute transformer</td>
 </tr>
 <tr>
 <td><code>HGT</code></td>
-<td>HGT</td>
+<td>N/A</td>
 <td>Heterogeneous graph transformer</td>
 </tr>
 </tbody>
 </table>
 <p>Set the backend in the model config:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nt">models</span><span class="p">:</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">HeteroGNN</span><span class="p">:</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="nt">hidden_channels</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">64</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="nt">num_layers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span><span class="nt">backend</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;SAGE&quot;</span><span class="w">   </span><span class="c1"># or &quot;GAT&quot;, &quot;GCN&quot;, &quot;GIN&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nt">models</span><span class="p">:</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">HeteroGNN</span><span class="p">:</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">    </span><span class="nt">hidden_channels</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">64</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">    </span><span class="nt">num_layers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">    </span><span class="nt">backend</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;sage&quot;</span><span class="w">   </span><span class="c1"># or &quot;gat&quot;, &quot;gcn&quot;, &quot;gin&quot; — lowercase only</span>
 </code></pre></div>
 <h2 id="5-loss-functions">5. Loss Functions<a class="headerlink" href="#5-loss-functions" title="Permanent link">&para;</a></h2>
 <p>Available loss types:</p>
@@ -1815,14 +1855,22 @@
 </table>
 <h2 id="6-monitor-training">6. Monitor Training<a class="headerlink" href="#6-monitor-training" title="Permanent link">&para;</a></h2>
 <h3 id="with-weights-biases">With Weights &amp; Biases<a class="headerlink" href="#with-weights-biases" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>torchrun<span class="w"> </span>--standalone<span class="w"> </span>--nproc_per_node<span class="o">=</span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>example/opf/train_opf_ddp.py<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>--config<span class="w"> </span>configs/config.yaml<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span>--cases<span class="w"> </span>case14<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span>--group_ids<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span>--wandb<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span>--wandb_project<span class="w"> </span><span class="s2">&quot;lumina-training&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>torchrun<span class="w"> </span>--standalone<span class="w"> </span>--nproc_per_node<span class="o">=</span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span>example/opf/train_opf_ddp.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span>--config<span class="w"> </span>configs/config.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span>--cases<span class="w"> </span>case14<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">  </span>--group_ids<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">  </span>--wandb<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">  </span>--wandb_project<span class="w"> </span>&lt;YOUR_WANDB_PROJECT_NAME&gt;
 </code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">W&amp;B logging requires <code>wandb</code> extra</p>
+<p>The <code>wandb</code> package is not included in the base install. To enable W&amp;B logging, install the <code>[hps]</code> extra:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;.[hps]&quot;</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="c1"># or equivalently:</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>make<span class="w"> </span>install-hps
+</code></pre></div>
+</div>
 <h3 id="checkpoints">Checkpoints<a class="headerlink" href="#checkpoints" title="Permanent link">&para;</a></h3>
 <p>Checkpoints are saved to <code>checkpoint_dir</code> and include:
 - <code>best.pt</code> — Best model by validation score

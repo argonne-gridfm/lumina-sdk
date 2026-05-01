@@ -2307,7 +2307,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 </style>
 <!-- End of mermaid configuration --><div class="jupyter-wrapper">
 <div class="jp-Notebook" data-jp-theme-light="true" data-jp-theme-name="JupyterLab Light">
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=c4e22552">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=8f8193be">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2324,7 +2324,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 </div>
 </div>
 </div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs">
-<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=f7a9e61e">
+<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=7c763582">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2343,44 +2343,46 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 </clipboard-copy>
 </div>
 <div class="highlight-ipynb hl-python"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">torch_geometric.loader</span><span class="w"> </span><span class="kn">import</span> <span class="n">DataLoader</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">lumina.dataset.opf.opf_dataset</span><span class="w"> </span><span class="kn">import</span> <span class="n">OPFDataset</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">lumina.model.opf.hetero_model</span><span class="w"> </span><span class="kn">import</span> <span class="n">OPFHeteroGNN</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">lumina.dataset.opf.transforms</span><span class="w"> </span><span class="kn">import</span> <span class="n">to_float32</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">lumina.loader.opf.opf_loader</span><span class="w"> </span><span class="kn">import</span> <span class="n">DataLoader</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">lumina.evaluator.opf.evaluator</span><span class="w"> </span><span class="kn">import</span> <span class="n">ACOPFConstraintEvaluator</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">lumina.evaluator.opf.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">Modeler</span>
 
 <span class="n">DEVICE</span> <span class="o">=</span> <span class="s1">'cuda'</span> <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">is_available</span><span class="p">()</span> <span class="k">else</span> <span class="s1">'cpu'</span>
 <span class="n">DATA_ROOT</span> <span class="o">=</span> <span class="s1">'/path/to/datasets'</span>
-<span class="n">CKPT_PATH</span> <span class="o">=</span> <span class="s1">'/path/to/checkpoint.pt'</span>
+<span class="n">CKPT_PATH</span> <span class="o">=</span> <span class="s1">'case14_quickstart.pt'</span>  <span class="c1"># produced by 01_quickstart_case14.ipynb</span>
 </pre></div>
 <div class="clipboard-copy-txt" id="cell-1">import torch
-from torch_geometric.loader import DataLoader
 
 from lumina.dataset.opf.opf_dataset import OPFDataset
-from lumina.model.opf.hetero_model import OPFHeteroGNN
+from lumina.dataset.opf.transforms import to_float32
+from lumina.loader.opf.opf_loader import DataLoader
 from lumina.evaluator.opf.evaluator import ACOPFConstraintEvaluator
+from lumina.evaluator.opf.utils import Modeler
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 DATA_ROOT = '/path/to/datasets'
-CKPT_PATH = '/path/to/checkpoint.pt'</div>
+CKPT_PATH = 'case14_quickstart.pt'  # produced by 01_quickstart_case14.ipynb</div>
 </div>
 </div>
 </div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=a39b8462">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=f2d6ea65">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
 </div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
-<h2 id="1-load-data-and-checkpoint">1. Load data and checkpoint<a class="anchor-link" href="#1-load-data-and-checkpoint">¶</a></h2>
+<h2 id="1-load-data-and-checkpoint">1. Load data and checkpoint<a class="anchor-link" href="#1-load-data-and-checkpoint">¶</a></h2><p><strong>Prerequisite:</strong> run <a href="01_quickstart_case14.ipynb"><code>01_quickstart_case14.ipynb</code></a> first — its last cell saves <code>case14_quickstart.pt</code> in the working directory, which <code>Modeler.load_model_from_training_checkpoint</code> expects to consume here.</p>
 </div>
 </div>
 </div>
 </div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs">
-<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=fce55d41">
+<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=52c578f5">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2402,50 +2404,32 @@ CKPT_PATH = '/path/to/checkpoint.pt'</div>
     <span class="n">root</span><span class="o">=</span><span class="n">DATA_ROOT</span><span class="p">,</span>
     <span class="n">case_name</span><span class="o">=</span><span class="s1">'pglib_opf_case14_ieee'</span><span class="p">,</span>
     <span class="n">group_id</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+    <span class="n">transform</span><span class="o">=</span><span class="n">to_float32</span><span class="p">,</span>  <span class="c1"># cast features to float32 to match model weights</span>
 <span class="p">)</span>
 <span class="n">loader</span> <span class="o">=</span> <span class="n">DataLoader</span><span class="p">(</span><span class="n">ds</span><span class="p">[</span><span class="o">-</span><span class="mi">128</span><span class="p">:],</span> <span class="n">batch_size</span><span class="o">=</span><span class="mi">32</span><span class="p">)</span>  <span class="c1"># last 128 as held-out</span>
-<span class="n">sample</span> <span class="o">=</span> <span class="n">ds</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
 
-<span class="c1"># Reconstruct the model with the same hyperparameters used at training time.</span>
-<span class="n">model</span> <span class="o">=</span> <span class="n">OPFHeteroGNN</span><span class="p">(</span>
-    <span class="n">metadata</span><span class="o">=</span><span class="n">sample</span><span class="o">.</span><span class="n">metadata</span><span class="p">(),</span>
-    <span class="n">hidden_dim</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span>
-    <span class="n">num_layers</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
-    <span class="n">backend</span><span class="o">=</span><span class="s1">'SAGE'</span><span class="p">,</span>
-<span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">DEVICE</span><span class="p">)</span>
-
-<span class="n">ckpt</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">CKPT_PATH</span><span class="p">,</span> <span class="n">map_location</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span> <span class="n">weights_only</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-<span class="n">state</span> <span class="o">=</span> <span class="n">ckpt</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'model'</span><span class="p">,</span> <span class="n">ckpt</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'state_dict'</span><span class="p">,</span> <span class="n">ckpt</span><span class="p">))</span>
-<span class="n">model</span><span class="o">.</span><span class="n">load_state_dict</span><span class="p">(</span><span class="n">state</span><span class="p">)</span>
-<span class="n">model</span><span class="o">.</span><span class="n">eval</span><span class="p">()</span>
+<span class="c1"># Reconstruct the trained model from NB01's checkpoint via Modeler.</span>
+<span class="n">modeler</span> <span class="o">=</span> <span class="n">Modeler</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">device</span><span class="p">(</span><span class="n">DEVICE</span><span class="p">))</span>
+<span class="n">model</span> <span class="o">=</span> <span class="n">modeler</span><span class="o">.</span><span class="n">load_model_from_training_checkpoint</span><span class="p">(</span><span class="n">CKPT_PATH</span><span class="p">)</span>
 </pre></div>
 <div class="clipboard-copy-txt" id="cell-2">ds = OPFDataset(
     root=DATA_ROOT,
     case_name='pglib_opf_case14_ieee',
     group_id=0,
+    transform=to_float32,  # cast features to float32 to match model weights
 )
 loader = DataLoader(ds[-128:], batch_size=32)  # last 128 as held-out
-sample = ds[0]
 
-# Reconstruct the model with the same hyperparameters used at training time.
-model = OPFHeteroGNN(
-    metadata=sample.metadata(),
-    hidden_dim=64,
-    num_layers=3,
-    backend='SAGE',
-).to(DEVICE)
-
-ckpt = torch.load(CKPT_PATH, map_location=DEVICE, weights_only=False)
-state = ckpt.get('model', ckpt.get('state_dict', ckpt))
-model.load_state_dict(state)
-model.eval()</div>
+# Reconstruct the trained model from NB01's checkpoint via Modeler.
+modeler = Modeler(device=torch.device(DEVICE))
+model = modeler.load_model_from_training_checkpoint(CKPT_PATH)</div>
 </div>
 </div>
 </div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=d3282ef8">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=7f22dfde">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2456,7 +2440,7 @@ model.eval()</div>
 </div>
 </div>
 </div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs">
-<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=679af7dc">
+<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=6ff44dda">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2501,7 +2485,7 @@ print(f'evaluated {len(loader.dataset)} samples in {len(batches)} batches')</div
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=f4093155">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=5c896797">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2512,7 +2496,7 @@ print(f'evaluated {len(loader.dataset)} samples in {len(batches)} batches')</div
 </div>
 </div>
 </div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs">
-<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=7cdc1813">
+<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=791e13a6">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2559,7 +2543,7 @@ for k, v in agg.items():
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=41d5305f">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=1ade3077">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2570,7 +2554,7 @@ for k, v in agg.items():
 </div>
 </div>
 </div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs">
-<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=720a88f5">
+<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=80a9cad7">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2615,7 +2599,7 @@ for k in agg:
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=75516d0f">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=8d78d3bf">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
