@@ -13,7 +13,7 @@
         <link rel="canonical" href="https://argonne-gridfm.github.io/lumina-sdk/wandb_sweep_perlmutter/">
       
       
-        <link rel="prev" href="../configuration/">
+        <link rel="prev" href="../changelog/">
       
       
       
@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#wb-sweep-on-perlmutter-hgt-example" class="md-skip">
+        <a href="#wb-sweep-on-perlmutter" class="md-skip">
           Skip to content
         </a>
       
@@ -323,13 +323,32 @@
   
   
   
+  
+    <li class="md-tabs__item">
+      <a href="../changelog/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Changelog
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
     
   
   
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../polaris.md" class="md-tabs__link">
+        <a href="./" class="md-tabs__link">
           
   
   
@@ -1318,16 +1337,39 @@
       
   
   
+  
+  
+    <li class="md-nav__item">
+      <a href="../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
     
   
+    Changelog
   
-  
+
     
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
     
       
-        
       
-        
+  
+  
+    
+  
+  
+  
+    
+    
       
         
       
@@ -1347,10 +1389,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" checked>
         
           
-          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
             
   
   
@@ -1368,8 +1410,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_6">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_7">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1378,62 +1420,6 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../polaris.md" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Polaris Setup
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../perlmutter.md" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Perlmutter Setup
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
             
               
                 
@@ -1502,10 +1488,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#how-the-pieces-connect" class="md-nav__link">
+  <a href="#step-1-define-the-sweep" class="md-nav__link">
     <span class="md-ellipsis">
       
-        How the pieces connect
+        Step 1: Define the sweep
       
     </span>
   </a>
@@ -1513,10 +1499,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#step-1-create-the-sweep-login-node" class="md-nav__link">
+  <a href="#step-2-per-run-launcher-launchhgtsh" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Step 1: Create the sweep (login node)
+        Step 2: Per-run launcher (launch.hgt.sh)
       
     </span>
   </a>
@@ -1524,32 +1510,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#step-2-configure-the-agent-job" class="md-nav__link">
+  <a href="#step-3-slurm-agent-job-launchsweepsl" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Step 2: Configure the agent job
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#step-3-submit-the-perlmutter-job" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Step 3: Submit the Perlmutter job
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#what-launchhgtsh-runs" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What launch.hgt.sh runs
+        Step 3: SLURM agent job (launch.sweep.sl)
       
     </span>
   </a>
@@ -1561,6 +1525,17 @@
     <span class="md-ellipsis">
       
         Monitoring
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#common-pitfalls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common pitfalls
       
     </span>
   </a>
@@ -1603,55 +1578,126 @@
   
 
 
-<h1 id="wb-sweep-on-perlmutter-hgt-example">W&amp;B Sweep on Perlmutter (HGT example)<a class="headerlink" href="#wb-sweep-on-perlmutter-hgt-example" title="Permanent link">&para;</a></h1>
-<p>This guide shows how to run a W&amp;B sweep for the HGT model on Perlmutter using:
-- <code>configs/sweeps/iclr/opf_hgt.yaml</code> (sweep definition)
-- <code>scripts/perlmutter/sweep/iclr/launch.hgt.sh</code> (per-run entrypoint)
-- <code>scripts/perlmutter/sweep/iclr/launch.sweep.sl</code> (SLURM job that runs W&amp;B agents)</p>
-<h2 id="how-the-pieces-connect">How the pieces connect<a class="headerlink" href="#how-the-pieces-connect" title="Permanent link">&para;</a></h2>
-<p>1) <code>wandb sweep configs/sweeps/iclr/opf_hgt.yaml</code> registers the sweep.
-2) The sweep config's <code>command</code> calls <code>launch.hgt.sh</code> for each run.
-3) <code>launch.hgt.sh</code> starts DDP training with <code>example/opf/train_opf_ddp.py</code> and forwards sweep overrides via <code>"$@"</code>.
-4) <code>launch.sweep.sl</code> allocates Perlmutter resources and runs one or more <code>wandb agent</code> processes.</p>
-<h2 id="step-1-create-the-sweep-login-node">Step 1: Create the sweep (login node)<a class="headerlink" href="#step-1-create-the-sweep-login-node" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># Make sure W&amp;B can authenticate.</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WANDB_API_KEY</span><span class="o">=</span>YOUR_KEY
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1"># Register the sweep and get the sweep ID.</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>wandb<span class="w"> </span>sweep<span class="w"> </span>configs/sweeps/iclr/opf_hgt.yaml
-</code></pre></div>
-<p>The command prints a sweep path like <code>ENTITY/PROJECT/SWEEP_ID</code>. You will use it in the agent command.</p>
-<p>Note: <code>opf_hgt.yaml</code> defines HGT hyperparameters (layers, hidden size, heads, dropout, etc.) and sets
-<code>wandb_project: lumina-sweep-ICLR-hgt-stage1</code> as a training config parameter. If you create the sweep
-under a different W&amp;B project, keep those aligned.</p>
-<h2 id="step-2-configure-the-agent-job">Step 2: Configure the agent job<a class="headerlink" href="#step-2-configure-the-agent-job" title="Permanent link">&para;</a></h2>
-<p>Edit <code>scripts/perlmutter/sweep/iclr/launch.sweep.sl</code> to include the sweep ID. The script currently shows
-examples as comments; add the active line you want to run.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Example: one run per agent</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>wandb<span class="w"> </span>agent<span class="w"> </span>--count<span class="w"> </span><span class="m">1</span><span class="w"> </span>ENTITY/PROJECT/SWEEP_ID
-</code></pre></div>
-<p>If you want multiple parallel agents, keep the SLURM array (e.g., <code>#SBATCH --array=0-24</code>) and adjust
-<code>--count</code>. Total runs = array size * count.</p>
-<p>Make sure <code>WANDB_API_KEY</code> is set (either in your environment or in the script). The script and
-<code>launch.hgt.sh</code> currently export <code>WANDB_API_KEY</code>; update or remove those lines to use your key.</p>
-<h2 id="step-3-submit-the-perlmutter-job">Step 3: Submit the Perlmutter job<a class="headerlink" href="#step-3-submit-the-perlmutter-job" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>sbatch<span class="w"> </span>scripts/perlmutter/sweep/iclr/launch.sweep.sl
-</code></pre></div>
-<p>Each array task runs a <code>wandb agent</code> that pulls a sweep config and invokes the command from
-<code>opf_hgt.yaml</code>, which in turn runs <code>launch.hgt.sh</code>.</p>
-<h2 id="what-launchhgtsh-runs">What <code>launch.hgt.sh</code> runs<a class="headerlink" href="#what-launchhgtsh-runs" title="Permanent link">&para;</a></h2>
-<p><code>launch.hgt.sh</code> uses the SLURM allocation and starts distributed training via <code>srun</code>:</p>
+<h1 id="wb-sweep-on-perlmutter">W&amp;B Sweep on Perlmutter<a class="headerlink" href="#wb-sweep-on-perlmutter" title="Permanent link">&para;</a></h1>
+<p>This guide shows the pattern we use for a W&amp;B sweep of LUMINA training on NERSC Perlmutter:</p>
+<ol>
+<li>A sweep config (<code>opf_&lt;model&gt;.yaml</code>) that defines the hyper-parameter grid and the per-run command.</li>
+<li>A per-run launcher script that the W&amp;B agent invokes once per trial — it sets up DDP and calls <code>example/opf/train_opf_ddp.py</code> with the sweep overrides.</li>
+<li>A SLURM job script that allocates nodes and runs one or more <code>wandb agent</code> processes.</li>
+</ol>
+<p>The example files mentioned below (<code>configs/sweeps/...</code>, <code>scripts/perlmutter/...</code>) are <strong>not shipped with the repo</strong> — they're git-ignored because they contain account-specific settings. Use the templates in this guide as a starting point.</p>
+<div class="admonition note">
+<p class="admonition-title">Substitute the UPPERCASE placeholders for your environment</p>
+<p>The snippets below use <code>&lt;UPPERCASE&gt;</code> placeholders that you must replace before submitting:</p>
 <ul>
-<li>Base config: <code>configs/sweeps/iclr/config.yaml</code></li>
-<li>Model: <code>--model_type=HGT</code></li>
-<li>DDP settings derive from <code>SLURM_JOB_NUM_NODES</code> and <code>SLURM_GPUS_ON_NODE</code></li>
-<li>Sweep overrides are passed in from W&amp;B as CLI args (<code>"$@"</code>)</li>
+<li><code>&lt;HPC_ACCOUNT&gt;</code> — your NERSC allocation (e.g. <code>m1234</code>)</li>
+<li><code>&lt;CONDA_ENV_PATH&gt;</code> — your conda env on <code>${CFS}</code> or <code>${PSCRATCH}</code></li>
+<li><code>&lt;LUMINA_REPO_PATH&gt;</code> — your local clone of <code>lumina-sdk</code></li>
+<li><code>&lt;WANDB_ENTITY&gt;</code>, <code>&lt;WANDB_PROJECT&gt;</code>, <code>&lt;SWEEP_ID&gt;</code> — your W&amp;B identifiers</li>
 </ul>
-<p>If you change node or GPU counts in <code>launch.sweep.sl</code>, <code>launch.hgt.sh</code> will pick them up automatically.</p>
-<h2 id="monitoring">Monitoring<a class="headerlink" href="#monitoring" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>sqs
+</div>
+<h2 id="step-1-define-the-sweep">Step 1: Define the sweep<a class="headerlink" href="#step-1-define-the-sweep" title="Permanent link">&para;</a></h2>
+<p>Create a YAML under <code>configs/sweeps/</code> (gitignored). The <code>command</code> block is what the W&amp;B agent runs for each trial — it points at your per-run launcher script.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># configs/sweeps/opf_hgt.yaml</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">program</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">scripts/perlmutter/sweep/launch.hgt.sh</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">method</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">bayes</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="nt">metric</span><span class="p">:</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">val/loss/total</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="nt">goal</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">minimize</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="nt">command</span><span class="p">:</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${env}</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${program}</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${args}</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="nt">parameters</span><span class="p">:</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">  </span><span class="nt">models.HGT.hidden_channels</span><span class="p">:</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span><span class="nt">values</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">128</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">256</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">512</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">  </span><span class="nt">models.HGT.num_layers</span><span class="p">:</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">    </span><span class="nt">values</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">4</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">6</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">8</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">  </span><span class="nt">models.HGT.num_heads</span><span class="p">:</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">    </span><span class="nt">values</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">2</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">4</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">8</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">  </span><span class="nt">models.HGT.dropout</span><span class="p">:</span>
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">    </span><span class="nt">values</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">0.0</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">0.1</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">0.2</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">  </span><span class="nt">optimizer.AdamW.lr</span><span class="p">:</span>
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w">    </span><span class="nt">values</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">1.0e-4</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">5.0e-4</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">1.0e-3</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">  </span><span class="nt">wandb_project</span><span class="p">:</span>
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="w">    </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;WANDB_PROJECT&gt;</span>
 </code></pre></div>
-<p>Track runs in the W&amp;B UI under the sweep project.</p>
+<p>Register the sweep on a login node:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WANDB_API_KEY</span><span class="o">=</span>&lt;YOUR_KEY&gt;
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>wandb<span class="w"> </span>sweep<span class="w"> </span>configs/sweeps/opf_hgt.yaml
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="c1"># prints a sweep path like &lt;WANDB_ENTITY&gt;/&lt;WANDB_PROJECT&gt;/&lt;SWEEP_ID&gt;</span>
+</code></pre></div>
+<h2 id="step-2-per-run-launcher-launchhgtsh">Step 2: Per-run launcher (<code>launch.hgt.sh</code>)<a class="headerlink" href="#step-2-per-run-launcher-launchhgtsh" title="Permanent link">&para;</a></h2>
+<p>This script is invoked by the W&amp;B agent for each trial. It uses the SLURM allocation already granted to the agent's job and forwards W&amp;B-injected hyperparameter overrides via <code>"$@"</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="ch">#!/bin/bash</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nb">set</span><span class="w"> </span>-euo<span class="w"> </span>pipefail
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="nb">export</span><span class="w"> </span><span class="nv">SLURM_CPU_BIND</span><span class="o">=</span><span class="s2">&quot;cores&quot;</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MASTER_PORT</span><span class="o">=</span><span class="si">${</span><span class="nv">MASTER_PORT</span><span class="k">:-</span><span class="nv">29500</span><span class="si">}</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MASTER_ADDR</span><span class="o">=</span><span class="si">${</span><span class="nv">MASTER_ADDR</span><span class="k">:-$(</span>scontrol<span class="w"> </span>show<span class="w"> </span>hostnames<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SLURM_NODELIST</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>head<span class="w"> </span>-n<span class="w"> </span><span class="m">1</span><span class="k">)</span><span class="si">}</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OMP_NUM_THREADS</span><span class="o">=</span><span class="m">32</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>module<span class="w"> </span>load<span class="w"> </span>conda
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>conda<span class="w"> </span>activate<span class="w"> </span>&lt;CONDA_ENV_PATH&gt;
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>srun<span class="w"> </span>--ntasks<span class="o">=</span><span class="nv">$SLURM_JOB_NUM_NODES</span><span class="w"> </span>--ntasks-per-node<span class="o">=</span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="w">    </span>python<span class="w"> </span>-m<span class="w"> </span>torch.distributed.run<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="w">    </span>--nnodes<span class="o">=</span><span class="nv">$SLURM_JOB_NUM_NODES</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="w">    </span>--nproc_per_node<span class="o">=</span><span class="nv">$SLURM_GPUS_ON_NODE</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="w">    </span>--rdzv_backend<span class="o">=</span>c10d<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="w">    </span>--rdzv_endpoint<span class="o">=</span><span class="nv">$MASTER_ADDR</span>:<span class="nv">$MASTER_PORT</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="w">    </span>example/opf/train_opf_ddp.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="w">    </span>--config<span class="w"> </span>configs/config.perlmutter.ddp.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a><span class="w">    </span>--cases<span class="w"> </span>case30<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a><span class="w">    </span>--group_ids<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a><span class="w">    </span>--model_type<span class="w"> </span>HGT<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a><span class="w">    </span>--hetero_model_config<span class="w"> </span>configs/model/heterognn.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a><span class="w">    </span>--loss_type<span class="w"> </span>mse<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-25" name="__codelineno-2-25" href="#__codelineno-2-25"></a><span class="w">    </span>--wandb<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-26" name="__codelineno-2-26" href="#__codelineno-2-26"></a><span class="w">    </span><span class="s2">&quot;</span><span class="nv">$@</span><span class="s2">&quot;</span>
+</code></pre></div>
+<p>Make it executable: <code>chmod +x scripts/perlmutter/sweep/launch.hgt.sh</code>.</p>
+<h2 id="step-3-slurm-agent-job-launchsweepsl">Step 3: SLURM agent job (<code>launch.sweep.sl</code>)<a class="headerlink" href="#step-3-slurm-agent-job-launchsweepsl" title="Permanent link">&para;</a></h2>
+<p>Each SLURM array task runs one <code>wandb agent</code>, which in turn invokes the launcher above for each trial pulled from the sweep queue.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="ch">#!/bin/bash</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1">#SBATCH -A &lt;HPC_ACCOUNT&gt;</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="c1">#SBATCH -C gpu</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1">#SBATCH -q regular</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="c1">#SBATCH -t 2:30:00</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="c1">#SBATCH -N 1</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="c1">#SBATCH --ntasks-per-node=1</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="c1">#SBATCH -c 32</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="c1">#SBATCH --gpus-per-task=4</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="c1">#SBATCH --gpu-bind=none</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="c1">#SBATCH --array=0-49</span>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="nb">export</span><span class="w"> </span><span class="nv">SLURM_CPU_BIND</span><span class="o">=</span><span class="s2">&quot;cores&quot;</span>
+<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MASTER_PORT</span><span class="o">=</span><span class="m">29500</span>
+<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="nb">export</span><span class="w"> </span><span class="nv">MASTER_ADDR</span><span class="o">=</span><span class="k">$(</span>hostname<span class="k">)</span>
+<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OMP_NUM_THREADS</span><span class="o">=</span><span class="m">32</span>
+<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a>
+<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>module<span class="w"> </span>load<span class="w"> </span>conda
+<a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a>conda<span class="w"> </span>activate<span class="w"> </span>&lt;CONDA_ENV_PATH&gt;
+<a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a>
+<a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a><span class="c1"># Total runs = (array size) * --count</span>
+<a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a>wandb<span class="w"> </span>agent<span class="w"> </span>--count<span class="w"> </span><span class="m">1</span><span class="w"> </span>&lt;WANDB_ENTITY&gt;/&lt;WANDB_PROJECT&gt;/&lt;SWEEP_ID&gt;
+</code></pre></div>
+<p>Submit:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>sbatch<span class="w"> </span>scripts/perlmutter/sweep/launch.sweep.sl
+</code></pre></div>
+<h2 id="monitoring">Monitoring<a class="headerlink" href="#monitoring" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>sqs</code> — your job queue status</li>
+<li>W&amp;B UI — sweep dashboard under <code>&lt;WANDB_ENTITY&gt;/&lt;WANDB_PROJECT&gt;</code></li>
+<li>Logs — <code>slurm-&lt;jobid&gt;_&lt;arrayid&gt;.out</code> in the submission directory</li>
+</ul>
+<h2 id="common-pitfalls">Common pitfalls<a class="headerlink" href="#common-pitfalls" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong><code>WANDB_API_KEY</code> not set on compute nodes.</strong> Either export it in your job script or store it in <code>~/.netrc</code> so the agent picks it up.</li>
+<li><strong>Sweep config path mismatch.</strong> The <code>program:</code> line in the sweep YAML is interpreted relative to the working directory of the agent, not the sweep config file. Use a path from <code>&lt;LUMINA_REPO_PATH&gt;</code> (e.g. <code>scripts/perlmutter/sweep/launch.hgt.sh</code>).</li>
+<li><strong>Idle agents.</strong> If <code>wandb agent --count 1</code> finishes faster than expected, check that the trial actually ran (look at <code>slurm-*.out</code>). Sweep config syntax errors cause agents to exit immediately without running anything.</li>
+<li><strong>Disk locality.</strong> For large cases, stage the dataset to <code>$PSCRATCH</code> and point <code>root</code> in the perlmutter config at it; reading raw OPFData over CFS will bottleneck training.</li>
+</ul>
 
 
 

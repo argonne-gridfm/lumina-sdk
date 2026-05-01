@@ -328,10 +328,29 @@
   
   
   
+    <li class="md-tabs__item">
+      <a href="../../changelog/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Changelog
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
     
     
       <li class="md-tabs__item">
-        <a href="../../polaris.md" class="md-tabs__link">
+        <a href="../../wandb_sweep_perlmutter/" class="md-tabs__link">
           
   
   
@@ -1480,12 +1499,35 @@
   
   
   
+    <li class="md-nav__item">
+      <a href="../../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
     
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
     
       
-        
       
-        
+  
+  
+  
+  
+    
+    
       
         
       
@@ -1504,10 +1546,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
         
           
-          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
             
   
   
@@ -1525,8 +1567,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_6">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1535,62 +1577,6 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../polaris.md" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Polaris Setup
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../perlmutter.md" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Perlmutter Setup
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
             
               
                 
@@ -1678,12 +1664,13 @@
 <p>Both <code>load_model_from_training_checkpoint</code> and <code>load_model</code> cache the constructed model on <code>modeler.model</code>, so subsequent calls like <code>run_predictions</code> pick it up implicitly.</p>
 <h2 id="run-predictions">Run Predictions<a class="headerlink" href="#run-predictions" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">lumina.dataset.opf.opf_dataset</span><span class="w"> </span><span class="kn">import</span> <span class="n">OPFDataset</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">lumina.loader.opf.opf_loader</span><span class="w"> </span><span class="kn">import</span> <span class="n">DataLoader</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">dataset</span> <span class="o">=</span> <span class="n">OPFDataset</span><span class="p">(</span><span class="n">root</span><span class="o">=</span><span class="s1">&#39;./opf_data&#39;</span><span class="p">,</span> <span class="n">case_name</span><span class="o">=</span><span class="s1">&#39;pglib_opf_case14_ieee&#39;</span><span class="p">)</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="n">loader</span> <span class="o">=</span> <span class="n">DataLoader</span><span class="p">(</span><span class="n">dataset</span><span class="p">,</span> <span class="n">batch_size</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span> <span class="n">shuffle</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="n">pred_batch_pairs</span> <span class="o">=</span> <span class="n">modeler</span><span class="o">.</span><span class="n">run_predictions</span><span class="p">(</span><span class="n">loader</span><span class="p">,</span> <span class="n">max_batches</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">lumina.dataset.opf.transforms</span><span class="w"> </span><span class="kn">import</span> <span class="n">to_float32</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">lumina.loader.opf.opf_loader</span><span class="w"> </span><span class="kn">import</span> <span class="n">DataLoader</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="n">dataset</span> <span class="o">=</span> <span class="n">OPFDataset</span><span class="p">(</span><span class="n">root</span><span class="o">=</span><span class="s1">&#39;./opf_data&#39;</span><span class="p">,</span> <span class="n">case_name</span><span class="o">=</span><span class="s1">&#39;pglib_opf_case14_ieee&#39;</span><span class="p">,</span> <span class="n">transform</span><span class="o">=</span><span class="n">to_float32</span><span class="p">)</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="n">loader</span> <span class="o">=</span> <span class="n">DataLoader</span><span class="p">(</span><span class="n">dataset</span><span class="p">,</span> <span class="n">batch_size</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span> <span class="n">shuffle</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="n">pred_batch_pairs</span> <span class="o">=</span> <span class="n">modeler</span><span class="o">.</span><span class="n">run_predictions</span><span class="p">(</span><span class="n">loader</span><span class="p">,</span> <span class="n">max_batches</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
 </code></pre></div>
 <p><code>run_predictions(loader, max_batches=None, minmax_scaling=True)</code> uses the model previously loaded by <code>load_model*</code>. Set <code>minmax_scaling=False</code> to skip the per-bus voltage / per-generator power scaling applied to model outputs.</p>
 <h2 id="evaluate-constraint-violations">Evaluate Constraint Violations<a class="headerlink" href="#evaluate-constraint-violations" title="Permanent link">&para;</a></h2>

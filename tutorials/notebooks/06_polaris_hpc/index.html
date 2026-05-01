@@ -328,10 +328,29 @@
   
   
   
+    <li class="md-tabs__item">
+      <a href="../../../changelog/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Changelog
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
     
     
       <li class="md-tabs__item">
-        <a href="../../../polaris.md" class="md-tabs__link">
+        <a href="../../../wandb_sweep_perlmutter/" class="md-tabs__link">
           
   
   
@@ -1441,12 +1460,35 @@
   
   
   
+    <li class="md-nav__item">
+      <a href="../../../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
     
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
     
       
-        
       
-        
+  
+  
+  
+  
+    
+    
       
         
       
@@ -1465,10 +1507,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
         
           
-          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
             
   
   
@@ -1486,8 +1528,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_6">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1496,62 +1538,6 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../../polaris.md" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Polaris Setup
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../../perlmutter.md" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Perlmutter Setup
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
             
               
                 
@@ -2329,7 +2315,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 </style>
 <!-- End of mermaid configuration --><div class="jupyter-wrapper">
 <div class="jp-Notebook" data-jp-theme-light="true" data-jp-theme-name="JupyterLab Light">
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=752fc68c">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=56eb8d37">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2337,11 +2323,18 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 </div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
 <h1 id="multi-node-training-on-polaris-alcf">Multi-node training on Polaris (ALCF)<a class="anchor-link" href="#multi-node-training-on-polaris-alcf">¶</a></h1><p>Polaris has 4 NVIDIA A100 GPUs per node and uses PBS Pro for job scheduling. This notebook is illustrative — the cells are not executed in CI because they need an ALCF allocation. Run them on a Polaris login node.</p>
 <p>Reference: <a href="https://docs.alcf.anl.gov/polaris/">Polaris user guide</a>.</p>
+<p>!!! note "Substitute the UPPERCASE placeholders for your environment"
+The cells below contain <code>&lt;UPPERCASE&gt;</code> placeholders that you must replace before running:</p>
+<pre><code>- `&lt;CONDA_ENV_PATH&gt;` — path where you'll create / find your conda env
+- `&lt;LUMINA_REPO_PATH&gt;` — your local clone of `lumina-sdk`
+- `&lt;DATASET_ROOT&gt;` — root of your OPFData stage
+- `&lt;HPC_ACCOUNT&gt;` — your ALCF allocation
+- `&lt;WANDB_PROJECT&gt;` — your Weights &amp; Biases project name</code></pre>
 </div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=67ac2a75">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=d5d9c189">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2352,7 +2345,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 </div>
 </div>
 </div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs">
-<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=fab854e2">
+<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=e374455a">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2372,24 +2365,24 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 </div>
 <div class="highlight-ipynb hl-python"><pre><span></span><span class="o">%%</span><span class="n">bash</span>
 <span class="n">module</span> <span class="n">load</span> <span class="n">conda</span>
-<span class="n">conda</span> <span class="n">create</span> <span class="o">-</span><span class="n">p</span> <span class="o">/</span><span class="n">path</span><span class="o">/</span><span class="n">to</span><span class="o">/</span><span class="n">your</span><span class="o">/</span><span class="n">env</span> <span class="n">python</span><span class="o">=</span><span class="mf">3.11</span> <span class="o">-</span><span class="n">y</span>
-<span class="n">conda</span> <span class="n">activate</span> <span class="o">/</span><span class="n">path</span><span class="o">/</span><span class="n">to</span><span class="o">/</span><span class="n">your</span><span class="o">/</span><span class="n">env</span>
+<span class="n">conda</span> <span class="n">create</span> <span class="o">-</span><span class="n">p</span> <span class="o">&lt;</span><span class="n">CONDA_ENV_PATH</span><span class="o">&gt;</span> <span class="n">python</span><span class="o">=</span><span class="mf">3.11</span> <span class="o">-</span><span class="n">y</span>
+<span class="n">conda</span> <span class="n">activate</span> <span class="o">&lt;</span><span class="n">CONDA_ENV_PATH</span><span class="o">&gt;</span>
 
 <span class="c1"># torch + PyG matching Polaris CUDA</span>
 <span class="n">pip</span> <span class="n">install</span> <span class="n">torch</span> <span class="n">torch</span><span class="o">-</span><span class="n">geometric</span>
 
-<span class="n">cd</span> <span class="o">/</span><span class="n">path</span><span class="o">/</span><span class="n">to</span><span class="o">/</span><span class="n">your</span><span class="o">/</span><span class="n">lumina</span><span class="o">-</span><span class="n">sdk</span>
+<span class="n">cd</span> <span class="o">&lt;</span><span class="n">LUMINA_REPO_PATH</span><span class="o">&gt;</span>
 <span class="n">pip</span> <span class="n">install</span> <span class="o">-</span><span class="n">e</span> <span class="s2">".[acopf,hps]"</span>
 </pre></div>
 <div class="clipboard-copy-txt" id="cell-1">%%bash
 module load conda
-conda create -p /path/to/your/env python=3.11 -y
-conda activate /path/to/your/env
+conda create -p &lt;CONDA_ENV_PATH&gt; python=3.11 -y
+conda activate &lt;CONDA_ENV_PATH&gt;
 
 # torch + PyG matching Polaris CUDA
 pip install torch torch-geometric
 
-cd /path/to/your/lumina-sdk
+cd &lt;LUMINA_REPO_PATH&gt;
 pip install -e ".[acopf,hps]"</div>
 </div>
 </div>
@@ -2397,7 +2390,7 @@ pip install -e ".[acopf,hps]"</div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=a3de6c18">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=534d075e">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2408,7 +2401,7 @@ pip install -e ".[acopf,hps]"</div>
 </div>
 </div>
 </div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs">
-<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=d1b9a523">
+<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=844d8dc8">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2429,13 +2422,13 @@ pip install -e ".[acopf,hps]"</div>
 <div class="highlight-ipynb hl-python"><pre><span></span><span class="o">%%</span><span class="n">bash</span>
 <span class="c1"># Inside a PBS job</span>
 <span class="n">mkdir</span> <span class="o">-</span><span class="n">p</span> <span class="err">$</span><span class="n">TMPDIR</span><span class="o">/</span><span class="n">OPFData</span>
-<span class="n">cp</span> <span class="o">-</span><span class="n">r</span> <span class="o">/</span><span class="n">path</span><span class="o">/</span><span class="n">to</span><span class="o">/</span><span class="n">your</span><span class="o">/</span><span class="n">dataset</span><span class="o">/</span><span class="n">OPFData</span><span class="o">/</span><span class="n">processed</span><span class="o">/</span><span class="n">dataset_release_1</span><span class="o">/</span><span class="n">pglib_opf_case14_ieee</span> \
+<span class="n">cp</span> <span class="o">-</span><span class="n">r</span> <span class="o">&lt;</span><span class="n">DATASET_ROOT</span><span class="o">&gt;/</span><span class="n">OPFData</span><span class="o">/</span><span class="n">processed</span><span class="o">/</span><span class="n">dataset_release_1</span><span class="o">/</span><span class="n">pglib_opf_case14_ieee</span> \
       <span class="err">$</span><span class="n">TMPDIR</span><span class="o">/</span><span class="n">OPFData</span><span class="o">/</span>
 </pre></div>
 <div class="clipboard-copy-txt" id="cell-2">%%bash
 # Inside a PBS job
 mkdir -p $TMPDIR/OPFData
-cp -r /path/to/your/dataset/OPFData/processed/dataset_release_1/pglib_opf_case14_ieee \
+cp -r &lt;DATASET_ROOT&gt;/OPFData/processed/dataset_release_1/pglib_opf_case14_ieee \
       $TMPDIR/OPFData/</div>
 </div>
 </div>
@@ -2443,7 +2436,7 @@ cp -r /path/to/your/dataset/OPFData/processed/dataset_release_1/pglib_opf_case14
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=7a32b3be">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=21f7ba2b">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2454,7 +2447,7 @@ cp -r /path/to/your/dataset/OPFData/processed/dataset_release_1/pglib_opf_case14
 </div>
 </div>
 </div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs">
-<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=bc684d21">
+<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=7704d261">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2483,7 +2476,7 @@ head -40 configs/config.polaris.ddp.yaml</div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=06bcada4">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=67f8aaa8">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2494,7 +2487,7 @@ head -40 configs/config.polaris.ddp.yaml</div>
 </div>
 </div>
 </div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs">
-<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=3da1ae85">
+<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=076c106d">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2518,12 +2511,12 @@ head -40 configs/config.polaris.ddp.yaml</div>
 <span class="c1">#PBS -l walltime=02:00:00</span>
 <span class="c1">#PBS -l filesystems=home:eagle</span>
 <span class="c1">#PBS -q prod</span>
-<span class="c1">#PBS -A account_name</span>
+<span class="c1">#PBS -A &lt;HPC_ACCOUNT&gt;</span>
 <span class="c1">#PBS -N lumina</span>
 
 <span class="n">module</span> <span class="n">load</span> <span class="n">conda</span>
-<span class="n">conda</span> <span class="n">activate</span> <span class="o">/</span><span class="n">path</span><span class="o">/</span><span class="n">to</span><span class="o">/</span><span class="n">lumina</span><span class="o">-</span><span class="n">env</span>
-<span class="n">cd</span> <span class="o">/</span><span class="n">path</span><span class="o">/</span><span class="n">to</span><span class="o">/</span><span class="n">lumina</span><span class="o">-</span><span class="n">sdk</span>
+<span class="n">conda</span> <span class="n">activate</span> <span class="o">&lt;</span><span class="n">CONDA_ENV_PATH</span><span class="o">&gt;</span>
+<span class="n">cd</span> <span class="o">&lt;</span><span class="n">LUMINA_REPO_PATH</span><span class="o">&gt;</span>
 
 <span class="n">NNODES</span><span class="o">=</span><span class="err">$</span><span class="p">(</span><span class="n">cat</span> <span class="err">$</span><span class="n">PBS_NODEFILE</span> <span class="o">|</span> <span class="n">sort</span> <span class="o">|</span> <span class="n">uniq</span> <span class="o">|</span> <span class="n">wc</span> <span class="o">-</span><span class="n">l</span><span class="p">)</span>
 <span class="n">NGPUS_PER_NODE</span><span class="o">=</span><span class="mi">4</span>
@@ -2540,7 +2533,7 @@ head -40 configs/config.polaris.ddp.yaml</div>
     <span class="o">--</span><span class="n">model_type</span> <span class="n">HeteroGNN</span> \
     <span class="o">--</span><span class="n">loss_type</span> <span class="n">mse</span> \
     <span class="o">--</span><span class="n">wandb</span> \
-    <span class="o">--</span><span class="n">wandb_project</span> <span class="n">lumina</span><span class="o">-</span><span class="n">polaris</span>
+    <span class="o">--</span><span class="n">wandb_project</span> <span class="o">&lt;</span><span class="n">WANDB_PROJECT</span><span class="o">&gt;</span>
 </pre></div>
 <div class="clipboard-copy-txt" id="cell-4">%%writefile job-polaris.sh
 #!/bin/bash
@@ -2548,12 +2541,12 @@ head -40 configs/config.polaris.ddp.yaml</div>
 #PBS -l walltime=02:00:00
 #PBS -l filesystems=home:eagle
 #PBS -q prod
-#PBS -A account_name
+#PBS -A &lt;HPC_ACCOUNT&gt;
 #PBS -N lumina
 
 module load conda
-conda activate /path/to/lumina-env
-cd /path/to/lumina-sdk
+conda activate &lt;CONDA_ENV_PATH&gt;
+cd &lt;LUMINA_REPO_PATH&gt;
 
 NNODES=$(cat $PBS_NODEFILE | sort | uniq | wc -l)
 NGPUS_PER_NODE=4
@@ -2570,14 +2563,14 @@ mpiexec -n ${NTOTGPUS} -ppn ${NGPUS_PER_NODE} \
     --model_type HeteroGNN \
     --loss_type mse \
     --wandb \
-    --wandb_project lumina-polaris</div>
+    --wandb_project &lt;WANDB_PROJECT&gt;</div>
 </div>
 </div>
 </div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=a532e96e">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=c91a0ea9">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2588,7 +2581,7 @@ mpiexec -n ${NTOTGPUS} -ppn ${NGPUS_PER_NODE} \
 </div>
 </div>
 </div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs">
-<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=d8359f79">
+<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=0edc789e">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -2619,7 +2612,7 @@ qstat -u $USER</div>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=9f5f3460">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=bfbcaed9">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>

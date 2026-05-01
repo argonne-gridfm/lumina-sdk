@@ -328,10 +328,29 @@
   
   
   
+    <li class="md-tabs__item">
+      <a href="../../changelog/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Changelog
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
     
     
       <li class="md-tabs__item">
-        <a href="../../polaris.md" class="md-tabs__link">
+        <a href="../../wandb_sweep_perlmutter/" class="md-tabs__link">
           
   
   
@@ -1508,12 +1527,35 @@
   
   
   
+    <li class="md-nav__item">
+      <a href="../../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
     
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
     
       
-        
       
-        
+  
+  
+  
+  
+    
+    
       
         
       
@@ -1532,10 +1574,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
         
           
-          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
             
   
   
@@ -1553,8 +1595,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_6">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1563,62 +1605,6 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../polaris.md" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Polaris Setup
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../perlmutter.md" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Perlmutter Setup
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
             
               
                 
@@ -1706,7 +1692,7 @@
 <li><strong>generator.y</strong>: Generator targets (active power, reactive power)</li>
 </ul>
 <h2 id="2-configure-training">2. Configure Training<a class="headerlink" href="#2-configure-training" title="Permanent link">&para;</a></h2>
-<p>Create or modify a YAML config file. The default <code>configs/config.yaml</code> works for small cases:</p>
+<p>The shipped <code>configs/config.yaml</code> is sized for HPC runs (e.g. <code>global_batch_size: 8192</code>, <code>max_epochs: 10</code>, <code>batch_size: 16</code>). For a small first-time run on a workstation you'll typically want a lighter override. Save the snippet below as <code>configs/config.case14.yaml</code> and pass it via <code>--config</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">root</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;./opf_data/&quot;</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nt">checkpoint_dir</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;./checkpoints/&quot;</span>
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
@@ -1724,6 +1710,10 @@
 <a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="w">  </span><span class="nt">batch_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">32</span>
 <a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="w">  </span><span class="nt">num_workers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
 </code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">These are tutorial-friendly values, not the shipped defaults</p>
+<p>See <code>configs/config.yaml</code> for the canonical values used for full-scale runs.</p>
+</div>
 <h2 id="3-launch-training">3. Launch Training<a class="headerlink" href="#3-launch-training" title="Permanent link">&para;</a></h2>
 <h3 id="single-process-smoke-test">Single process (smoke test)<a class="headerlink" href="#single-process-smoke-test" title="Permanent link">&para;</a></h3>
 <p>For a one-GPU sanity check on a non-HPC machine, use the minimal single-process script:</p>
@@ -1814,7 +1804,7 @@
 </tr>
 </tbody>
 </table>
-<p>Set the backend in the model config:</p>
+<p>Set the backend in the model config. The snippet below is a lightweight override suitable for case14 — the shipped <code>configs/model/heterognn.yaml</code> defaults to a much larger model (<code>hidden_channels: 2048</code>, <code>num_layers: 8</code>, <code>backend: "gat"</code>) for production runs:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nt">models</span><span class="p">:</span>
 <a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">HeteroGNN</span><span class="p">:</span>
 <a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">    </span><span class="nt">hidden_channels</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">64</span>
