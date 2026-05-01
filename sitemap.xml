@@ -13,6 +13,10 @@
          <lastmod>2026-05-01</lastmod>
     </url>
     <url>
+         <loc>https://argonne-gridfm.github.io/lumina-sdk/opfdata_schema/</loc>
+         <lastmod>2026-05-01</lastmod>
+    </url>
+    <url>
          <loc>https://argonne-gridfm.github.io/lumina-sdk/wandb_sweep_perlmutter/</loc>
          <lastmod>2026-05-01</lastmod>
     </url>
