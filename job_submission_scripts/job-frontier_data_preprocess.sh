@@ -36,9 +36,9 @@ ml craype-accel-amd-gfx90a
 ml PrgEnv-gnu
 ml miniforge3/23.11.0-0
 module unload darshan-runtime || true
-export LD_LIBRARY_PATH=${CRAY_LD_LIBRARY_PATH}:${LD_LIBRARY_PATH}
+export LD_LIBRARY_PATH=${CRAY_LD_LIBRARY_PATH:-}:${LD_LIBRARY_PATH:-}
 
-source activate /lustre/orion/eng164/proj-shared/lumina-core/lumina-frontier-rocm711-install/.venv/
+export PATH="/lustre/orion/eng164/proj-shared/lumina-core/lumina-frontier-rocm711-install/.venv/bin:${PATH}"
 
 cd /lustre/orion/eng164/proj-shared/lumina-core
 
@@ -48,9 +48,9 @@ echo "Started: $(date '+%Y-%m-%d %H:%M:%S')"
 echo "Nodes: ${SLURM_JOB_NUM_NODES}, Tasks: ${SLURM_NTASKS}"
 
 # --- preprocessing: download + process all (case, group) pairs ---
-srun --ntasks=${SLURM_NTASKS} \
-     --ntasks-per-node=${SLURM_NTASKS_PER_NODE} \
-     --cpus-per-task=${SLURM_CPUS_PER_TASK} \
+srun --ntasks=${SLURM_NTASKS:-40} \
+     --ntasks-per-node=${SLURM_NTASKS_PER_NODE:-8} \
+     --cpus-per-task=${SLURM_CPUS_PER_TASK:-7} \
      python scripts/data_process_frontier.py
 
 echo "Preprocessing done: $(date '+%Y-%m-%d %H:%M:%S')"

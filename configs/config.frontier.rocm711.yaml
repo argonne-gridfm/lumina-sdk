@@ -37,6 +37,9 @@ lagrangian:
   multiplier_min_improve: 0.0
   normalize_constraints: true
   verbose: false
+data:
+  backend: sharded
+
 train_split: 0.8
 val_split: 0.1
 loader:

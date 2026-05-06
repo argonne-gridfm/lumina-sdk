@@ -155,7 +155,9 @@ class BaseOPFTrainer:
         self.local_rank = local_rank
         self.global_rank = global_rank
         self.world_size = world_size
-        self.device = torch.device(f"cuda:{local_rank}")
+        # ROCR_VISIBLE_DEVICES is set per-rank by the launch wrapper so each
+        # process sees exactly one GPU; HIP device index is always 0.
+        self.device = torch.device("cuda:0")
         self.wandb_run_name = wandb_run_name
         self.wandb_group_name = wandb_group_name
         self.wandb_requested = wandb_requested
@@ -778,7 +780,7 @@ class BaseOPFTrainer:
             else:
                 self.model_summary = None
 
-        model = DDP(model, device_ids=[self.local_rank], find_unused_parameters=True)
+        model = DDP(model, device_ids=[0], find_unused_parameters=True)
         return model
 
     def _get_homo_sample(self, sample_data):

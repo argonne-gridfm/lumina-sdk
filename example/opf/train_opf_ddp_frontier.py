@@ -184,7 +184,9 @@ def init_ddp():
     )
 
     if torch.cuda.is_available():
-        torch.cuda.set_device(local_rank)
+        # ROCR_VISIBLE_DEVICES is set by the per-rank launcher to SLURM_LOCALID,
+        # so each process sees exactly one GPU at HIP index 0.
+        torch.cuda.set_device(0)
 
     return local_rank, global_rank, world_size
 
