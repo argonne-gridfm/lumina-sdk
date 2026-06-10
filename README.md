@@ -5,7 +5,7 @@
 [![PyTorch](https://img.shields.io/badge/PyTorch-%E2%89%A52.9-EE4C2C.svg?logo=pytorch&logoColor=white)](https://pytorch.org/)
 [![PyG](https://img.shields.io/badge/PyG-%E2%89%A52.7-3C2179.svg)](https://pytorch-geometric.readthedocs.io/)
 [![Docs](https://img.shields.io/badge/docs-mkdocs--material-526CFE.svg?logo=materialformkdocs&logoColor=white)](https://argonne-gridfm.github.io/lumina-sdk/)
-[![License](https://img.shields.io/badge/license-Argonne-lightgrey.svg)](#license)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 `lumina-sdk` is a PyTorch / PyTorch Geometric framework for training graph neural networks on power grid problems, including AC Optimal Power Flow (ACOPF) and related power-grid optimization tasks.
 
@@ -70,4 +70,6 @@ If the raw archive is missing, the dataset downloads it from Google Cloud Storag
 
 ## License
 
-Copyright © 2026, Argonne National Laboratory, LUMINA Team. All rights reserved.
+Copyright © 2026 UChicago Argonne, LLC.
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE) for details.
