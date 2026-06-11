@@ -128,6 +128,55 @@ srun --ntasks-per-node 4 --gpus-per-task 1 \ # optional to specify -N if using a
 - **Sharded datasets**: For large cases, pre-build shards with `scripts/opf_build_shards.py`
 - **W&B logging**: Only rank 0 logs to W&B; use `--wandb` flag
 
+## Device Visibility Notes
+
+- **Perlmutter / Polaris**: each rank typically sees all node GPUs, so the trainer uses `LOCAL_RANK` to select the local device.
+- **Frontier**: when using `job_submission_scripts/launch_rank_frontier.sh`, each rank gets one visible GPU via `ROCR_VISIBLE_DEVICES=$SLURM_LOCALID`, so the selected device index is `0` inside that process.
+
+## Frontier (OLCF)
+
+Frontier helper scripts are provided as templates under `job_submission_scripts/`.
+
+1. Create or activate a ROCm 7.1.1 environment:
+
+```bash
+bash install/frontier/setup_env_frontier_rocm711.sh
+```
+
+2. (Optional) preprocess heterogeneous OPF data:
+
+```bash
+sbatch job_submission_scripts/job-frontier_data_preprocess.sh
+```
+
+3. Launch multi-node DDP training:
+
+```bash
+sbatch job_submission_scripts/job-frontier_16n_rocm711.sh
+```
+
+Set `FRONTIER_VENV_BIN` (and path overrides below) to match your allocation and filesystem layout before submission.
+
+## Frontier Path Overrides
+
+Use placeholders and override site-specific paths at runtime instead of committing cluster-specific absolute paths:
+
+```bash
+python example/opf/train_opf_ddp_frontier.py \
+  --config configs/config.frontier.rocm711.yaml \
+  --root <DATA_ROOT> \
+  --logging_dir <LOG_DIR> \
+  --checkpoint_dir <CKPT_DIR>
+```
+
+You can also use env vars:
+
+```bash
+export LUMINA_ROOT=<DATA_ROOT>
+export LUMINA_LOGGING_DIR=<LOG_DIR>
+export LUMINA_CHECKPOINT_DIR=<CKPT_DIR>
+```
+
 ## Existing HPC Documentation
 
 Additional system-specific docs:
