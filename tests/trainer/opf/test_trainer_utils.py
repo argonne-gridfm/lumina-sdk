@@ -10,6 +10,7 @@ from lumina.trainer.opf.utils import (
     parse_case_name,
     parse_cases_arg,
     resolve_hetero_model_type,
+    select_cuda_device_index,
 )
 
 
@@ -109,6 +110,29 @@ def test_resolve_hetero_model_type_unknown_raises():
 def test_resolve_hetero_model_type_unknown_class_path_raises():
     with pytest.raises(ValueError, match='Unsupported hetero model class path'):
         resolve_hetero_model_type(model_class_path='pkg.mod.MysteryModel')
+
+
+# -- select_cuda_device_index ---------------------------------------------------
+
+def test_select_cuda_device_index_single_visible_device_uses_zero():
+    assert select_cuda_device_index(local_rank=3, visible_device_count=1) == 0
+
+
+def test_select_cuda_device_index_multi_visible_uses_local_rank():
+    assert select_cuda_device_index(local_rank=2, visible_device_count=4) == 2
+
+
+def test_select_cuda_device_index_negative_rank_clamps_to_zero():
+    assert select_cuda_device_index(local_rank=-1, visible_device_count=4) == 0
+
+
+def test_select_cuda_device_index_invalid_rank_defaults_zero():
+    assert select_cuda_device_index(local_rank="bad", visible_device_count=4) == 0
+
+
+def test_select_cuda_device_index_out_of_range_raises():
+    with pytest.raises(ValueError, match="LOCAL_RANK=4 exceeds visible CUDA device count"):
+        select_cuda_device_index(local_rank=4, visible_device_count=4)
 
 
 # -- apply_nested ---------------------------------------------------------------

@@ -5,7 +5,7 @@ checkpoint_dir: "./ddp-checkpoints"
 optimizer:
   Adam:
     lr: 1.0e-04
-    betas: 
+    betas:
       - 0.9
       - 0.999
     eps: 1.0e-08
@@ -23,16 +23,16 @@ data:
 train_split: 0.8
 val_split: 0.1
 loader:
-  batch_size: 32
+  batch_size: 4
   shuffle: true
   num_workers: 0
 training:
-  max_epochs: 10
-  patience: 10
+  max_epochs: 1
+  patience: 1
   gradient_clip_val: 1.0
   gradient_clip_algorithm: "norm"
   accumulate_grad_batches: 1
-  log_every_n_steps: 50
+  log_every_n_steps: 10
   val_check_interval: 1
 checkpointing:
   monitor: "val_loss"

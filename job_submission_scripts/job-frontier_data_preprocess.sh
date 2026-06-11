@@ -19,6 +19,10 @@
 
 set -euo pipefail
 
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(cd -- "${SCRIPT_DIR}/.." && pwd)
+FRONTIER_VENV_BIN=${FRONTIER_VENV_BIN:-${REPO_ROOT}/lumina-frontier-rocm711-install/.venv/bin}
+
 # --- proxy (required on Frontier login/compute for outbound HTTPS) ---
 export all_proxy=socks://proxy.ccs.ornl.gov:3128/
 export ftp_proxy=ftp://proxy.ccs.ornl.gov:3128/
@@ -38,9 +42,9 @@ ml miniforge3/23.11.0-0
 module unload darshan-runtime || true
 export LD_LIBRARY_PATH=${CRAY_LD_LIBRARY_PATH:-}:${LD_LIBRARY_PATH:-}
 
-export PATH="/lustre/orion/eng164/proj-shared/lumina-core/lumina-frontier-rocm711-install/.venv/bin:${PATH}"
+export PATH="${FRONTIER_VENV_BIN}:${PATH}"
 
-cd /lustre/orion/eng164/proj-shared/lumina-core
+cd "${REPO_ROOT}"
 
 echo "Python: $(which python3)"
 echo "Job ID: ${SLURM_JOB_ID}"
@@ -55,7 +59,7 @@ srun --ntasks=${SLURM_NTASKS:-40} \
 
 echo "Preprocessing done: $(date '+%Y-%m-%d %H:%M:%S')"
 
-ROOT=/lustre/orion/eng164/proj-shared/lumina-core/
+ROOT="${REPO_ROOT}/"
 
 # --- clean up shared temp directory now that all tasks are finished ---
 TMP_DIR="${ROOT}OPFData/raw/dataset_release_1/gridopt-dataset-tmp"

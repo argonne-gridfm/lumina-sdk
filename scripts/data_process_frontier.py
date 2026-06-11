@@ -19,8 +19,29 @@ run outside SLURM.
 """
 
 import os
+from pathlib import Path
 
 from lumina.dataset.opf.opf_dataset import OPFDataset
+
+
+def _parse_int_list(raw, default):
+    if raw is None or str(raw).strip() == "":
+        return list(default)
+    values = []
+    for token in str(raw).replace(",", " ").split():
+        values.append(int(token))
+    return values
+
+
+def _parse_str_list(raw, default):
+    if raw is None or str(raw).strip() == "":
+        return list(default)
+    values = []
+    for token in str(raw).replace(",", " ").split():
+        token = token.strip()
+        if token:
+            values.append(token)
+    return values
 
 
 def get_rank_size():
@@ -39,12 +60,19 @@ def get_rank_size():
 
 
 if __name__ == "__main__":
-    ROOT = "/lustre/orion/eng164/proj-shared/lumina-core/"
+    repo_root = Path(__file__).resolve().parents[1]
+    root = os.environ.get("LUMINA_PREPROCESS_ROOT", str(repo_root))
+    default_groups = list(range(20))
+    group_ids = _parse_int_list(os.environ.get("LUMINA_PREPROCESS_GROUP_IDS"), default_groups)
+    default_cases = [
+        "pglib_opf_case500_goc",
+        "pglib_opf_case2000_goc",
+    ]
+    case_names = _parse_str_list(os.environ.get("LUMINA_PREPROCESS_CASES"), default_cases)
 
-    group_ids = list(range(20))  # groups 0-19, 15 000 samples each
     case_mapping = {
-        "pglib_opf_case500_goc": group_ids,
-        "pglib_opf_case2000_goc": group_ids,
+        case_name: group_ids
+        for case_name in case_names
     }
 
     tasks = [
@@ -56,12 +84,13 @@ if __name__ == "__main__":
     rank, size = get_rank_size()
     my_tasks = tasks[rank::size]
 
+    print(f"[rank {rank}/{size}] root={root}")
     print(f"[rank {rank}/{size}] assigned {len(my_tasks)} task(s): {my_tasks}")
 
     for case_name, group_id in my_tasks:
         print(f"[rank {rank}] processing {case_name}, group_id={group_id} ...")
         OPFDataset(
-            root=ROOT,
+            root=root,
             case_name=case_name,
             group_id=group_id,
             topological_perturbations=False,

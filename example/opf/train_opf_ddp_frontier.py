@@ -15,7 +15,12 @@ except ImportError:
     WANDB_AVAILABLE = False
 
 from lumina.trainer.opf.trainer import MultiCaseOPFTrainer, OPFTrainer
-from lumina.trainer.opf.utils import apply_nested, parse_case_name, parse_cases_arg
+from lumina.trainer.opf.utils import (
+    apply_nested,
+    init_distributed_runtime,
+    parse_case_name,
+    parse_cases_arg,
+)
 from lumina.utils.model import set_seed as _set_seed
 
 
@@ -122,10 +127,26 @@ def build_parser():
             "mae",
             "mape",
             "smooth_l1",
-            "augmented_lagrangian",
-            "violated_lagrangian",
         ],
         help="Loss function type (default: mse)",
+    )
+    parser.add_argument(
+        "--root",
+        type=str,
+        default=None,
+        help="Dataset root directory override (default: config value or LUMINA_ROOT)",
+    )
+    parser.add_argument(
+        "--logging_dir",
+        type=str,
+        default=None,
+        help="Logging directory override (default: config value or LUMINA_LOGGING_DIR)",
+    )
+    parser.add_argument(
+        "--checkpoint_dir",
+        type=str,
+        default=None,
+        help="Checkpoint directory override (default: config value or LUMINA_CHECKPOINT_DIR)",
     )
     parser.add_argument(
         "--minmax_scaling",
@@ -171,24 +192,30 @@ def init_ddp():
     global_rank = int(os.environ.get("RANK", os.environ.get("SLURM_PROCID", 0)))
     world_size = int(os.environ.get("WORLD_SIZE", os.environ.get("SLURM_NTASKS", 1)))
 
-    # Ensure env vars are visible to torch.distributed init_method='env://'
-    os.environ.setdefault("RANK", str(global_rank))
-    os.environ.setdefault("LOCAL_RANK", str(local_rank))
-    os.environ.setdefault("WORLD_SIZE", str(world_size))
-
-    dist.init_process_group(
-        backend="nccl",
-        init_method="env://",
+    local_rank, global_rank, world_size, _ = init_distributed_runtime(
+        local_rank=local_rank,
+        global_rank=global_rank,
         world_size=world_size,
-        rank=global_rank,
+        backend="nccl",
     )
 
-    if torch.cuda.is_available():
-        # ROCR_VISIBLE_DEVICES is set by the per-rank launcher to SLURM_LOCALID,
-        # so each process sees exactly one GPU at HIP index 0.
-        torch.cuda.set_device(0)
-
     return local_rank, global_rank, world_size
+
+
+def apply_path_overrides(args, config, global_rank):
+    path_overrides = (
+        ("root", args.root, os.environ.get("LUMINA_ROOT")),
+        ("logging_dir", args.logging_dir, os.environ.get("LUMINA_LOGGING_DIR")),
+        ("checkpoint_dir", args.checkpoint_dir, os.environ.get("LUMINA_CHECKPOINT_DIR")),
+    )
+    for key, cli_value, env_value in path_overrides:
+        override = cli_value if cli_value else env_value
+        if not override:
+            continue
+        config[key] = os.path.abspath(os.path.expanduser(str(override)))
+        if global_rank == 0:
+            source = "CLI" if cli_value else "ENV"
+            print(f"Overriding config.{key} from {source}: {config[key]}")
 
 
 def set_all_seeds(seed):
@@ -358,6 +385,7 @@ def main():
         hetero_model_config=args.hetero_model_config,
         homo_model_config=args.homo_model_config,
     )
+    apply_path_overrides(args, config, global_rank)
 
     sweep_overrides = init_wandb(args, config, global_rank)
 

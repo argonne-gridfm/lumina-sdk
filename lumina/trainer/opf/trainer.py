@@ -48,6 +48,7 @@ from lumina.trainer.opf.utils import (
     HETERO_MODEL_TYPES,
     build_hetero_model_spec,
     initialize_model,
+    select_cuda_device_index,
 )
 from lumina.utils.graph_utils import HomoOPFDataset, convert_opf_to_homo
 from lumina.utils.throughput import ThroughputTracker
@@ -155,9 +156,14 @@ class BaseOPFTrainer:
         self.local_rank = local_rank
         self.global_rank = global_rank
         self.world_size = world_size
-        # ROCR_VISIBLE_DEVICES is set per-rank by the launch wrapper so each
-        # process sees exactly one GPU; HIP device index is always 0.
-        self.device = torch.device("cuda:0")
+        if torch.cuda.is_available():
+            visible_devices = torch.cuda.device_count()
+            self.device_index = select_cuda_device_index(local_rank, visible_devices)
+            self.device = torch.device(f"cuda:{self.device_index}")
+            torch.cuda.set_device(self.device_index)
+        else:
+            self.device_index = 0
+            self.device = torch.device("cpu")
         self.wandb_run_name = wandb_run_name
         self.wandb_group_name = wandb_group_name
         self.wandb_requested = wandb_requested
@@ -780,7 +786,12 @@ class BaseOPFTrainer:
             else:
                 self.model_summary = None
 
-        model = DDP(model, device_ids=[0], find_unused_parameters=True)
+        ddp_kwargs = {
+            "find_unused_parameters": True,
+        }
+        if self.device.type == "cuda":
+            ddp_kwargs["device_ids"] = [self.device_index]
+        model = DDP(model, **ddp_kwargs)
         return model
 
     def _get_homo_sample(self, sample_data):

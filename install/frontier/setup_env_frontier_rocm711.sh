@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# setup_env_frontier_rocm711.sh - Frontier environment setup for lumina-core with ROCm 7.1.1
+# setup_env_frontier_rocm711.sh - Frontier environment setup for lumina-sdk with ROCm 7.1.1
 set -euo pipefail
 
 hr() { printf '%*s\n' "${COLUMNS:-80}" '' | tr ' ' '='; }
 banner() { hr; echo ">>> $1"; hr; }
 subbanner() { echo "-- $1"; }
 
-banner "Starting lumina-core environment setup ($(date))"
+banner "Starting lumina-sdk environment setup ($(date))"
 
 # Module init (Frontier uses Lmod; keep graceful fallbacks)
 if ! command -v module >/dev/null 2>&1; then
@@ -120,11 +120,11 @@ PYG_ROCM_URL="https://data.pyg.org/whl/torch-${TORCH_VERSION}+rocm${EXPECTED_ROC
 subbanner "Install torch-geometric from ${PYG_ROCM_URL}"
 pip_retry torch-geometric -f "${PYG_ROCM_URL}"
 
-banner "Install core lumina-core Python packages"
+banner "Install core lumina-sdk Python packages"
 pip_retry numpy pandas scipy networkx joblib pyyaml
 pip_retry pandapower wandb optuna lightning
 
-banner "Install lumina-core (editable, no extra deps)"
+banner "Install lumina-sdk (editable, no extra deps)"
 pip_retry -e "${REPO_ROOT}" --no-deps
 
 banner "Done"
