@@ -16,7 +16,12 @@ except ImportError:
     WANDB_AVAILABLE = False
 
 from lumina.trainer.opf.trainer import MultiCaseOPFTrainer, OPFTrainer
-from lumina.trainer.opf.utils import apply_nested, parse_case_name, parse_cases_arg
+from lumina.trainer.opf.utils import (
+    apply_nested,
+    init_distributed_runtime,
+    parse_case_name,
+    parse_cases_arg,
+)
 from lumina.utils.model import set_seed as _set_seed
 
 
@@ -165,25 +170,19 @@ def build_parser():
 def init_ddp():
     world_size = MPI.COMM_WORLD.Get_size()
     global_rank = MPI.COMM_WORLD.Get_rank()
-    local_rank_vars = ["MPI_LOCALRANKID", "SLURM_LOCALID"] # Local rank environment variables for Polaris and Perlmutter
+    local_rank = 0
+    local_rank_vars = ["MPI_LOCALRANKID", "SLURM_LOCALID", "LOCAL_RANK"] # Local rank environment variables for Polaris and Perlmutter
     for var in local_rank_vars:
         if var in os.environ:
             local_rank = int(os.environ[var])
-            os.environ["LOCAL_RANK"] = str(local_rank)
             break
 
-    os.environ["RANK"] = str(global_rank)
-    os.environ["WORLD_SIZE"] = str(world_size)
-
-    dist.init_process_group(
-        backend="nccl",
-        init_method="env://",
+    local_rank, global_rank, world_size, _ = init_distributed_runtime(
+        local_rank=local_rank,
+        global_rank=global_rank,
         world_size=world_size,
-        rank=global_rank,
+        backend="nccl",
     )
-
-    if torch.cuda.is_available():
-        torch.cuda.set_device(local_rank)
 
     return local_rank, global_rank, world_size
 

@@ -40,7 +40,6 @@ export TORCH_MULTIPROCESSING_SHARING_STRATEGY=file_descriptor
 # NCCL / RCCL — match the working HydraGNN OPF configuration (no AWS OFI plugin)
 export NCCL_DEBUG=WARN
 export NCCL_P2P_DISABLE=1
-export NCCL_P2P_LEVEL=NVL
 export NCCL_PROTO=Simple
 export NCCL_IB_DISABLE=1
 export NCCL_SOCKET_IFNAME=hsn0
