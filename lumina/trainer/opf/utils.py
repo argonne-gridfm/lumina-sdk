@@ -1,4 +1,5 @@
 import json
+import os
 
 import torch
 import torch.distributed as dist
@@ -12,6 +13,85 @@ def _is_main_process() -> bool:
     are usable from a plain Python script, not only from inside ``torchrun`` /
     ``mpirun``."""
     return not (dist.is_available() and dist.is_initialized()) or dist.get_rank() == 0
+
+
+def select_cuda_device_index(local_rank, visible_device_count):
+    """Resolve per-process CUDA/HIP device index from rank and visibility.
+
+    This supports two common launch modes:
+    - Full-node visibility (e.g. Perlmutter/Polaris): each process sees all
+      GPUs, so ``local_rank`` selects the GPU.
+    - Single-device visibility (e.g. Frontier with ROCR_VISIBLE_DEVICES set
+      per rank): each process sees exactly one device at index 0.
+
+    Args:
+        local_rank (int): Node-local process rank.
+        visible_device_count (int): Number of visible CUDA/HIP devices.
+
+    Returns:
+        int: Device index in the process-visible device list.
+
+    Raises:
+        ValueError: If ``local_rank`` is outside the visible-device range when
+            more than one device is visible.
+    """
+    try:
+        local_rank = int(local_rank)
+    except (TypeError, ValueError):
+        local_rank = 0
+
+    try:
+        visible_device_count = int(visible_device_count)
+    except (TypeError, ValueError):
+        visible_device_count = 0
+
+    if visible_device_count <= 1:
+        return 0
+
+    if local_rank < 0:
+        return 0
+
+    if local_rank >= visible_device_count:
+        raise ValueError(
+            f"LOCAL_RANK={local_rank} exceeds visible CUDA device count "
+            f"({visible_device_count})."
+        )
+
+    return local_rank
+
+
+def init_distributed_runtime(local_rank, global_rank, world_size, backend="nccl"):
+    """Initialize torch.distributed runtime and bind local CUDA/HIP device.
+
+    Keeps backend-specific rank discovery outside this helper, so launchers can
+    derive ranks from MPI, SLURM, or torchrun and then call one shared
+    initialization path.
+
+    Returns:
+        tuple: (local_rank, global_rank, world_size, device_index)
+    """
+    local_rank = int(local_rank)
+    global_rank = int(global_rank)
+    world_size = int(world_size)
+
+    os.environ.setdefault("RANK", str(global_rank))
+    os.environ.setdefault("LOCAL_RANK", str(local_rank))
+    os.environ.setdefault("WORLD_SIZE", str(world_size))
+
+    dist.init_process_group(
+        backend=backend,
+        init_method="env://",
+        world_size=world_size,
+        rank=global_rank,
+    )
+
+    device_index = None
+    if torch.cuda.is_available():
+        visible_devices = torch.cuda.device_count()
+        device_index = select_cuda_device_index(local_rank, visible_devices)
+        torch.cuda.set_device(device_index)
+
+    return local_rank, global_rank, world_size, device_index
 
 HETERO_MODEL_TYPES = {"HeteroGNN", "RGAT", "HEAT", "HGT"}
 HETERO_MODEL_CLASSES = {

@@ -6,8 +6,7 @@ import torch
 import torch.distributed as dist
 import yaml
 
-from mpi4py import MPI
-
+# Optional W&B logging
 try:
     import wandb
     WANDB_AVAILABLE = True
@@ -132,6 +131,24 @@ def build_parser():
         help="Loss function type (default: mse)",
     )
     parser.add_argument(
+        "--root",
+        type=str,
+        default=None,
+        help="Dataset root directory override (default: config value or LUMINA_ROOT)",
+    )
+    parser.add_argument(
+        "--logging_dir",
+        type=str,
+        default=None,
+        help="Logging directory override (default: config value or LUMINA_LOGGING_DIR)",
+    )
+    parser.add_argument(
+        "--checkpoint_dir",
+        type=str,
+        default=None,
+        help="Checkpoint directory override (default: config value or LUMINA_CHECKPOINT_DIR)",
+    )
+    parser.add_argument(
         "--minmax_scaling",
         dest="minmax_scaling",
         action="store_true",
@@ -168,14 +185,12 @@ def build_parser():
 
 
 def init_ddp():
-    world_size = MPI.COMM_WORLD.Get_size()
-    global_rank = MPI.COMM_WORLD.Get_rank()
-    local_rank = 0
-    local_rank_vars = ["MPI_LOCALRANKID", "SLURM_LOCALID", "LOCAL_RANK"] # Local rank environment variables for Polaris and Perlmutter
-    for var in local_rank_vars:
-        if var in os.environ:
-            local_rank = int(os.environ[var])
-            break
+    # Derive rank/world-size from standard env vars (set by srun or torchrun).
+    # Fall back to SLURM_* vars when launching directly via srun without a
+    # torchrun wrapper.
+    local_rank = int(os.environ.get("LOCAL_RANK", os.environ.get("SLURM_LOCALID", 0)))
+    global_rank = int(os.environ.get("RANK", os.environ.get("SLURM_PROCID", 0)))
+    world_size = int(os.environ.get("WORLD_SIZE", os.environ.get("SLURM_NTASKS", 1)))
 
     local_rank, global_rank, world_size, _ = init_distributed_runtime(
         local_rank=local_rank,
@@ -185,6 +200,22 @@ def init_ddp():
     )
 
     return local_rank, global_rank, world_size
+
+
+def apply_path_overrides(args, config, global_rank):
+    path_overrides = (
+        ("root", args.root, os.environ.get("LUMINA_ROOT")),
+        ("logging_dir", args.logging_dir, os.environ.get("LUMINA_LOGGING_DIR")),
+        ("checkpoint_dir", args.checkpoint_dir, os.environ.get("LUMINA_CHECKPOINT_DIR")),
+    )
+    for key, cli_value, env_value in path_overrides:
+        override = cli_value if cli_value else env_value
+        if not override:
+            continue
+        config[key] = os.path.abspath(os.path.expanduser(str(override)))
+        if global_rank == 0:
+            source = "CLI" if cli_value else "ENV"
+            print(f"Overriding config.{key} from {source}: {config[key]}")
 
 
 def set_all_seeds(seed):
@@ -354,6 +385,7 @@ def main():
         hetero_model_config=args.hetero_model_config,
         homo_model_config=args.homo_model_config,
     )
+    apply_path_overrides(args, config, global_rank)
 
     sweep_overrides = init_wandb(args, config, global_rank)
 
