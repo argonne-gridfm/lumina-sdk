@@ -913,6 +913,39 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#device-visibility-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Device Visibility Notes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#frontier-olcf" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Frontier (OLCF)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#frontier-path-overrides" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Frontier Path Overrides
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#existing-hpc-documentation" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1756,6 +1789,42 @@
 <li><strong>Sharded datasets</strong>: For large cases, pre-build shards with <code>scripts/opf_build_shards.py</code></li>
 <li><strong>W&amp;B logging</strong>: Only rank 0 logs to W&B; use <code>--wandb</code> flag</li>
 </ul>
+<h2 id="device-visibility-notes">Device Visibility Notes<a class="headerlink" href="#device-visibility-notes" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Perlmutter / Polaris</strong>: each rank typically sees all node GPUs, so the trainer uses <code>LOCAL_RANK</code> to select the local device.</li>
+<li><strong>Frontier</strong>: when using <code>job_submission_scripts/launch_rank_frontier.sh</code>, each rank gets one visible GPU via <code>ROCR_VISIBLE_DEVICES=$SLURM_LOCALID</code>, so the selected device index is <code>0</code> inside that process.</li>
+</ul>
+<h2 id="frontier-olcf">Frontier (OLCF)<a class="headerlink" href="#frontier-olcf" title="Permanent link">&para;</a></h2>
+<p>Frontier helper scripts are provided as templates under <code>job_submission_scripts/</code>.</p>
+<ol>
+<li>Create or activate a ROCm 7.1.1 environment:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>bash<span class="w"> </span>install/frontier/setup_env_frontier_rocm711.sh
+</code></pre></div>
+<ol>
+<li>(Optional) preprocess heterogeneous OPF data:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>sbatch<span class="w"> </span>job_submission_scripts/job-frontier_data_preprocess.sh
+</code></pre></div>
+<ol>
+<li>Launch multi-node DDP training:</li>
+</ol>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>sbatch<span class="w"> </span>job_submission_scripts/job-frontier_16n_rocm711.sh
+</code></pre></div>
+<p>Set <code>FRONTIER_VENV_BIN</code> (and path overrides below) to match your allocation and filesystem layout before submission.</p>
+<h2 id="frontier-path-overrides">Frontier Path Overrides<a class="headerlink" href="#frontier-path-overrides" title="Permanent link">&para;</a></h2>
+<p>Use placeholders and override site-specific paths at runtime instead of committing cluster-specific absolute paths:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>python<span class="w"> </span>example/opf/train_opf_ddp_frontier.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span>--config<span class="w"> </span>configs/config.frontier.rocm711.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span>--root<span class="w"> </span>&lt;DATA_ROOT&gt;<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span>--logging_dir<span class="w"> </span>&lt;LOG_DIR&gt;<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span>--checkpoint_dir<span class="w"> </span>&lt;CKPT_DIR&gt;
+</code></pre></div>
+<p>You can also use env vars:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">LUMINA_ROOT</span><span class="o">=</span>&lt;DATA_ROOT&gt;
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">LUMINA_LOGGING_DIR</span><span class="o">=</span>&lt;LOG_DIR&gt;
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">LUMINA_CHECKPOINT_DIR</span><span class="o">=</span>&lt;CKPT_DIR&gt;
+</code></pre></div>
 <h2 id="existing-hpc-documentation">Existing HPC Documentation<a class="headerlink" href="#existing-hpc-documentation" title="Permanent link">&para;</a></h2>
 <p>Additional system-specific docs:</p>
 <ul>

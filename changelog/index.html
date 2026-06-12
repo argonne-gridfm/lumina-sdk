@@ -1507,6 +1507,45 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#unreleased" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [Unreleased]
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[Unreleased]">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#v010rc1-2026-04-30" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1519,7 +1558,7 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#added" class="md-nav__link">
+  <a href="#added_1" class="md-nav__link">
     <span class="md-ellipsis">
       
         Added
@@ -1565,9 +1604,20 @@
 <h1 id="changelog">Changelog<a class="headerlink" href="#changelog" title="Permanent link">&para;</a></h1>
 <p>All notable releases of <code>lumina-sdk</code> are documented here.</p>
 <p>The format follows <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>, and the project adheres to <a href="https://peps.python.org/pep-0440/">PEP 440</a>.</p>
+<h2 id="unreleased">[Unreleased]<a class="headerlink" href="#unreleased" title="Permanent link">&para;</a></h2>
+<h3 id="added">Added<a class="headerlink" href="#added" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Added smoke tests for Frontier preprocessing helpers in <code>scripts/data_process_frontier.py</code> (list parsing and SLURM rank/size env resolution).</li>
+</ul>
+<h3 id="changed">Changed<a class="headerlink" href="#changed" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Improved cross-platform DDP GPU binding so Perlmutter/Polaris use <code>LOCAL_RANK</code> when all GPUs are visible, while Frontier remains compatible with per-rank <code>ROCR_VISIBLE_DEVICES</code> launch wrappers.</li>
+<li>Frontier training now supports runtime path overrides via CLI flags (<code>--root</code>, <code>--logging_dir</code>, <code>--checkpoint_dir</code>) or env vars (<code>LUMINA_ROOT</code>, <code>LUMINA_LOGGING_DIR</code>, <code>LUMINA_CHECKPOINT_DIR</code>), removing site-specific hardcoded paths from shipped configs.</li>
+<li>Removed unreleased Lagrangian settings from Frontier-facing configs and removed Lagrangian loss options from the Frontier training CLI.</li>
+</ul>
 <h2 id="v010rc1-2026-04-30">[v0.1.0rc1] — 2026-04-30<a class="headerlink" href="#v010rc1-2026-04-30" title="Permanent link">&para;</a></h2>
 <p>First public release candidate.</p>
-<h3 id="added">Added<a class="headerlink" href="#added" title="Permanent link">&para;</a></h3>
+<h3 id="added_1">Added<a class="headerlink" href="#added_1" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Datasets</strong> — <code>OPFDataset</code> (in-memory), <code>OPFOnDiskDataset</code> (SQLite/RocksDB), <code>OPFShardedIterableDataset</code>, plus a <code>to_float32</code> PyG transform for fp64 → fp32 casting.</li>
 <li><strong>Models</strong> — Heterogeneous GNN architectures: <code>OPFHeteroGNN</code> (with <code>sage</code> / <code>gcn</code> / <code>gin</code> / <code>gat</code> backends), <code>RGAT</code>, <code>HEAT</code>, <code>HGT</code>; homogeneous variants under <code>OPFHomoGNN</code>.</li>
