@@ -12,7 +12,7 @@ body:
     attributes:
       label: Summary
       description: A clear, concise description of the bug.
-      placeholder: e.g. `OPFDataset(...).load()` raises `RuntimeError: dtype mismatch` on case14.
+      placeholder: "e.g. `OPFDataset(...).load()` raises `RuntimeError: dtype mismatch` on case14."
     validations:
       required: true
   - type: textarea
