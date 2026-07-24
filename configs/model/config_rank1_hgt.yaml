@@ -1,0 +1,24 @@
+---
+models:
+  HeteroGNN:
+    hidden_channels: 2048
+    num_layers: 8
+    backend: "gat"
+    dropout: 0.25241375563619645
+  RGAT:
+    hidden_channels: 128
+    num_layers: 6
+    num_heads: 8
+    edge_dim: 8
+    dropout: 0.20948761604876676
+  HEAT:
+    num_layers: 6
+    hidden_channels: 256
+    dropout: 0.09341805143662683
+    attention_heads: 4
+  HGT:
+    num_layers: 8
+    hidden_channels: 2048 #2224
+    dropout: 0.24398355775520905
+    num_heads: 4 #16
+

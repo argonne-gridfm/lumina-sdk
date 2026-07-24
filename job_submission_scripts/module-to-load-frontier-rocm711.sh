@@ -1,13 +1,9 @@
 module reset
-ml cpe/24.07
-ml cce/18.0.0
-
-# --- ROCm 7.1 toolchain ---
-ml rocm/7.1.1
-ml amd-mixed/7.1.1
-
-ml craype-accel-amd-gfx90a
-ml PrgEnv-gnu
+ml PrgEnv-gnu/8.7.0
+ml cpe/26.03
 ml miniforge3/23.11.0-0
+ml rocm/7.1.1
+ml rccl-net-plugin
+ml craype-accel-amd-gfx90a
 ml git-lfs
-module unload darshan-runtime
+module unload darshan-runtime || true

@@ -1,3 +1,4 @@
+import csv
 import json
 import os
 from pathlib import Path
@@ -17,25 +18,18 @@ except ImportError:
 
 
 class ThroughputTracker:
-    """Measures training throughput (samples/sec) over a configurable window.
-
-    After a configurable warmup period, records per-step timing for a fixed
-    number of measurement steps, then computes and logs the mean throughput
-    across all DDP ranks.  Results are optionally logged to W&B and written
-    as JSON metadata.
-
-    Args:
-        config (dict): Full training configuration. Throughput settings are
-            read from ``config["training"]``: ``throughput_enabled``,
-            ``throughput_warmup_steps``, ``throughput_measure_steps``.
-        world_size (int): Total number of DDP processes.
-        global_rank (int): Rank of the current process.
-        get_global_step (callable): Zero-argument callable returning the
-            current global step count (used as W&B x-axis).
-        wandb_enabled (bool): Whether to log metrics to W&B.
-    """
-
-    def __init__(self, config, world_size, global_rank, get_global_step, wandb_enabled=False):
+    def __init__(
+        self,
+        config,
+        world_size,
+        global_rank,
+        get_global_step,
+        wandb_enabled=False,
+        run_name=None,
+        model_num_parameters=None,
+        model_type=None,
+        loss_type=None,
+    ):
         self.config = config or {}
         self.world_size = world_size
         self.global_rank = global_rank
@@ -56,14 +50,17 @@ class ThroughputTracker:
         self.samples = []
         self.metadata_written = False
         self.loader_config = self.config.get("loader", {})
+        self.logging_dir = self.config.get("logging_dir") or self.config.get("checkpoint_dir", ".")
+        safe_chars = [
+            ch if ch.isascii() and (ch.isalnum() or ch in ("-", "_", ".")) else "_"
+            for ch in str(run_name or "run")
+        ]
+        self.run_stem = "".join(safe_chars).strip("._") or "run"
+        self.model_num_parameters = model_num_parameters
+        self.model_type = model_type
+        self.loss_type = loss_type
 
     def set_wandb_enabled(self, enabled):
-        """Enable or disable W&B logging for throughput metrics.
-
-        Args:
-            enabled (bool): ``True`` to enable W&B logging (only effective
-                if ``wandb`` is installed).
-        """
         self.wandb_enabled = bool(enabled) and WANDB_AVAILABLE
 
     def _global_step(self):
@@ -86,12 +83,11 @@ class ThroughputTracker:
             return None
 
     def write_metadata(self):
-        """Write environment and configuration metadata to a JSON file (rank-0 only)."""
         if not self.enabled:
             return
         if self.metadata_written or self.global_rank != 0:
             return
-        logging_dir = self.config.get("logging_dir", ".")
+        logging_dir = self.logging_dir
         os.makedirs(logging_dir, exist_ok=True)
         env_keys = [
             "RANK",
@@ -106,11 +102,18 @@ class ThroughputTracker:
             "config_yaml": yaml.safe_dump(self.config, sort_keys=False),
             "hostname": socket.gethostname(),
             "world_size": self.world_size,
+            "model_num_parameters": self.model_num_parameters,
+            "model_type": self.model_type,
+            "loss_type": self.loss_type,
             "env": {key: os.environ.get(key) for key in env_keys if key in os.environ},
             "torch_version": torch.__version__,
+            "torch_hip_version": getattr(torch.version, "hip", None),
+            "accelerator_name": (
+                torch.cuda.get_device_name() if torch.cuda.is_available() else None
+            ),
             "dist_backend": dist.get_backend() if dist.is_initialized() else None,
         }
-        metadata_path = os.path.join(logging_dir, "throughput_metadata.json")
+        metadata_path = os.path.join(logging_dir, f"{self.run_stem}-throughput_metadata.json")
         with open(metadata_path, "w") as handle:
             json.dump(metadata, handle, indent=2)
         self.metadata_written = True
@@ -118,11 +121,6 @@ class ThroughputTracker:
             wandb.log({"throughput/metadata_path": metadata_path}, step=self._global_step())
 
     def maybe_start_measurement(self):
-        """Begin measurement if warmup is complete and measurement has not yet run.
-
-        Returns:
-            bool: ``True`` if measurement is now active, ``False`` otherwise.
-        """
         if not self.enabled or self.has_run:
             return False
         if self.measure_started:
@@ -133,6 +131,7 @@ class ThroughputTracker:
             dist.barrier()
         self.measure_started = True
         self.measure_count = 0
+        self._reset_peak_memory()
         if self.global_rank == 0:
             print(
                 f"Starting throughput measurement: warmup={self.warmup_steps}, "
@@ -142,27 +141,43 @@ class ThroughputTracker:
         return True
 
     def measure_active(self):
-        """Return whether throughput measurement is currently in progress.
-
-        Returns:
-            bool: ``True`` when actively measuring.
-        """
         return self.measure_started and not self.has_run
 
     def accelerator_synchronize(self):
-        """Synchronize the current accelerator device for accurate timing."""
         if hasattr(torch, "accelerator") and hasattr(torch.accelerator, "synchronize"):
             torch.accelerator.synchronize()
 
+    def _accelerator_module(self):
+        for name in ("xpu", "cuda"):
+            module = getattr(torch, name, None)
+            if module is not None and getattr(module, "is_available", lambda: False)():
+                return module
+        return None
+
+    def _reset_peak_memory(self):
+        module = self._accelerator_module()
+        reset = getattr(module, "reset_peak_memory_stats", None) if module is not None else None
+        if reset is not None:
+            reset()
+
+    def _peak_memory_metrics(self):
+        module = self._accelerator_module()
+        if module is None:
+            return {}
+        metrics = {}
+        for name, key in (
+            ("max_memory_allocated", "memory/peak_allocated_bytes"),
+            ("max_memory_reserved", "memory/peak_reserved_bytes"),
+        ):
+            getter = getattr(module, name, None)
+            if getter is not None:
+                try:
+                    metrics[key] = float(getter())
+                except TypeError:
+                    metrics[key] = float(getter(None))
+        return metrics
+
     def get_batch_samples(self, batch):
-        """Determine the number of samples in a batch.
-
-        Args:
-            batch: PyG batch object or plain tensor.
-
-        Returns:
-            int: Number of samples in the batch.
-        """
         if hasattr(batch, "num_graphs"):
             return int(batch.num_graphs)
         if torch.is_tensor(batch):
@@ -170,24 +185,11 @@ class ThroughputTracker:
         return int(self.loader_config.get("batch_size", 1))
 
     def record_step(self, step_metrics):
-        """Record a single step's throughput metrics.
-
-        Args:
-            step_metrics (dict): Metrics for the step, must include
-                ``'throughput/samples_per_sec'``.
-        """
         self.samples.append(step_metrics)
         if self.wandb_enabled:
             wandb.log(step_metrics, step=self._global_step())
 
     def on_step_end(self, step_metrics=None):
-        """Called at the end of each training step to record metrics and check completion.
-
-        Automatically calls ``finalize`` once the measurement window is filled.
-
-        Args:
-            step_metrics (dict, optional): Throughput metrics for this step.
-        """
         if not self.enabled or self.has_run:
             return
         self.step_index += 1
@@ -201,15 +203,6 @@ class ThroughputTracker:
             self.finalize()
 
     def finalize(self, partial=False):
-        """Compute and log the final throughput summary across all ranks.
-
-        Gathers per-step samples/sec from all DDP ranks, computes the global
-        mean, and logs to W&B if enabled.
-
-        Args:
-            partial (bool): If ``True``, indicates the measurement window
-                was not fully completed.
-        """
         if not self.measure_started:
             return
         if self.has_run:
@@ -222,24 +215,70 @@ class ThroughputTracker:
             self.has_run = True
             return
 
-        samples_per_sec = [sample["throughput/samples_per_sec"] for sample in self.samples]
-        global_samples_per_sec = samples_per_sec
+        peak_memory = self._peak_memory_metrics()
+        local_keys = sorted({key for sample in self.samples for key in sample})
+        all_keys = list(local_keys)
         if dist.is_available() and dist.is_initialized() and self.world_size > 1:
-            gathered = [None for _ in range(self.world_size)]
-            dist.all_gather_object(gathered, samples_per_sec)
-            global_samples_per_sec = [value for sublist in gathered for value in sublist]
-
-        sample_array = np.array(global_samples_per_sec)
-        global_mean = float(sample_array.mean())
+            gathered_keys = [None for _ in range(self.world_size)]
+            dist.all_gather_object(gathered_keys, local_keys)
+            all_keys = sorted({key for keys in gathered_keys for key in keys})
+        # Step metrics are numeric; using the shared key order keeps collectives
+        # identical on every rank even if one rank has no local value for a key.
+        numeric_keys = all_keys
 
         summary = {
-            "throughput/summary/mean_samples_per_sec": global_mean,
             "throughput/summary/partial": float(partial),
         }
+        for key in numeric_keys:
+            local_values = [
+                float(sample[key])
+                for sample in self.samples
+                if isinstance(sample.get(key), (int, float, np.number))
+            ]
+            totals = torch.tensor(
+                [sum(local_values), len(local_values)],
+                dtype=torch.float64,
+                device=(torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")),
+            )
+            if dist.is_available() and dist.is_initialized() and self.world_size > 1:
+                dist.all_reduce(totals, op=dist.ReduceOp.SUM)
+            if totals[1].item() > 0:
+                summary[f"summary/mean/{key}"] = float((totals[0] / totals[1]).item())
+        summary["throughput/summary/mean_samples_per_sec"] = summary.get(
+            "summary/mean/throughput/samples_per_sec", 0.0
+        )
+        memory_values = torch.tensor(
+            [
+                peak_memory.get("memory/peak_allocated_bytes", 0.0),
+                peak_memory.get("memory/peak_reserved_bytes", 0.0),
+            ],
+            dtype=torch.float64,
+            device=(torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")),
+        )
+        if dist.is_available() and dist.is_initialized() and self.world_size > 1:
+            dist.all_reduce(memory_values, op=dist.ReduceOp.MAX)
+        summary["memory/peak_allocated_bytes"] = float(memory_values[0].item())
+        summary["memory/peak_reserved_bytes"] = float(memory_values[1].item())
 
         if self.global_rank == 0:
+            os.makedirs(self.logging_dir, exist_ok=True)
+            steps_path = os.path.join(self.logging_dir, f"{self.run_stem}-throughput_steps.csv")
+            with open(steps_path, "w", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=all_keys)
+                writer.writeheader()
+                writer.writerows(
+                    {key: sample.get(key) for key in all_keys}
+                    for sample in self.samples
+                )
+            summary_path = os.path.join(self.logging_dir, f"{self.run_stem}-throughput_summary.json")
+            with open(summary_path, "w") as handle:
+                json.dump(summary, handle, indent=2, sort_keys=True)
             status = "partial" if partial else "complete"
-            print(f"Throughput measurement {status}: mean_samples_per_sec={global_mean:.3f}")
+            mean_throughput = summary.get("summary/mean/throughput/samples_per_sec", 0.0)
+            print(
+                f"Throughput measurement {status}: mean_samples_per_sec={mean_throughput:.3f}; "
+                f"summary={summary_path}"
+            )
         if self.wandb_enabled:
             wandb.log(summary, step=self._global_step())
 

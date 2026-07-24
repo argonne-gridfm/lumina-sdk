@@ -1,3 +1,4 @@
+import csv
 import math
 import os
 import time
@@ -95,12 +96,30 @@ class BaseOPFTrainer:
     TRAIN_METRIC_NAMES = (
         "train/loss/total",
         "train/loss/objective",
+        "train/loss/lagrange_term",
+        "train/loss/penalty_term",
+        "train/feas/total_violation",
+        "train/feas/total_violation_ema",
+        "train/feas/total_violation_norm",
+        "train/feas/total_violation_ema_norm",
+        "train/feas/p_balance_rmse_pu",
+        "train/feas/q_balance_rmse_pu",
+        "train/feas/line_limit_rmse_pu",
+        "train/lagrangian/penalty_mu",
+        "train/lagrangian/multiplier_norm",
+        "train/perf/constraint_eval_ms",
         "train/perf/nonfinite_loss_skips",
         "train/perf/nonfinite_grad_skips",
     )
     VAL_METRIC_NAMES = (
         "val/loss/total",
         "val/loss/objective",
+        "val/feas/total_violation",
+        "val/feas/total_violation_norm",
+        "val/feas/p_balance_rmse_pu",
+        "val/feas/q_balance_rmse_pu",
+        "val/feas/line_limit_rmse_pu",
+        "val/perf/constraint_eval_ms",
         "val/perf/eval_batches",
         "val/perf/data_ms",
         "val/perf/forward_ms",
@@ -109,15 +128,46 @@ class BaseOPFTrainer:
     )
     TRAIN_METRIC_MAP = (
         ("objective", "train/loss/objective"),
+        ("lagrange_term", "train/loss/lagrange_term"),
+        ("penalty_term", "train/loss/penalty_term"),
+        ("raw_constraint_violation", "train/feas/total_violation"),
+        ("ema_constraint_violation", "train/feas/total_violation_ema"),
+        ("raw_constraint_violation_norm", "train/feas/total_violation_norm"),
+        ("ema_constraint_violation_norm", "train/feas/total_violation_ema_norm"),
+        ("p_balance_rmse", "train/feas/p_balance_rmse_pu"),
+        ("q_balance_rmse", "train/feas/q_balance_rmse_pu"),
+        ("line_limit_rmse", "train/feas/line_limit_rmse_pu"),
+        ("penalty_parameter", "train/lagrangian/penalty_mu"),
+        ("last_multiplier_norm", "train/lagrangian/multiplier_norm"),
+        ("constraint_eval_ms", "train/perf/constraint_eval_ms"),
     )
     VAL_METRIC_MAP = (
+        ("raw_constraint_violation", "val/feas/total_violation"),
+        ("raw_constraint_violation_norm", "val/feas/total_violation_norm"),
+        ("p_balance_rmse", "val/feas/p_balance_rmse_pu"),
+        ("q_balance_rmse", "val/feas/q_balance_rmse_pu"),
+        ("line_limit_rmse", "val/feas/line_limit_rmse_pu"),
+        ("constraint_eval_ms", "val/perf/constraint_eval_ms"),
     )
     TRAIN_METRIC_GROUPS = (
         (
             "train/loss/total",
             "train/loss/objective",
+            "train/loss/lagrange_term",
+            "train/loss/penalty_term",
         ),
         (
+            "train/feas/total_violation",
+            "train/feas/total_violation_ema",
+            "train/feas/total_violation_norm",
+            "train/feas/total_violation_ema_norm",
+            "train/feas/p_balance_rmse_pu",
+            "train/feas/q_balance_rmse_pu",
+            "train/feas/line_limit_rmse_pu",
+        ),
+        ("train/lagrangian/penalty_mu", "train/lagrangian/multiplier_norm"),
+        (
+            "train/perf/constraint_eval_ms",
             "train/perf/nonfinite_loss_skips",
             "train/perf/nonfinite_grad_skips",
         ),
@@ -125,6 +175,14 @@ class BaseOPFTrainer:
     VAL_METRIC_GROUPS = (
         ("val/loss/total", "val/loss/objective", "val/score"),
         (
+            "val/feas/total_violation",
+            "val/feas/total_violation_norm",
+            "val/feas/p_balance_rmse_pu",
+            "val/feas/q_balance_rmse_pu",
+            "val/feas/line_limit_rmse_pu",
+        ),
+        (
+            "val/perf/constraint_eval_ms",
             "val/perf/eval_batches",
             "val/perf/data_ms",
             "val/perf/forward_ms",
@@ -221,6 +279,32 @@ class BaseOPFTrainer:
             self.homo_dataset_kwargs.setdefault(key, value)
 
         training_config = self.config["training"]
+        loss_schedule_config = training_config.get("loss_schedule", {})
+        if not isinstance(loss_schedule_config, dict):
+            loss_schedule_config = {}
+        self.loss_schedule_enabled = bool(loss_schedule_config.get("enabled", False))
+        self.loss_schedule_switch_done = False
+        self.loss_schedule_initial_loss = str(loss_schedule_config.get("initial_loss_type", loss_type))
+        self.loss_schedule_switch_loss = str(
+            loss_schedule_config.get("switch_loss_type", "augmented_lagrangian")
+        )
+        switch_epoch = loss_schedule_config.get("switch_epoch", loss_schedule_config.get("mse_epochs"))
+        self.loss_schedule_switch_epoch = None
+        if self.loss_schedule_enabled:
+            if switch_epoch is None:
+                raise ValueError("training.loss_schedule requires switch_epoch or mse_epochs when enabled.")
+            self.loss_schedule_switch_epoch = max(0, int(switch_epoch))
+            self.loss_type = self.loss_schedule_initial_loss
+            if self.global_rank == 0:
+                print(
+                    f"Loss schedule: {self.loss_schedule_initial_loss} for "
+                    f"{self.loss_schedule_switch_epoch} epochs, then {self.loss_schedule_switch_loss}."
+                )
+        initial_checkpoint_config = training_config.get("initial_checkpoint", {})
+        if not isinstance(initial_checkpoint_config, dict):
+            initial_checkpoint_config = {}
+        self.initial_checkpoint_config = initial_checkpoint_config
+        self.initial_checkpoint_enabled = bool(initial_checkpoint_config.get("enabled", False))
         self.max_epochs = training_config["max_epochs"]
         self.patience = training_config["patience"]
         self.grad_clip_val = training_config.get("gradient_clip_val")
@@ -276,6 +360,11 @@ class BaseOPFTrainer:
         self.save_last_checkpoint = bool(checkpoint_config.get("save_last", False))
 
         self.checkpoint_dir = config["checkpoint_dir"]
+        self.logging_dir = config.get("logging_dir") or self.checkpoint_dir
+        self.loss_log_path = None
+        self.loss_log_file = None
+        self.loss_log_writer = None
+        self.training_start_time = None
 
         self._load_data()
         self._create_dataloaders()
@@ -283,9 +372,12 @@ class BaseOPFTrainer:
         self._create_model()
         self._initialize_loss_managers()
         self._init_optimizer()
+        self._load_initial_checkpoint_if_enabled()
         self._init_scheduler()
 
         self.current_epoch = 0
+        self.start_epoch = 0
+        self._epoch_complete = False
         self.best_val_loss = float("inf")
         self.patience_counter = 0
         self.global_step = 0
@@ -306,6 +398,7 @@ class BaseOPFTrainer:
         self.val_metric_groups = [list(group) for group in self.VAL_METRIC_GROUPS]
 
         self._init_wandb()
+        self._init_loss_logger()
         self.throughput_tracker = None
         if training_config.get("throughput_enabled", True):
             self.throughput_tracker = ThroughputTracker(
@@ -314,6 +407,10 @@ class BaseOPFTrainer:
                 global_rank=self.global_rank,
                 get_global_step=lambda: self.global_samples,
                 wandb_enabled=self.wandb_enabled,
+                run_name=self.wandb_run_name or self._default_wandb_run_name(),
+                model_num_parameters=sum(parameter.numel() for parameter in self.model.parameters()),
+                model_type=self.model_type,
+                loss_type=self.loss_type,
             )
             if not self.throughput_tracker.enabled:
                 self.throughput_tracker = None
@@ -645,13 +742,181 @@ class BaseOPFTrainer:
 
     def _should_print_epoch(self):
         return self.global_rank == 0 and not self.wandb_enabled
+    def _safe_log_stem(self, name):
+        if not name:
+            return "acopf-ddp"
+        safe_chars = []
+        for ch in str(name):
+            if ch.isascii() and (ch.isalnum() or ch in ("-", "_", ".")):
+                safe_chars.append(ch)
+            else:
+                safe_chars.append("_")
+        safe_name = "".join(safe_chars).strip("._")
+        return safe_name or "acopf-ddp"
+
+    def _init_loss_logger(self):
+        if self.global_rank != 0 or not self.logging_dir:
+            return
+        os.makedirs(self.logging_dir, exist_ok=True)
+        run_stem = self._safe_log_stem(self.wandb_run_name or self._default_wandb_run_name())
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        self.loss_log_path = os.path.join(self.logging_dir, f"{run_stem}-losses-{timestamp}.csv")
+        self.loss_log_file = open(self.loss_log_path, "a", newline="")
+        self.loss_log_writer = csv.writer(self.loss_log_file)
+        self.loss_log_writer.writerow(
+            [
+                "timestamp",
+                "event",
+                "epoch",
+                "global_step",
+                "global_samples",
+                "case",
+                "loss_total",
+                "loss_objective",
+                "val_score",
+                "total_violation",
+                "total_violation_norm",
+                "p_balance_rmse_pu",
+                "q_balance_rmse_pu",
+                "line_limit_rmse_pu",
+                "lr",
+                "elapsed_hours",
+                "accelerator_hours",
+                "peak_memory_allocated_bytes",
+                "peak_memory_reserved_bytes",
+                "peak_memory_allocated_gib",
+                "peak_memory_reserved_gib",
+            ]
+        )
+        self.loss_log_file.flush()
+        print(f"Loss log file: {self.loss_log_path}")
+
+    def _close_loss_logger(self):
+        if self.loss_log_file is None:
+            return
+        self.loss_log_file.flush()
+        self.loss_log_file.close()
+        self.loss_log_file = None
+        self.loss_log_writer = None
+
+    def _format_log_value(self, value):
+        numeric_value = self._as_float(value)
+        if numeric_value is None:
+            return ""
+        return f"{numeric_value:.6f}"
+
+    def _accelerator_memory_metrics(self):
+        metrics = {"allocated": 0, "reserved": 0}
+        for name in ("xpu", "cuda"):
+            module = getattr(torch, name, None)
+            if module is None or not getattr(module, "is_available", lambda: False)():
+                continue
+            for getter_name, key in (
+                ("max_memory_allocated", "allocated"),
+                ("max_memory_reserved", "reserved"),
+            ):
+                getter = getattr(module, getter_name, None)
+                if getter is not None:
+                    try:
+                        metrics[key] = int(getter())
+                    except TypeError:
+                        metrics[key] = int(getter(self.device))
+            break
+        if dist.is_available() and dist.is_initialized() and self.world_size > 1:
+            values = torch.tensor(
+                [metrics["allocated"], metrics["reserved"]],
+                dtype=torch.int64,
+                device=self.device,
+            )
+            dist.all_reduce(values, op=dist.ReduceOp.MAX)
+            metrics["allocated"], metrics["reserved"] = (int(value) for value in values.tolist())
+        return metrics
+
+    @staticmethod
+    def _first_metric(metrics, *names):
+        if not isinstance(metrics, dict):
+            return None
+        for name in names:
+            if name in metrics:
+                return metrics[name]
+        return None
+
+    def _emit_loss_event(
+        self,
+        event,
+        loss_total,
+        loss_objective=None,
+        val_score=None,
+        case_name=None,
+        metrics=None,
+    ):
+        lr = self._current_lr()
+        total_violation = self._first_metric(
+            metrics,
+            "raw_constraint_violation",
+            "train/feas/total_violation",
+            "val/feas/total_violation",
+            "constraint_violation",
+        )
+        total_violation_norm = self._first_metric(
+            metrics,
+            "raw_constraint_violation_norm",
+            "train/feas/total_violation_norm",
+            "val/feas/total_violation_norm",
+        )
+        p_balance_rmse = self._first_metric(
+            metrics, "p_balance_rmse", "train/feas/p_balance_rmse_pu", "val/feas/p_balance_rmse_pu"
+        )
+        q_balance_rmse = self._first_metric(
+            metrics, "q_balance_rmse", "train/feas/q_balance_rmse_pu", "val/feas/q_balance_rmse_pu"
+        )
+        line_limit_rmse = self._first_metric(
+            metrics, "line_limit_rmse", "train/feas/line_limit_rmse_pu", "val/feas/line_limit_rmse_pu"
+        )
+        elapsed_hours = (
+            (time.perf_counter() - self.training_start_time) / 3600.0
+            if self.training_start_time is not None
+            else 0.0
+        )
+        memory_metrics = self._accelerator_memory_metrics()
+
+        if self.global_rank != 0 or self.loss_log_writer is None:
+            return
+        self.loss_log_writer.writerow(
+            [
+                time.strftime("%Y-%m-%d %H:%M:%S"),
+                event,
+                int(self.current_epoch),
+                int(self.global_step),
+                int(self.global_samples),
+                case_name or "",
+                self._format_log_value(loss_total),
+                self._format_log_value(loss_objective),
+                self._format_log_value(val_score),
+                self._format_log_value(total_violation),
+                self._format_log_value(total_violation_norm),
+                self._format_log_value(p_balance_rmse),
+                self._format_log_value(q_balance_rmse),
+                self._format_log_value(line_limit_rmse),
+                self._format_log_value(lr),
+                self._format_log_value(elapsed_hours),
+                self._format_log_value(elapsed_hours * self.world_size),
+                memory_metrics.get("allocated", ""),
+                memory_metrics.get("reserved", ""),
+                self._format_log_value(memory_metrics.get("allocated", 0) / (1024**3)),
+                self._format_log_value(memory_metrics.get("reserved", 0) / (1024**3)),
+            ]
+        )
+        self.loss_log_file.flush()
 
     def _checkpoint_tag(self):
         raise NotImplementedError
 
     def _checkpoint_payload(self):
         return {
+            "checkpoint_version": 2,
             "epoch": self.current_epoch,
+            "next_epoch": self.current_epoch + 1 if self._epoch_complete else self.current_epoch,
 
             "config": self.config,
             "run_metadata": self.run_metadata,
@@ -663,8 +928,208 @@ class BaseOPFTrainer:
 
             "model_state_dict": self.model.module.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
+            "scheduler_state_dict": self.scheduler.state_dict() if self.scheduler is not None else None,
+            "loss_manager_state": self._loss_manager_training_state(),
             "best_val_loss": self.best_val_loss,
+            "patience_counter": self.patience_counter,
+            "global_step": self.global_step,
+            "global_samples": self.global_samples,
+            "next_log_samples": self._next_log_samples,
+            "next_val_samples": self._next_val_samples,
+            "next_ckpt_samples": self._next_ckpt_samples,
+            "loss_schedule_switch_done": self.loss_schedule_switch_done,
         }
+
+    def _loss_manager_training_state(self):
+        if hasattr(self, "loss_manager"):
+            return self.loss_manager.training_state_dict()
+        if hasattr(self, "loss_managers"):
+            return {
+                int(case_idx): manager.training_state_dict()
+                for case_idx, manager in self.loss_managers.items()
+            }
+        return None
+
+    def _load_loss_manager_training_state(self, state):
+        if state is None:
+            return
+        if hasattr(self, "loss_manager"):
+            self.loss_manager.load_training_state_dict(state)
+            return
+        if hasattr(self, "loss_managers") and isinstance(state, dict):
+            for case_idx, manager in self.loss_managers.items():
+                manager_state = state.get(case_idx, state.get(str(case_idx)))
+                if manager_state is not None:
+                    manager.load_training_state_dict(manager_state)
+
+    def _resolve_checkpoint_path(self, checkpoint_path):
+        if not checkpoint_path:
+            raise ValueError("training.initial_checkpoint.path must be set when initial_checkpoint is enabled.")
+        checkpoint_path = os.path.expanduser(str(checkpoint_path))
+        if os.path.isabs(checkpoint_path):
+            return checkpoint_path
+        if os.path.exists(checkpoint_path):
+            return checkpoint_path
+        return os.path.join(self.checkpoint_dir, checkpoint_path)
+
+    def _extract_model_state_dict(self, checkpoint):
+        if isinstance(checkpoint, dict):
+            for key in ("model_state_dict", "state_dict", "model"):
+                value = checkpoint.get(key)
+                if isinstance(value, dict):
+                    return value
+        if isinstance(checkpoint, dict):
+            return checkpoint
+        raise ValueError("Checkpoint does not contain a model state dict.")
+
+    def _normalize_state_dict_keys(self, state_dict):
+        normalized = {}
+        prefixes = ("model.module.", "module.", "model.")
+        for key, value in state_dict.items():
+            new_key = key
+            for prefix in prefixes:
+                if new_key.startswith(prefix):
+                    new_key = new_key[len(prefix):]
+                    break
+            normalized[new_key] = value
+        return normalized
+
+    def _broadcast_model_parameters(self):
+        if not dist.is_available() or not dist.is_initialized() or self.world_size <= 1:
+            return
+        module = self.model.module if hasattr(self.model, "module") else self.model
+        with torch.no_grad():
+            for tensor in module.state_dict().values():
+                if torch.is_tensor(tensor):
+                    dist.broadcast(tensor, src=0)
+
+    def _load_initial_checkpoint_if_enabled(self):
+        if not self.initial_checkpoint_enabled:
+            return
+
+        checkpoint_path = self._resolve_checkpoint_path(self.initial_checkpoint_config.get("path"))
+        strict = bool(self.initial_checkpoint_config.get("strict", True))
+        status = {"ok": True, "message": ""}
+
+        if self.global_rank == 0:
+            try:
+                if not os.path.exists(checkpoint_path):
+                    raise FileNotFoundError(f"Initial checkpoint not found: {checkpoint_path}")
+                checkpoint = torch.load(checkpoint_path, map_location="cpu")
+                state_dict = self._normalize_state_dict_keys(self._extract_model_state_dict(checkpoint))
+                module = self.model.module if hasattr(self.model, "module") else self.model
+                load_result = module.load_state_dict(state_dict, strict=strict)
+                if not strict:
+                    missing = getattr(load_result, "missing_keys", [])
+                    unexpected = getattr(load_result, "unexpected_keys", [])
+                    if missing or unexpected:
+                        print(
+                            "Loaded initial checkpoint with non-strict key mismatch: "
+                            f"missing={missing}, unexpected={unexpected}"
+                        )
+                print(f"Loaded initial checkpoint from {checkpoint_path}")
+            except Exception as exc:
+                status = {"ok": False, "message": str(exc)}
+
+        if dist.is_available() and dist.is_initialized() and self.world_size > 1:
+            status_list = [status] if self.global_rank == 0 else [None]
+            dist.broadcast_object_list(status_list, src=0)
+            status = status_list[0]
+        if not status.get("ok", False):
+            raise RuntimeError(f"Failed to load initial checkpoint: {status.get('message')}")
+
+        self._broadcast_model_parameters()
+        if dist.is_available() and dist.is_initialized() and self.world_size > 1:
+            dist.barrier()
+
+    def resume_from_checkpoint(self, checkpoint_path, strict=True):
+        checkpoint_path = self._resolve_checkpoint_path(checkpoint_path)
+        if not os.path.exists(checkpoint_path):
+            raise FileNotFoundError(f"Resume checkpoint not found: {checkpoint_path}")
+
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        if not isinstance(checkpoint, dict) or "model_state_dict" not in checkpoint:
+            raise ValueError("Resume requires a full training checkpoint with model_state_dict.")
+        if "optimizer_state_dict" not in checkpoint:
+            raise ValueError("Resume checkpoint does not contain optimizer_state_dict.")
+        if int(checkpoint.get("checkpoint_version", 1)) < 2 and self.global_rank == 0:
+            print(
+                "Warning: legacy checkpoint detected. Model and optimizer will resume, "
+                "but scheduler, counters, and augmented-Lagrangian state may be unavailable."
+            )
+
+        checkpoint_loss_type = checkpoint.get("loss_type", self.loss_type)
+        if checkpoint_loss_type != self.loss_type:
+            self.loss_type = checkpoint_loss_type
+            self._initialize_loss_managers()
+
+        state_dict = self._normalize_state_dict_keys(checkpoint["model_state_dict"])
+        module = self.model.module if hasattr(self.model, "module") else self.model
+        module.load_state_dict(state_dict, strict=strict)
+        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+        scheduler_state = checkpoint.get("scheduler_state_dict")
+        if scheduler_state is not None:
+            if self.scheduler is None:
+                raise ValueError("Checkpoint contains scheduler state, but the current config has no scheduler.")
+            self.scheduler.load_state_dict(scheduler_state)
+
+        self.current_epoch = int(checkpoint.get("epoch", 0))
+        self.start_epoch = int(checkpoint.get("next_epoch", self.current_epoch + 1))
+        self.best_val_loss = float(checkpoint.get("best_val_loss", self.best_val_loss))
+        self.patience_counter = int(checkpoint.get("patience_counter", 0))
+        self.global_step = int(checkpoint.get("global_step", 0))
+        self.global_samples = int(checkpoint.get("global_samples", 0))
+        self.loss_schedule_switch_done = bool(
+            checkpoint.get(
+                "loss_schedule_switch_done",
+                self.loss_schedule_enabled
+                and self.loss_schedule_switch_epoch is not None
+                and self.start_epoch > self.loss_schedule_switch_epoch,
+            )
+        )
+        self._load_loss_manager_training_state(checkpoint.get("loss_manager_state"))
+
+        self._next_log_samples = checkpoint.get("next_log_samples")
+        self._next_val_samples = checkpoint.get("next_val_samples")
+        self._next_ckpt_samples = checkpoint.get("next_ckpt_samples")
+        if self._next_log_samples is None and self.log_every_n_samples > 0:
+            self._next_log_samples = self._advance_next_samples(
+                self.log_every_n_samples, self.log_every_n_samples
+            )
+        if self._next_val_samples is None and self.val_every_n_samples > 0:
+            self._next_val_samples = self._advance_next_samples(
+                self.val_every_n_samples, self.val_every_n_samples
+            )
+        if self._next_ckpt_samples is None and self.ckpt_every_n_samples > 0:
+            self._next_ckpt_samples = self._advance_next_samples(
+                self.ckpt_every_n_samples, self.ckpt_every_n_samples
+            )
+
+        self.stop_training = False
+        self._epoch_complete = False
+        if self.global_rank == 0:
+            print(
+                f"Resumed training from {checkpoint_path}: "
+                f"next_epoch={self.start_epoch}, global_step={self.global_step}, "
+                f"global_samples={self.global_samples}, loss_type={self.loss_type}"
+            )
+        return checkpoint
+
+    def _apply_epoch_loss_schedule(self, epoch):
+        if not self.loss_schedule_enabled or self.loss_schedule_switch_done:
+            return
+        if self.loss_schedule_switch_epoch is None or epoch < self.loss_schedule_switch_epoch:
+            return
+        if self.loss_type == self.loss_schedule_switch_loss:
+            self.loss_schedule_switch_done = True
+            return
+
+        self.loss_type = self.loss_schedule_switch_loss
+        self._initialize_loss_managers()
+        self.loss_schedule_switch_done = True
+        if self.global_rank == 0:
+            print(f"Loss schedule switched to '{self.loss_type}' at epoch {epoch}.")
 
     def _on_checkpoint_saved(self, filepath):
         return
@@ -1047,15 +1512,13 @@ class BaseOPFTrainer:
             pass
 
     def _should_log_step(self):
-        if not self.wandb_enabled:
-            return False
         if self.log_every_n_samples and self.log_every_n_samples > 0:
             return self.global_samples >= self._next_log_samples
         if self.log_every_n_steps and self.log_every_n_steps > 0:
             return self.global_step % self.log_every_n_steps == 0
         return True
 
-    def _log_wandb_step(self, loss_value, loss_info):
+    def _log_wandb_step(self, loss_value, loss_info, case_name=None):
         if not self._should_log_step():
             return
         metrics = {
@@ -1070,7 +1533,15 @@ class BaseOPFTrainer:
                 metric_value = self._as_float(loss_info[info_key])
                 if metric_value is not None:
                     metrics[metric_name] = metric_value
-        wandb.log(metrics, step=self.global_samples)
+        if self.wandb_enabled:
+            wandb.log(metrics, step=self.global_samples)
+        self._emit_loss_event(
+            "train",
+            loss_total=metrics["train/loss/total"],
+            loss_objective=loss_info.get("objective"),
+            case_name=case_name,
+            metrics=loss_info,
+        )
         if self._next_log_samples is not None and self.log_every_n_samples > 0:
             while self.global_samples >= self._next_log_samples:
                 self._next_log_samples += self.log_every_n_samples
@@ -1254,6 +1725,15 @@ class BaseOPFTrainer:
             self.model.train()
             return None, None, None
 
+        val_score = val_metrics.get("val/score") if val_metrics else None
+        self._emit_loss_event(
+            "validation",
+            loss_total=val_loss,
+            loss_objective=val_task_loss,
+            val_score=val_score,
+            metrics=val_metrics,
+        )
+
         if self._should_print_epoch():
             print(f"\nValidation @ samples {self.global_samples} (epoch {self.current_epoch}):")
             print(f"  Val Loss: {val_loss:.4f}, Val Task: {val_task_loss:.4f}")
@@ -1304,6 +1784,38 @@ class BaseOPFTrainer:
             f"checkpoint-{self._checkpoint_tag()}-samples{self.global_samples}.pt",
         )
         self.save_checkpoint(checkpoint_path)
+
+    def _sync_lagrangian_inputs(self, constraint_violation, constraints, batch_samples=None, total_batch_samples=None):
+        if not dist.is_available() or not dist.is_initialized() or self.world_size <= 1:
+            return constraint_violation, constraints
+
+        synced_constraints = constraints
+        synced_violation = constraint_violation
+        weight = None
+        total_weight = float(self.world_size)
+        if batch_samples is not None and total_batch_samples:
+            weight = float(batch_samples)
+            total_weight = float(total_batch_samples)
+
+        with torch.no_grad():
+            if torch.is_tensor(synced_constraints) and synced_constraints.numel() > 0:
+                weighted_constraints = synced_constraints.detach()
+                if weight is not None:
+                    weighted_constraints = weighted_constraints * weight
+                dist.all_reduce(weighted_constraints, op=dist.ReduceOp.SUM)
+                synced_constraints = weighted_constraints / total_weight
+
+            if synced_violation is not None:
+                if torch.is_tensor(synced_violation):
+                    weighted_violation = synced_violation.detach()
+                else:
+                    weighted_violation = torch.tensor(float(synced_violation), device=self.device)
+                if weight is not None:
+                    weighted_violation = weighted_violation * weight
+                dist.all_reduce(weighted_violation, op=dist.ReduceOp.SUM)
+                synced_violation = weighted_violation / total_weight
+
+        return synced_violation, synced_constraints
 
     def _add_metric(self, metric_sums, metric_counts, name, value, weight=1.0):
         numeric_value = self._as_float(value)
@@ -1419,45 +1931,50 @@ class BaseOPFTrainer:
             self._on_checkpoint_saved(filepath)
 
     def train(self):
-        """Run the full training loop across all epochs.
-
-        Iterates for ``max_epochs`` epochs, calling ``train_epoch`` each
-        iteration.  Handles early stopping via patience, sample-budget
-        limits, periodic validation, checkpoint saving, throughput
-        measurement finalization, and W&B cleanup.
-        """
         checkpoint_dir = self.checkpoint_dir
+        self.training_start_time = time.perf_counter()
         if self.global_rank == 0:
             os.makedirs(checkpoint_dir, exist_ok=True)
-        if self.throughput_tracker:
-            self.throughput_tracker.write_metadata()
+        try:
+            if self.throughput_tracker:
+                self.throughput_tracker.write_metadata()
 
-        for epoch in range(self.max_epochs):
-            self.current_epoch = epoch
+            for epoch in range(self.start_epoch, self.max_epochs):
+                self.current_epoch = epoch
+                self._epoch_complete = False
+                self._apply_epoch_loss_schedule(epoch)
 
-            train_loss, train_task_loss, train_metrics = self.train_epoch(epoch)
+                train_loss, train_task_loss, train_metrics = self.train_epoch(epoch)
+                self._epoch_complete = True
 
-            if self._should_print_epoch():
-                print(f"\nEpoch {epoch}:")
-                print(f"  Train Loss: {train_loss:.4f}, Train Task: {train_task_loss:.4f}")
-                self._print_metric_groups("  Train Metrics:", train_metrics, self.train_metric_groups)
-            if self.stop_training:
-                if self.max_global_samples > 0 and self.global_samples >= self.max_global_samples:
-                    if self.global_rank == 0:
-                        print(
-                            f"\nStopping after reaching max_global_samples={self.max_global_samples} "
-                            f"(global_samples={self.global_samples})"
-                        )
+                if self._should_print_epoch():
+                    print(f"\nEpoch {epoch}:")
+                    print(f"  Train Loss: {train_loss:.4f}, Train Task: {train_task_loss:.4f}")
+                    self._print_metric_groups("  Train Metrics:", train_metrics, self.train_metric_groups)
+                if self.stop_training:
+                    if self.max_global_samples > 0 and self.global_samples >= self.max_global_samples:
+                        if self.global_rank == 0:
+                            print(
+                                f"\nStopping after reaching max_global_samples={self.max_global_samples} "
+                                f"(global_samples={self.global_samples})"
+                            )
+                    dist.barrier()
+                    break
+
                 dist.barrier()
-                break
 
-            dist.barrier()
+            if self.save_last_checkpoint:
+                last_path = os.path.join(self.checkpoint_dir, f"last-{self._checkpoint_tag()}.pt")
+                self.save_checkpoint(last_path)
+                if dist.is_available() and dist.is_initialized() and self.world_size > 1:
+                    dist.barrier()
 
-        if self.throughput_tracker:
-            self.throughput_tracker.finalize(partial=True)
-
-        if self.wandb_enabled and wandb is not None:
-            wandb.finish()
+            if self.throughput_tracker:
+                self.throughput_tracker.finalize(partial=True)
+        finally:
+            self._close_loss_logger()
+            if self.wandb_enabled and wandb is not None:
+                wandb.finish()
 
 
 class OPFTrainer(BaseOPFTrainer):
@@ -1689,6 +2206,7 @@ class OPFTrainer(BaseOPFTrainer):
         self.loss_manager = OPFLossManager(
             loss_type=self.loss_type,
             device=self.device,
+            lagrangian_config=self.config.get("lagrangian", {}),
             log_normalized_violation=self.log_normalized_violation,
         )
 
@@ -1734,6 +2252,7 @@ class OPFTrainer(BaseOPFTrainer):
         metric_sums, metric_counts = self._init_metric_trackers(self.train_metric_names)
         step_start_time = None
         step_samples = 0
+        step_constraint_eval_ms = 0.0
         accum_batches = 0
         tracker = self.throughput_tracker
 
@@ -1753,6 +2272,7 @@ class OPFTrainer(BaseOPFTrainer):
                         tracker.accelerator_synchronize()
                         step_start_time = time.perf_counter()
                         step_samples = 0
+                        step_constraint_eval_ms = 0.0
 
             batch = batch.to(self.device)
             batch_samples = self._update_global_samples(batch)
@@ -1761,10 +2281,34 @@ class OPFTrainer(BaseOPFTrainer):
                 step_samples += tracker.get_batch_samples(batch)
 
             predictions = self.forward(batch)
+            collect_constraints = self.loss_manager.lagrangian is not None
             loss, loss_info = self.loss_manager.compute_loss(
                 predictions,
                 batch,
                 return_info=True,
+                collect_constraints=collect_constraints,
+            )
+
+            constraint_eval_ms = self._as_float(loss_info.get("constraint_eval_ms"))
+            if constraint_eval_ms is not None:
+                step_constraint_eval_ms += constraint_eval_ms
+
+            global_batch_samples = batch_samples
+            synced_violation = loss_info.get("constraint_violation")
+            synced_constraints = loss_info.get("constraints")
+            if self.loss_manager.lagrangian is not None:
+                global_batch_samples = self._sync_batch_samples(batch_samples)
+                synced_violation, synced_constraints = self._sync_lagrangian_inputs(
+                    synced_violation,
+                    synced_constraints,
+                    batch_samples=batch_samples,
+                    total_batch_samples=global_batch_samples,
+                )
+            self.loss_manager.update_lagrangian(
+                constraint_violation=synced_violation,
+                constraints=synced_constraints,
+                is_training=self.model.training,
+                sample_count=global_batch_samples,
             )
 
             loss_value = loss.item()
@@ -1807,6 +2351,9 @@ class OPFTrainer(BaseOPFTrainer):
                         samples_per_sec = total_samples / step_time if step_time > 0 else 0.0
                         step_metrics = {
                             "throughput/samples_per_sec": samples_per_sec,
+                            "throughput/step_time_ms": step_time * 1000.0,
+                            "throughput/samples_per_step": float(total_samples),
+                            "throughput/constraint_eval_ms": step_constraint_eval_ms,
                         }
                     tracker.on_step_end(step_metrics)
                 accum_batches = 0
@@ -1846,6 +2393,7 @@ class OPFTrainer(BaseOPFTrainer):
         metric_sums, metric_counts = self._reduce_metrics(metric_sums, metric_counts)
         metric_avgs = self._compute_metric_avgs(metric_sums, metric_counts)
 
+        self.loss_manager.step_epoch()
         return loss_tensor[0].item(), loss_tensor[1].item(), metric_avgs
 
     def validate(self):
@@ -2335,6 +2883,7 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
             self.loss_managers[case_idx] = OPFLossManager(
                 loss_type=self.loss_type,
                 device=self.device,
+                lagrangian_config=self.config.get("lagrangian", {}),
                 log_normalized_violation=self.log_normalized_violation,
             )
 
@@ -2382,9 +2931,10 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
         accum_batches = 0
         step_start_time = None
         step_samples = 0
+        step_constraint_eval_ms = 0.0
 
         def run_batch(case_idx, batch, batch_idx, total_steps, pbar, advance_pbar, include_case_name):
-            nonlocal accum_batches, step_start_time, step_samples, total_loss, total_task_loss, num_batches
+            nonlocal accum_batches, step_start_time, step_samples, step_constraint_eval_ms, total_loss, total_task_loss, num_batches
             is_step_start = accum_batches == 0
             if is_step_start and tracker:
                 tracker.maybe_start_measurement()
@@ -2392,6 +2942,7 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
                     tracker.accelerator_synchronize()
                     step_start_time = time.perf_counter()
                     step_samples = 0
+                    step_constraint_eval_ms = 0.0
 
             batch = batch.to(self.device)
             batch_samples = self._update_global_samples(batch)
@@ -2400,18 +2951,42 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
                 step_samples += tracker.get_batch_samples(batch)
 
             predictions = self.forward(batch)
+            collect_constraints = self.loss_managers[case_idx].lagrangian is not None
             loss, loss_info = self.loss_managers[case_idx].compute_loss(
                 predictions,
                 batch,
                 return_info=True,
+                collect_constraints=collect_constraints,
+            )
+
+            constraint_eval_ms = self._as_float(loss_info.get("constraint_eval_ms"))
+            if constraint_eval_ms is not None:
+                step_constraint_eval_ms += constraint_eval_ms
+
+            global_batch_samples = batch_samples
+            synced_violation = loss_info.get("constraint_violation")
+            synced_constraints = loss_info.get("constraints")
+            if self.loss_managers[case_idx].lagrangian is not None:
+                global_batch_samples = self._sync_batch_samples(batch_samples)
+                synced_violation, synced_constraints = self._sync_lagrangian_inputs(
+                    synced_violation,
+                    synced_constraints,
+                    batch_samples=batch_samples,
+                    total_batch_samples=global_batch_samples,
+                )
+            self.loss_managers[case_idx].update_lagrangian(
+                constraint_violation=synced_violation,
+                constraints=synced_constraints,
+                is_training=self.model.training,
+                sample_count=global_batch_samples,
             )
 
             loss_value = loss.item()
             self._add_metric(metric_sums, metric_counts, "train/loss/total", loss_value)
-            if self.log_every_n_samples and self.log_every_n_samples > 0:
-                self._log_wandb_step(loss_value, loss_info)
-            loss = loss / self.accumulate_grad_batches
             case_name = self.case_names[case_idx] if include_case_name else None
+            if self.log_every_n_samples and self.log_every_n_samples > 0:
+                self._log_wandb_step(loss_value, loss_info, case_name=case_name)
+            loss = loss / self.accumulate_grad_batches
             if self._handle_nonfinite_loss(loss, batch_idx, case_name=case_name):
                 accum_batches = 0
                 self._add_metric(metric_sums, metric_counts, "train/perf/nonfinite_loss_skips", 1.0)
@@ -2434,7 +3009,7 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
 
                 self.global_step += 1
                 if not self.log_every_n_samples or self.log_every_n_samples <= 0:
-                    self._log_wandb_step(loss_value, loss_info)
+                    self._log_wandb_step(loss_value, loss_info, case_name=case_name)
                 if tracker:
                     step_metrics = None
                     if tracker.measure_active() and step_start_time is not None:
@@ -2442,7 +3017,12 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
                         step_time = time.perf_counter() - step_start_time
                         total_samples = step_samples * self.world_size
                         samples_per_sec = total_samples / step_time if step_time > 0 else 0.0
-                        step_metrics = {"throughput/samples_per_sec": samples_per_sec}
+                        step_metrics = {
+                            "throughput/samples_per_sec": samples_per_sec,
+                            "throughput/step_time_ms": step_time * 1000.0,
+                            "throughput/samples_per_step": float(total_samples),
+                            "throughput/constraint_eval_ms": step_constraint_eval_ms,
+                        }
                     tracker.on_step_end(step_metrics)
                 accum_batches = 0
             else:
@@ -2596,6 +3176,8 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
         metric_sums, metric_counts = self._reduce_metrics(metric_sums, metric_counts)
         metric_avgs = self._compute_metric_avgs(metric_sums, metric_counts)
 
+        for manager in self.loss_managers.values():
+            manager.step_epoch()
         return loss_tensor[0].item(), loss_tensor[1].item(), metric_avgs
 
     def validate(self):

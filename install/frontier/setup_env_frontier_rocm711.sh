@@ -21,13 +21,12 @@ fi
 
 if command -v module >/dev/null 2>&1; then
   module reset
-  ml cpe/24.07
-  ml cce/18.0.0
-  ml rocm/7.1.1
-  ml amd-mixed/7.1.1
-  ml craype-accel-amd-gfx90a
-  ml PrgEnv-gnu
+  ml PrgEnv-gnu/8.7.0
+  ml cpe/26.03
   ml miniforge3/23.11.0-0
+  ml rocm/7.1.1
+  ml rccl-net-plugin
+  ml craype-accel-amd-gfx90a
   ml git-lfs
   module unload darshan-runtime || true
 else
@@ -37,7 +36,7 @@ fi
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 INSTALL_ROOT="${INSTALL_ROOT:-${PWD}/lumina-frontier-rocm711-install}"
 VENV_PATH="${VENV_PATH:-${INSTALL_ROOT}/.venv}"
-PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
+PYTHON_VERSION="${PYTHON_VERSION:-3.12}"
 RECREATE_ENV="${RECREATE_ENV:-0}"
 
 banner "Installation directories"
@@ -52,12 +51,12 @@ fi
 
 if [[ -d "${VENV_PATH}" && "${RECREATE_ENV}" -eq 1 ]]; then
   echo "Removing existing env at ${VENV_PATH}"
-  conda env remove -p "${VENV_PATH}" -y || rm -rf "${VENV_PATH}"
+  conda env remove -p "${VENV_PATH}" -y
 fi
 
 if [[ ! -d "${VENV_PATH}" ]]; then
   echo "Creating conda env at ${VENV_PATH} (Python ${PYTHON_VERSION})"
-  conda create -y -p "${VENV_PATH}" python="${PYTHON_VERSION}"
+  conda create -y -p "${VENV_PATH}" python="${PYTHON_VERSION}" -c conda-forge
 fi
 
 # shellcheck disable=SC1091
@@ -105,8 +104,9 @@ if [[ "$ROCM_MM" != "$EXPECTED_ROCM_MM" ]]; then
 fi
 
 PYTORCH_ROCM_INDEX_URL="https://download.pytorch.org/whl/rocm${EXPECTED_ROCM_MM}"
-subbanner "Install ROCm torch from ${PYTORCH_ROCM_INDEX_URL}"
-pip_retry --index-url "${PYTORCH_ROCM_INDEX_URL}" "torch" "torchvision"
+subbanner "Install Frontier-recommended PyTorch 2.10 with ROCm 7.1"
+pip_retry --index-url "${PYTORCH_ROCM_INDEX_URL}" \
+  "torch==2.10.0" "torchvision==0.25.0" "torchaudio==2.10.0"
 
 python - <<PY
 import torch
@@ -114,18 +114,33 @@ print("torch.__version__ =", torch.__version__)
 print("torch.version.hip =", torch.version.hip)
 PY
 
-# PyTorch Geometric: ROCm wheels matching installed torch
-TORCH_VERSION=$(python -c "import torch; print(torch.__version__.split('+')[0])")
-PYG_ROCM_URL="https://data.pyg.org/whl/torch-${TORCH_VERSION}+rocm${EXPECTED_ROCM_MM}.html"
-subbanner "Install torch-geometric from ${PYG_ROCM_URL}"
-pip_retry torch-geometric -f "${PYG_ROCM_URL}"
+# OLCF provides ROCm-specific PyG extension packages for Frontier.
+subbanner "Install ROCm PyTorch Geometric packages"
+pip_retry ninja packaging scipy
+pip_retry torch-geometric torch-sparse-rocm torch-spline-conv-rocm \
+  torch-scatter-rocm torch-cluster-rocm pyg-lib-rocm
 
 banner "Install core lumina-sdk Python packages"
-pip_retry numpy pandas scipy networkx joblib pyyaml
-pip_retry pandapower wandb optuna lightning
+pip_retry numpy pandas scipy networkx joblib pyyaml h5py pydantic tqdm
+pip_retry pandapower pypower matpowercaseframes wandb optuna lightning
 
 banner "Install lumina-sdk (editable, no extra deps)"
 pip_retry -e "${REPO_ROOT}" --no-deps
+
+banner "Validate installation"
+python - <<'PY'
+import torch
+import torch_geometric
+import h5py
+import pydantic
+import lumina
+
+print("torch:", torch.__version__)
+print("HIP:", torch.version.hip)
+print("torch-geometric:", torch_geometric.__version__)
+print("GPU visible:", torch.cuda.is_available())
+print("lumina import: OK")
+PY
 
 banner "Done"
 echo "Activate environment with: source activate ${VENV_PATH}"

@@ -78,6 +78,12 @@ def resolve_checkpoint_dir(config, run_name, global_rank, world_size):
 def build_parser():
     parser = argparse.ArgumentParser(description="OPF Training with PyTorch DDP")
     parser.add_argument(
+        "--resume_checkpoint",
+        type=str,
+        default=None,
+        help="Resume full training state from a Lumina .pt checkpoint",
+    )
+    parser.add_argument(
         "--cases",
         type=str,
         nargs="+",
@@ -127,6 +133,7 @@ def build_parser():
             "mae",
             "mape",
             "smooth_l1",
+            "augmented_lagrangian",
         ],
         help="Loss function type (default: mse)",
     )
@@ -507,6 +514,9 @@ def main():
     else:
         trainer_kwargs["case_name"] = case_names[0]
         trainer = OPFTrainer(**trainer_kwargs)
+
+    if args.resume_checkpoint:
+        trainer.resume_from_checkpoint(args.resume_checkpoint)
 
     trainer.train()
 
