@@ -1,0 +1,28 @@
+---
+models:
+  HeteroGNN:
+    hidden_channels: 2048 # HPO value
+    num_layers: 8 # HPO value
+    backend: "gat"
+    dropout: 0.25241375563619645 # HPO value
+  RGAT:
+    hidden_channels: 128 # HPO value
+    num_layers: 6 # HPO value
+    num_heads: 8 # HPO value
+    edge_dim: 8 # HPO value
+    dropout: 0.20948761604876676 # HPO value
+  HEAT:
+    num_layers: 6 # HPO value
+    hidden_channels: 256 # HPO value
+    dropout: 0.09341805143662683 # HPO value
+    attention_heads: 4 # HPO value
+  # HGT:
+  #   num_layers: 6 # HPO value
+  #   hidden_channels: 128 # HPO value
+  #   dropout: 0.24398355775520905 # HPO value
+  #   num_heads: 2 # HPO value
+  HGT:
+    num_layers: 8 # HPO value
+    hidden_channels: 1368 # HPO value
+    dropout: 0.24398355775520905 # HPO value
+    num_heads: 4 # HPO value
