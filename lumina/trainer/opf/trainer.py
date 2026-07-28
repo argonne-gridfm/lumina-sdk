@@ -505,6 +505,22 @@ class BaseOPFTrainer:
                 dist.barrier()
 
         return stage_root
+    
+    def _on_disk_groups_exist(self, root, case_name, group_ids, processed_suffix=None):
+        if not self._use_on_disk_backend():
+            return False
+        return all(
+            os.path.exists(
+                get_on_disk_db_path(
+                    root,
+                    case_name,
+                    group_id,
+                    self.on_disk_backend,
+                    processed_suffix,
+                )
+            )
+            for group_id in group_ids
+        )
 
     def _stage_sharded(self, case_name, processed_suffix=None):
         if not self._use_sharded_backend():
@@ -2077,8 +2093,14 @@ class OPFTrainer(BaseOPFTrainer):
                 dataset_cls=dataset_cls,
                 **dataset_kwargs,
             )
-
-        if dist.is_available() and dist.is_initialized() and self.world_size > 1:
+        on_disk_ready = self._on_disk_groups_exist(
+            dataset_root,
+            self.case_name,
+            self.group_ids,
+            processed_suffix=processed_suffix,
+        )
+        if dist.is_available() and dist.is_initialized() and self.world_size > 1 and not on_disk_ready:
+       # if dist.is_available() and dist.is_initialized() and self.world_size > 1:
             if self.global_rank == 0:
                 self.dataset = build_dataset()
             dist.barrier()
@@ -2088,7 +2110,7 @@ class OPFTrainer(BaseOPFTrainer):
             self.dataset = build_dataset()
         if self.global_rank == 0:
             print(f"Dataset loaded: {len(self.dataset)} samples")
-
+    
     def _create_dataloaders(self):
         if self._use_sharded_backend():
             loader_config = self.config["loader"]
@@ -2610,7 +2632,14 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
                 dataset_cls=dataset_cls,
                 **dataset_kwargs,
             )
-        if dist.is_available() and dist.is_initialized() and self.world_size > 1:
+        on_disk_ready = self._on_disk_groups_exist(
+            dataset_root,
+            case_name,
+            self.group_ids,
+            processed_suffix=processed_suffix,
+        )
+        if dist.is_available() and dist.is_initialized() and self.world_size > 1 and not on_disk_ready:    
+        #if dist.is_available() and dist.is_initialized() and self.world_size > 1:
             if self.global_rank == 0:
                 dataset = build_dataset()
             dist.barrier()
