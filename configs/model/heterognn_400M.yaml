@@ -25,3 +25,4 @@ models:
     num_layers: 8 # HPO value
     hidden_channels: 1580  # HPO value
     dropout: 0.24398355775520905 # HPO value
+    num_heads: 4 # HPO value
