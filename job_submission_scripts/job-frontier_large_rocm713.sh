@@ -16,7 +16,7 @@ set -euo pipefail
 REPO_ROOT=/lustre/orion/lrn087/proj-shared/emon/lumina-sdk
 SCRIPT_DIR="${REPO_ROOT}/job_submission_scripts"
 
-export FRONTIER_VENV_BIN=/lustre/orion/lrn087/proj-shared/emon/environment/lumina-frontier-rocm713/.venv/bin
+export FRONTIER_VENV_BIN=/lustre/orion/lrn087/proj-shared/mlupopa/lumina-frontier-rocm713-install/.venv/bin
 export LUMINA_ROOT=/lustre/orion/lrn087/proj-shared/emon/datasets
 export LUMINA_LOGGING_DIR=/lustre/orion/lrn087/proj-shared/emon/logs/lumina-2n-${SLURM_JOB_ID}
 export LUMINA_CHECKPOINT_DIR=/lustre/orion/lrn087/proj-shared/emon/checkpoints/lumina-2n-${SLURM_JOB_ID}
