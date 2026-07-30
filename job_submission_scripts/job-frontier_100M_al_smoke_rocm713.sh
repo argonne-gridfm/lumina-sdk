@@ -57,11 +57,12 @@ export GPU_MAX_HW_QUEUES=2
 export MIOPEN_DISABLE_CACHE=1
 
 export NCCL_DEBUG=WARN
-export NCCL_P2P_DISABLE=1
-export NCCL_P2P_LEVEL=NVL
-export NCCL_PROTO=Simple
-export NCCL_IB_DISABLE=1
-export NCCL_SOCKET_IFNAME=hsn0
+export NCCL_SOCKET_IFNAME=hsn0,hsn1,hsn2,hsn3
+# The aws-ofi-nccl (rccl-net-plugin) fails CXI domain creation on this stack
+# (RC -38 ENOSYS) and crashes RCCL. Disable the external net plugin so RCCL uses
+# its built-in transports: intra-node xGMI/SHM, inter-node TCP sockets over the
+# HSN NICs. Validated single-node; multi-node uses the TCP fallback.
+export NCCL_NET_PLUGIN=none
 
 export MIOPEN_USER_DB_PATH="/tmp/miopen-${SLURM_JOB_ID}"
 export MIOPEN_CUSTOM_CACHE_DIR="${MIOPEN_USER_DB_PATH}"

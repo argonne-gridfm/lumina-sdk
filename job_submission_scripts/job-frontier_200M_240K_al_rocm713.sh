@@ -50,17 +50,26 @@ echo "MASTER_ADDR: ${MASTER_ADDR}, MASTER_PORT: ${MASTER_PORT}"
 export OMP_NUM_THREADS=7
 export PYTHONUNBUFFERED=1
 export PYTHONFAULTHANDLER=1
+export PYTHONWARNINGS="ignore"
+export TMPDIR=/tmp
+export TORCH_MULTIPROCESSING_SHARING_STRATEGY=file_descriptor
+
+export ROCM_HOME=${ROCM_PATH}
+export GPU_MAX_HW_QUEUES=2
+export MIOPEN_DISABLE_CACHE=1
+
+export NCCL_DEBUG=WARN
+export NCCL_SOCKET_IFNAME=hsn0,hsn1,hsn2,hsn3
+# The aws-ofi-nccl (rccl-net-plugin) fails CXI domain creation on this stack
+# (RC -38 ENOSYS) and crashes RCCL. Disable the external net plugin so RCCL uses
+# its built-in transports: intra-node xGMI/SHM, inter-node TCP sockets over the
+# HSN NICs. Validated single-node; multi-node uses the TCP fallback.
+export NCCL_NET_PLUGIN=none
 
 export MIOPEN_USER_DB_PATH="/tmp/miopen-${SLURM_JOB_ID}"
 export MIOPEN_CUSTOM_CACHE_DIR="${MIOPEN_USER_DB_PATH}"
 
 mkdir -p "${MIOPEN_USER_DB_PATH}"
-
-if (( SLURM_JOB_NUM_NODES == 1 )); then
-    export NCCL_NET=Socket
-else
-    export NCCL_NET=OFI
-fi
 
 RESUME_ARGS=()
 if [[ -n "${RESUME_CHECKPOINT}" ]]; then

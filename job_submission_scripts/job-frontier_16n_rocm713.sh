@@ -43,10 +43,12 @@ export TORCH_MULTIPROCESSING_SHARING_STRATEGY=file_descriptor
 
 # NCCL / RCCL — match the working HydraGNN OPF configuration (no AWS OFI plugin)
 export NCCL_DEBUG=WARN
-export NCCL_P2P_DISABLE=1
-export NCCL_PROTO=Simple
-export NCCL_IB_DISABLE=1
-export NCCL_SOCKET_IFNAME=hsn0
+export NCCL_SOCKET_IFNAME=hsn0,hsn1,hsn2,hsn3
+# The aws-ofi-nccl (rccl-net-plugin) fails CXI domain creation on this stack
+# (RC -38 ENOSYS) and crashes RCCL. Disable the external net plugin so RCCL uses
+# its built-in transports: intra-node xGMI/SHM, inter-node TCP sockets over the
+# HSN NICs. Validated single-node; multi-node uses the TCP fallback.
+export NCCL_NET_PLUGIN=none
 
 # ROCm / GPU tuning
 export GPU_MAX_HW_QUEUES=2
