@@ -1,3 +1,4 @@
+import datetime
 import json
 import os
 
@@ -73,6 +74,18 @@ def init_distributed_runtime(local_rank, global_rank, world_size, backend="nccl"
     local_rank = int(local_rank)
     global_rank = int(global_rank)
     world_size = int(world_size)
+    # for frontier: forces eager init by the RCCL communicator
+    device_index = None
+    if torch.cuda.is_available():
+        visible_devices = torch.cuda.device_count()
+        device_index = select_cuda_device_index(local_rank, visible_devices)
+        torch.cuda.set_device(device_index)
+
+    # increase timeouts for RCCL communicator init
+    timeout_min = int(os.environ.get("LUMINA_DDP_TIMEOUT_MIN", "30"))
+    init_kwargs = {}
+    if device_index is not None:
+        init_kwargs["device_id"] = torch.device(f"cuda:{device_index}")
 
     os.environ.setdefault("RANK", str(global_rank))
     os.environ.setdefault("LOCAL_RANK", str(local_rank))
@@ -83,6 +96,8 @@ def init_distributed_runtime(local_rank, global_rank, world_size, backend="nccl"
         init_method="env://",
         world_size=world_size,
         rank=global_rank,
+        timeout=datetime.timedelta(minutes=timeout_min),
+        **init_kwargs
     )
 
     device_index = None
