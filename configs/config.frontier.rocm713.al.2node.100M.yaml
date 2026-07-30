@@ -1,9 +1,10 @@
 ---
-# Paths may be overridden with LUMINA_ROOT, LUMINA_LOGGING_DIR, and
-# LUMINA_CHECKPOINT_DIR in the Frontier job environment.
+# Smoke test config for AL training — 100M model
+# 1 node (8 GPUs), debug queue, ~20 min
+# Validates: checkpoint loading, AL loss, data pipeline, env
 root: "./"
-logging_dir: "./logs/frontier"
-checkpoint_dir: "./ddp-checkpoints/frontier"
+logging_dir: "./logs/frontier-al-smoke"
+checkpoint_dir: "./ddp-checkpoints/frontier-al-smoke"
 
 data:
   backend: "on_disk"
@@ -28,7 +29,7 @@ lagrangian:
   mu_0: 0.003764222679882905
   mu_increase_factor: 1.0
   max_mu: 100.0
-  warmup_epochs: 2
+  warmup_epochs: 1
   ema_beta: 0.0
   penalty_check_interval: 1
   penalty_drop_ratio: 0.5
@@ -39,7 +40,7 @@ lagrangian:
   multiplier_min_improve: 0.0
   normalize_by_rms: false
   normalize_by_size: true
-  verbose: false
+  verbose: true
 
 train_split: 0.8
 val_split: 0.1
@@ -51,34 +52,34 @@ loader:
   pin_memory: true
 
 training:
-  max_epochs: 20
+  max_epochs: 2
   patience: 100000
-  max_global_samples: 0
+  max_global_samples: 512
   gradient_clip_val: 0.554234360094449
   gradient_clip_algorithm: "norm"
-  fail_on_nonfinite: false
+  fail_on_nonfinite: true
   global_batch_size: 64
   accumulate_grad_batches: 1
-  log_every_n_steps: 10
+  log_every_n_steps: 1
   log_every_n_samples: 0
   val_every_n_epochs: 1
   val_every_n_samples: 0
-  val_subset_samples: 0
-  throughput_enabled: true
-  throughput_warmup_steps: 100
-  throughput_measure_steps: 200
+  val_subset_samples: 64
+  throughput_enabled: false
+  throughput_warmup_steps: 2
+  throughput_measure_steps: 4
   log_normalized_violation: true
   violation_eval_p: 1.0
   violation_eval_min_batches: 1
   violation_eval_seed: 0
   loss_schedule:
-    enabled: true
+    enabled: false
     initial_loss_type: "mse"
     switch_loss_type: "augmented_lagrangian"
-    mse_epochs: 5
+    mse_epochs: 1
   initial_checkpoint:
-    enabled: false
-    path: "last-pglib_opf_case2000_goc.pt"
+    enabled: true
+    path: "/lustre/orion/proj-shared/lrn087/emon/mse/last-100M_120k_MSE-pglib_opf_case2000.pt"
     strict: true
 
 checkpointing:
