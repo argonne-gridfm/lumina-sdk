@@ -26,6 +26,12 @@ if ! command -v module >/dev/null 2>&1; then
 fi
 
 if command -v module >/dev/null 2>&1; then
+  # Clear any conda environment inherited from the launching shell. Otherwise the
+  # miniforge module's deactivate hook runs `conda deactivate` in this
+  # non-interactive shell and fails ("Run 'conda init' before 'conda deactivate'"),
+  # which aborts the script under `set -e`.
+  unset CONDA_PREFIX CONDA_DEFAULT_ENV CONDA_SHLVL CONDA_EXE CONDA_PYTHON_EXE \
+        CONDA_PROMPT_MODIFIER 2>/dev/null || true
   module reset
   ml PrgEnv-gnu/8.7.0
   ml cpe/26.03
@@ -46,6 +52,10 @@ INSTALL_ROOT="${INSTALL_ROOT:-$(cd "${REPO_ROOT}/.." && pwd)/lumina-frontier-roc
 VENV_PATH="${VENV_PATH:-${INSTALL_ROOT}/.venv}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.12}"
 RECREATE_ENV="${RECREATE_ENV:-0}"
+# Set BUILD_PYG_FROM_SOURCE=1 to rebuild the PyG C++/HIP extensions from the ROCm
+# forks against the installed torch 2.11+rocm7.13 (fixes the prebuilt-wheel ABI
+# mismatch: "libpyg.so: undefined symbol: _ZNK5torch8autograd4Node4nameEv").
+BUILD_PYG_FROM_SOURCE="${BUILD_PYG_FROM_SOURCE:-0}"
 
 banner "Installation directories"
 echo "Install root: ${INSTALL_ROOT}"
@@ -132,10 +142,50 @@ PY
 # NOTE: the *-rocm PyG wheels may be built against a specific torch/ROCm combo;
 # if these fail to resolve for torch 2.11/rocm7.13, they may need to be built
 # from source or pulled from an OLCF-provided index matching this ROCm version.
-subbanner "Install ROCm PyTorch Geometric packages"
+subbanner "Install PyTorch Geometric stack"
 pip_retry ninja packaging scipy
-pip_retry torch-geometric torch-sparse-rocm torch-spline-conv-rocm \
-  torch-scatter-rocm torch-cluster-rocm pyg-lib-rocm
+if [[ "${BUILD_PYG_FROM_SOURCE}" -eq 1 ]]; then
+  subbanner "Removing prebuilt PyG wheels (ABI-incompatible with torch 2.11+rocm7.13)"
+  # The prebuilt gfx90a wheels — especially pyg_lib — are linked against a
+  # different libtorch ABI and fail to load with:
+  #   libpyg.so: undefined symbol: _ZNK5torch8autograd4Node4nameEv
+  # torch_sparse.typing does `import pyg_lib` and only catches ImportError, so a
+  # leftover broken pyg_lib becomes a hard OSError. Uninstall the whole prebuilt
+  # set (plain and -rocm names) before rebuilding from source. pyg_lib is
+  # intentionally NOT rebuilt: torch_geometric and the source-built torch_sparse
+  # work without it (accelerated sampling ops only).
+  python -m pip uninstall -y \
+    pyg-lib pyg-lib-rocm \
+    torch-scatter torch-scatter-rocm \
+    torch-sparse torch-sparse-rocm \
+    torch-cluster torch-cluster-rocm \
+    torch-spline-conv torch-spline-conv-rocm 2>/dev/null || true
+
+  subbanner "Building torch-scatter/sparse/cluster/spline-conv from ROCm forks"
+  PYG_FRONTIER="${INSTALL_ROOT}/PyTorch-Geometric-${ROCM_MM}"
+  mkdir -p "${PYG_FRONTIER}"
+  pushd "${PYG_FRONTIER}" >/dev/null
+  build_pyg() {  # name repo_url ref
+    local name="$1" url="$2" ref="$3"
+    if [[ ! -d "${name}/.git" ]]; then git clone --recursive "${url}" "${name}"; fi
+    pushd "${name}" >/dev/null
+    git fetch --all; git checkout "${ref}"; git submodule update --init --recursive
+    rm -rf build
+    CC=gcc CXX=g++ PYTORCH_ROCM_ARCH=gfx90a FORCE_CUDA=1 python setup.py build
+    CC=gcc CXX=g++ PYTORCH_ROCM_ARCH=gfx90a FORCE_CUDA=1 python setup.py install
+    popd >/dev/null
+  }
+  build_pyg pytorch_scatter     https://github.com/Looong01/pytorch_scatter-rocm.git 9799c51
+  build_pyg pytorch_sparse      https://github.com/Looong01/pytorch_sparse-rocm.git  2340737
+  build_pyg pytorch_cluster     https://github.com/rusty1s/pytorch_cluster.git        1.6.3-11-g4126a52
+  build_pyg pytorch_spline_conv https://github.com/rusty1s/pytorch_spline_conv.git    1.2.2-9-ga6d1020
+  popd >/dev/null
+  pip_retry torch-geometric
+else
+  subbanner "Install ROCm PyTorch Geometric wheels (gfx90a)"
+  pip_retry torch-geometric torch-sparse-rocm torch-spline-conv-rocm \
+    torch-scatter-rocm torch-cluster-rocm pyg-lib-rocm
+fi
 
 banner "Install core lumina-sdk Python packages"
 pip_retry numpy pandas scipy networkx joblib pyyaml h5py pydantic tqdm
