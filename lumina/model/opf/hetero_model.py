@@ -726,6 +726,28 @@ class HEAT_v2(torch.nn.Module):
             return {"bus": bus_out, "generator": gen_out}
 
 
+class InputStandardizer(torch.nn.Module):
+    """Per-feature z-score whose statistics live in the model ``state_dict``.
+
+    The buffers start as identity (mean 0, std 1) and are filled by
+    :meth:`set_stats`, so a checkpoint carries everything needed for inference.
+    """
+
+    def __init__(self, num_features):
+        super().__init__()
+        self.register_buffer("mean", torch.zeros(num_features))
+        self.register_buffer("std", torch.ones(num_features))
+
+    @torch.no_grad()
+    def set_stats(self, mean, std):
+        std = torch.where(std > 1e-6, std, torch.ones_like(std))
+        self.mean.copy_(mean)
+        self.std.copy_(std)
+
+    def forward(self, x):
+        return (x - self.mean) / self.std
+
+
 class HGT(torch.nn.Module):
     """Heterogeneous Graph Transformer for OPF graphs.
 
@@ -747,6 +769,7 @@ class HGT(torch.nn.Module):
                  dropout=0.0,
                  backend="sage",
                  edge_attr_dim=None,
+                 standardize_input=False,
                  **kwargs):
         r""" Heterogeneous Graph Transformer (HGT) model.
 
@@ -761,6 +784,10 @@ class HGT(torch.nn.Module):
             num_heads (int): Number of multi-head-attention heads. Defaults to 1.
             backend (str): Graph convolutional layer backend. Defaults to "sage".
             edge_attr_dim (int, optional): Dimension of edge attributes for GAT. Defaults to None.
+            standardize_input (bool): Z-score the input features before the input
+                projection. Call :meth:`fit_input_stats` on the training set after
+                construction. Min-max output scaling keeps reading the raw features.
+                Defaults to False.
         """
         super().__init__()
 
@@ -786,6 +813,13 @@ class HGT(torch.nn.Module):
                 raise ValueError(f"input_channels must contain entry for node type '{node_type}'")
             self.lin_dict[node_type] = Linear(input_channels[node_type], hidden_channels)
 
+        self.standardizer = None
+        if standardize_input:
+            self.standardizer = torch.nn.ModuleDict({
+                node_type: InputStandardizer(input_channels[node_type])
+                for node_type in self.node_types
+            })
+
         metadata_tuple = (self.node_types, self.edge_types) if isinstance(metadata, dict) else metadata
         self.convs = torch.nn.ModuleList()
         for _ in range(num_layers):
@@ -810,6 +844,31 @@ class HGT(torch.nn.Module):
         for out in self.out_dict.values():
             out.reset_parameters()
 
+    @torch.no_grad()
+    def fit_input_stats(self, samples):
+        """Fill the input standardization buffers from training samples.
+
+        Args:
+            samples: Iterable of ``HeteroData`` (a dataset, a subset, or a list).
+        """
+        if self.standardizer is None:
+            raise RuntimeError("HGT was built with standardize_input=False")
+
+        count = {node_type: 0 for node_type in self.node_types}
+        total = {node_type: 0.0 for node_type in self.node_types}
+        total_sq = {node_type: 0.0 for node_type in self.node_types}
+        for data in samples:
+            for node_type in self.node_types:
+                x = data[node_type].x.double()
+                count[node_type] += x.size(0)
+                total[node_type] = total[node_type] + x.sum(0)
+                total_sq[node_type] = total_sq[node_type] + (x * x).sum(0)
+
+        for node_type in self.node_types:
+            mean = total[node_type] / count[node_type]
+            var = (total_sq[node_type] / count[node_type] - mean * mean).clamp_min(0.0)
+            self.standardizer[node_type].set_stats(mean.float(), var.sqrt().float())
+
     def forward(self, x_dict, edge_index_dict, edge_attr_dict=None, minmax_scaling=False, **kwargs):
         """Forward pass of the HGT model.
 
@@ -830,6 +889,12 @@ class HGT(torch.nn.Module):
             _pmax = x_dict['generator'][:, 3].clone()  # Original active power max
             _qmin = x_dict['generator'][:, 5].clone()  # Original reactive power min
             _qmax = x_dict['generator'][:, 6].clone()  # Original reactive power max
+
+        if self.standardizer is not None:
+            x_dict = {
+                node_type: self.standardizer[node_type](x_dict[node_type])
+                for node_type in self.node_types
+            }
 
         # Transform input features
         x_dict = {
