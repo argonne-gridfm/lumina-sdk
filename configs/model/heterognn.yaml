@@ -22,3 +22,5 @@ models:
     num_heads: 4
     # Active regularization in HGT forward pass (after input projection + each HGT layer).
     dropout: 0.0
+    # Z-score input features with statistics fitted on the training split (stored in the checkpoint).
+    standardize_input: false
