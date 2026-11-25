@@ -7,16 +7,18 @@ copyright: Copyright © 2026, Argonne National Laboratory
 
 theme:
   name: material
+  logo: assets/lumina-mark.svg
+  favicon: assets/favicon.png
   palette:
     - scheme: default
-      primary: indigo
-      accent: indigo
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
     - scheme: slate
-      primary: indigo
-      accent: indigo
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
@@ -35,6 +37,9 @@ theme:
     - search.highlight
     - toc.follow
     - toc.integrate
+
+extra_css:
+  - stylesheets/brand.css
 
 plugins:
   - search
