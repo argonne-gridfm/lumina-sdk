@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/brand/lumina-horizontal-dark.svg">
+    <img alt="LUMINA" src="docs/assets/brand/lumina-horizontal-light.svg" height="64">
+  </picture>
+</p>
+
 # LUMINA — Large-scale Unified Model for Intelligent Grid Applications
 
 [![Version](https://img.shields.io/badge/version-0.1.0rc1-blue.svg)](CHANGELOG.md)

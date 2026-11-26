@@ -1,0 +1,18 @@
+:root {
+  --md-primary-fg-color:        #0B2340;
+  --md-primary-fg-color--light: #1B3A63;
+  --md-primary-fg-color--dark:  #071629;
+  --md-accent-fg-color:         #2E7CF6;
+  --md-accent-fg-color--transparent: #2E7CF61A;
+}
+
+/* Links and the current page in the side menu take the primary color by
+   default. Navy is unreadable on the dark scheme and looks like body text on
+   the light one, so links use azure, shaded to keep 4.5:1 contrast. */
+[data-md-color-scheme="default"] {
+  --md-typeset-a-color: #166DF5;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-typeset-a-color: #3F87F7;
+}
