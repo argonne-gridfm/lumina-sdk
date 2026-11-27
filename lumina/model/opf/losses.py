@@ -80,6 +80,49 @@ class MAPELoss(nn.Module):
             raise ValueError(f"Invalid reduction: {self.reduction}")
 
 
+@torch.no_grad()
+def compute_target_stats(samples, node_types=("bus", "generator"), min_node_std=1e-3):
+    """Target statistics for target normalization and the deviation term.
+
+    Args:
+        samples: Iterable of ``HeteroData`` from a single case (a dataset,
+            a subset, or a list). All samples must share the node ordering.
+        node_types (tuple): Node types that carry targets.
+        min_node_std (float): Nodes whose target varies less than this across
+            samples are excluded from the deviation term.
+
+    Returns:
+        dict: Per node type ``{'scale': (D,), 'node_std': (N, D), 'movers': (N, D)}``.
+            ``scale`` is the per-variable std pooled over nodes and samples;
+            ``node_std`` is the per-node std across samples.
+    """
+    count = 0
+    total = {}
+    total_sq = {}
+    for data in samples:
+        count += 1
+        for node_type in node_types:
+            y = data[node_type].y.double()
+            total[node_type] = total.get(node_type, 0.0) + y
+            total_sq[node_type] = total_sq.get(node_type, 0.0) + y * y
+
+    stats = {}
+    for node_type, y_sum in total.items():
+        y_sq = total_sq[node_type]
+        node_mean = y_sum / count
+        node_var = (y_sq / count - node_mean ** 2).clamp_min(0.0)
+        n = count * y_sum.size(0)
+        mean = y_sum.sum(0) / n
+        var = (y_sq.sum(0) / n - mean ** 2).clamp_min(0.0)
+        node_std = node_var.sqrt().float()
+        stats[node_type] = {
+            'scale': var.sqrt().clamp_min(1e-6).float(),
+            'node_std': node_std,
+            'movers': node_std > min_node_std,
+        }
+    return stats
+
+
 class ACOPFLossFunction(nn.Module):
     """
     Simplified loss function class for ACOPF training using PyTorch built-in losses.
@@ -90,6 +133,17 @@ class ACOPFLossFunction(nn.Module):
     - MAE (Mean Absolute Error) - torch.nn.L1Loss
     - MAPE (Mean Absolute Percentage Error) - custom implementation
     - SmoothL1Loss (Huber Loss) - torch.nn.SmoothL1Loss
+
+    Two optional terms built on :func:`compute_target_stats`:
+
+    - ``normalize_targets`` divides predictions and targets by the pooled
+      per-variable std, so va/vm/pg/qg contribute on a comparable scale.
+    - ``deviation_weight`` adds a term that compares, per node, the
+      sample-to-sample deviation of the prediction with that of the target
+      (batch mean removed, divided by the node's target std). Only nodes
+      whose target actually varies take part. The term needs a batch of
+      graphs from one case, so it is skipped for batches smaller than
+      ``deviation_min_graphs``.
 
     Args:
         loss_type (str): Type of loss function to use:
@@ -103,6 +157,12 @@ class ACOPFLossFunction(nn.Module):
         reduction (str): Reduction method ('mean', 'sum', 'none'). Default: 'mean'
         epsilon (float): Small value to avoid division by zero in MAPE. Default: 1e-8
         beta (float): Beta parameter for SmoothL1Loss. Default: 1.0
+        target_stats (dict, optional): Output of :func:`compute_target_stats`,
+            with tensors on the device of the predictions. Required when
+            ``normalize_targets`` or ``deviation_weight`` is set.
+        normalize_targets (bool): Divide residuals by the pooled target std. Default: False
+        deviation_weight (float): Weight of the deviation term; 0 disables it. Default: 0.0
+        deviation_min_graphs (int): Smallest batch the deviation term is computed on. Default: 4
     """
 
     def __init__(
@@ -111,7 +171,11 @@ class ACOPFLossFunction(nn.Module):
         node_weights: Optional[Dict[str, float]] = None,
         reduction: str = 'mean',
         epsilon: float = 1e-8,
-        beta: float = 1.0
+        beta: float = 1.0,
+        target_stats: Optional[Dict[str, Dict[str, torch.Tensor]]] = None,
+        normalize_targets: bool = False,
+        deviation_weight: float = 0.0,
+        deviation_min_graphs: int = 4,
     ):
         super(ACOPFLossFunction, self).__init__()
 
@@ -121,6 +185,13 @@ class ACOPFLossFunction(nn.Module):
         self.beta = beta
 
         self.node_weights = node_weights or {'bus': 1.0, 'generator': 1.0}
+
+        self.target_stats = target_stats or {}
+        self.normalize_targets = normalize_targets
+        self.deviation_weight = float(deviation_weight)
+        self.deviation_min_graphs = deviation_min_graphs
+        if (normalize_targets or self.deviation_weight > 0) and not self.target_stats:
+            raise ValueError("target_stats is required for normalize_targets / deviation_weight")
 
         valid_types = ['mse', 'rmse', 'mae', 'mape', 'smooth_l1']
         if loss_type not in valid_types:
@@ -170,7 +241,8 @@ class ACOPFLossFunction(nn.Module):
             raise ValueError(f"Invalid reduction: {self.reduction}")
 
     def forward(self, predictions: Dict[str, torch.Tensor],
-                targets: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+                targets: Dict[str, torch.Tensor],
+                num_graphs: Optional[int] = None) -> Dict[str, torch.Tensor]:
         total_loss = None
         node_losses = {}
         loss_components = {}
@@ -195,6 +267,11 @@ class ACOPFLossFunction(nn.Module):
                     pred = pred[finite_mask]
                     target = target[finite_mask]
 
+            if self.normalize_targets and node_type in self.target_stats:
+                scale = self.target_stats[node_type]['scale']
+                pred = pred / scale
+                target = target / scale
+
             node_loss = self._compute_single_loss(pred, target)
             node_weight = self.node_weights.get(node_type, 1.0)
 
@@ -206,6 +283,13 @@ class ACOPFLossFunction(nn.Module):
             device = next(iter(predictions.values())).device
             total_loss = torch.tensor(0.0, device=device)
 
+        if (self.deviation_weight > 0 and num_graphs is not None
+                and num_graphs >= self.deviation_min_graphs):
+            deviation = self._deviation_loss(predictions, targets, num_graphs)
+            if deviation is not None:
+                node_losses['deviation_loss'] = deviation
+                total_loss = total_loss + self.deviation_weight * deviation
+
         results = {
             'total_loss': total_loss,
             **node_losses
@@ -215,6 +299,21 @@ class ACOPFLossFunction(nn.Module):
             results['loss_components'] = loss_components
 
         return results
+
+    def _deviation_loss(self, predictions, targets, num_graphs):
+        total = None
+        for node_type, stats in self.target_stats.items():
+            if node_type not in predictions or node_type not in targets:
+                continue
+            movers = stats['movers']
+            if not bool(movers.any()):
+                continue
+            residual = predictions[node_type] - targets[node_type]
+            residual = residual.view(num_graphs, -1, residual.size(-1))
+            residual = residual - residual.mean(dim=0, keepdim=True)
+            term = ((residual[:, movers] / stats['node_std'][movers]) ** 2).mean()
+            total = term if total is None else total + term
+        return total
 
     def compute_loss(self, predictions: Dict[str, torch.Tensor], batch) -> Dict[str, torch.Tensor]:
         targets = self._extract_targets(predictions, batch)
@@ -226,7 +325,8 @@ class ACOPFLossFunction(nn.Module):
                 targets,
                 batch,
             )
-        return self.forward(predictions, targets)
+        num_graphs = None if self._is_homo_batch(batch) else getattr(batch, 'num_graphs', None)
+        return self.forward(predictions, targets, num_graphs=num_graphs)
 
     @staticmethod
     def _is_homo_batch(batch) -> bool:
@@ -260,7 +360,9 @@ class ACOPFLossFunction(nn.Module):
             'node_weights': self.node_weights,
             'reduction': self.reduction,
             'epsilon': self.epsilon,
-            'beta': self.beta
+            'beta': self.beta,
+            'normalize_targets': self.normalize_targets,
+            'deviation_weight': self.deviation_weight,
         }
 
 
@@ -336,8 +438,9 @@ class PhysicsInformedLoss(ACOPFLossFunction):
         return total_penalty
 
     def forward(self, predictions: Dict[str, torch.Tensor],
-                targets: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        results = super().forward(predictions, targets)
+                targets: Dict[str, torch.Tensor],
+                num_graphs: Optional[int] = None) -> Dict[str, torch.Tensor]:
+        results = super().forward(predictions, targets, num_graphs=num_graphs)
         physics_penalty = self._compute_physics_penalty(predictions)
         total_loss = results['total_loss'] + self.physics_weight * physics_penalty
         results.update({
@@ -360,20 +463,31 @@ class OPFLossManager(nn.Module):
             'mape', or 'smooth_l1'.
         device (torch.device, optional): Device for computations.
             Defaults to CPU.
+        log_normalized_violation (bool): Accepted for trainer compatibility;
+            currently unused.
         **kwargs: Additional arguments forwarded to ``ACOPFLossFunction``
-            (e.g. ``node_weights``, ``reduction``, ``epsilon``, ``beta``).
+            (e.g. ``node_weights``, ``reduction``, ``epsilon``, ``beta``,
+            ``target_stats``, ``normalize_targets``, ``deviation_weight``).
+            ``target_stats`` tensors are moved to ``device``.
     """
 
     def __init__(
         self,
         loss_type: str = 'mse',
         device: Optional[torch.device] = None,
+        log_normalized_violation: bool = False,
         **kwargs
     ):
         super().__init__()
 
         self.loss_type = loss_type
         self.device = device or torch.device('cpu')
+        self.log_normalized_violation = log_normalized_violation
+        if kwargs.get('target_stats'):
+            kwargs['target_stats'] = {
+                node_type: {key: value.to(self.device) for key, value in stats.items()}
+                for node_type, stats in kwargs['target_stats'].items()
+            }
         self.base_loss = ACOPFLossFunction(loss_type=loss_type, **kwargs)
 
     def compute_loss(
@@ -414,7 +528,8 @@ class OPFLossManager(nn.Module):
                 batch,
             )
 
-        results = self.base_loss(masked_predictions, masked_targets)
+        num_graphs = None if self._is_homo_batch(batch) else getattr(batch, 'num_graphs', None)
+        results = self.base_loss(masked_predictions, masked_targets, num_graphs=num_graphs)
         loss = results['total_loss']
         results.setdefault('objective', loss)
 

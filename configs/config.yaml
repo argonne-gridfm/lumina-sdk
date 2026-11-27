@@ -39,6 +39,11 @@ training:
   val_subset_samples: 0
   throughput_enabled: false
   log_normalized_violation: false
+  # Divide residuals by the per-variable target std of the training split.
+  normalize_targets: false
+  # Weight of the per-node deviation term (0 disables it; 0.5 is a reasonable start).
+  # With this term on, validation loss is a poor model-selection signal; prefer save_last.
+  deviation_weight: 0.0
   violation_eval_p: 1.0
   violation_eval_min_batches: 1
   violation_eval_seed: 0

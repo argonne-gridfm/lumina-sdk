@@ -1,3 +1,4 @@
+import itertools
 import math
 import os
 import time
@@ -43,7 +44,7 @@ from lumina.dataset.opf.staging import (
 from lumina.model.base.utils import describe_model
 from lumina.model.opf.hetero_model import HEAT, HGT, RGAT, OPFHeteroGNN
 from lumina.model.opf.homo_model import get_gnnNets
-from lumina.model.opf.losses import OPFLossManager
+from lumina.model.opf.losses import OPFLossManager, compute_target_stats
 from lumina.trainer.opf.utils import (
     HETERO_MODEL_TYPES,
     build_hetero_model_spec,
@@ -246,6 +247,8 @@ class BaseOPFTrainer:
         score_alpha = training_config.get("score_alpha", 1.0)
         self.score_alpha = float(1.0 if score_alpha is None else score_alpha)
         self.log_normalized_violation = bool(training_config.get("log_normalized_violation", False))
+        self.normalize_targets = bool(training_config.get("normalize_targets", False))
+        self.deviation_weight = float(training_config.get("deviation_weight") or 0.0)
         violation_eval_p = training_config.get("violation_eval_p", 1.0)
         self.violation_eval_p = float(1.0 if violation_eval_p is None else violation_eval_p)
         if self.violation_eval_p < 0.0:
@@ -640,6 +643,18 @@ class BaseOPFTrainer:
     def _initialize_loss_managers(self):
         raise NotImplementedError
 
+    def _train_samples(self):
+        raise NotImplementedError
+
+    def _target_loss_kwargs(self, samples):
+        if not self.normalize_targets and self.deviation_weight <= 0:
+            return {}
+        return {
+            "target_stats": compute_target_stats(samples),
+            "normalize_targets": self.normalize_targets,
+            "deviation_weight": self.deviation_weight,
+        }
+
     def _default_wandb_run_name(self):
         return f"acopf-ddp-{self.model_type}-{self.loss_type}"
 
@@ -721,6 +736,7 @@ class BaseOPFTrainer:
                 kwargs["num_heads"] = model_config.get("num_heads", 1)
             if self.model_type == "HGT":
                 kwargs["dropout"] = model_config.get("dropout", 0.0)
+                kwargs["standardize_input"] = bool(model_config.get("standardize_input", False))
             if self.model_type == "HEAT":
                 kwargs["attention_heads"] = model_config.get("attention_heads", 1)
 
@@ -730,6 +746,8 @@ class BaseOPFTrainer:
             model = model_class(**model_kwargs)
 
             initialize_model(model, sample_data, self.device)
+            if getattr(model, "standardizer", None) is not None:
+                model.fit_input_stats(self._train_samples())
 
             if self.global_rank == 0:
                 print(f"{self.model_type} Model created")
@@ -1685,11 +1703,15 @@ class OPFTrainer(BaseOPFTrainer):
         per_node_output_size = self._infer_output_dim(sample_data)
         self.model = self._build_model(sample_data, metadata, per_node_output_size)
 
+    def _train_samples(self):
+        return self.train_loader.dataset
+
     def _initialize_loss_managers(self):
         self.loss_manager = OPFLossManager(
             loss_type=self.loss_type,
             device=self.device,
             log_normalized_violation=self.log_normalized_violation,
+            **self._target_loss_kwargs(self._train_samples()),
         )
 
         if self.global_rank == 0:
@@ -2328,14 +2350,21 @@ class MultiCaseOPFTrainer(BaseOPFTrainer):
         metadata = self.reference_metadata if self.model_type in HETERO_MODEL_TYPES else None
         self.model = self._build_model(sample_data, metadata, per_node_output_size)
 
+    def _train_samples(self):
+        return itertools.chain.from_iterable(
+            loader.dataset for loader in self.train_loaders.values()
+        )
+
     def _initialize_loss_managers(self):
         self.loss_managers = {}
 
         for case_idx in range(len(self.case_names)):
+            loader = self.train_loaders.get(case_idx)
             self.loss_managers[case_idx] = OPFLossManager(
                 loss_type=self.loss_type,
                 device=self.device,
                 log_normalized_violation=self.log_normalized_violation,
+                **(self._target_loss_kwargs(loader.dataset) if loader is not None else {}),
             )
 
         if self.global_rank == 0:
